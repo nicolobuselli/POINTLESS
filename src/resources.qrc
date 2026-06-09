@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="style.qss">../assets/style.qss</file>
+        <file alias="logo.png">../assets/logo.png</file>
+    </qresource>
+</RCC>

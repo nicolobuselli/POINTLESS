@@ -1,0 +1,1 @@
+Questa cartella può contenere risorse SVG, immagini di esempio, palette colore, font custom, ecc. Inserire qui i file di supporto per la UI e il rendering.

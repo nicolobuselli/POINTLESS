@@ -1,0 +1,296 @@
+/* ============================================================
+   ULTRA_Ditherer — Dark theme stylesheet
+   ============================================================ */
+
+/* ── Global ─────────────────────────────────────────────────── */
+QWidget {
+    background-color: #1a1a1a;
+    color: #e0e0e0;
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 10pt;
+}
+
+QMainWindow {
+    background-color: #1a1a1a;
+}
+
+/* ── Scroll area / control panel root ───────────────────────── */
+QScrollArea,
+QScrollArea > QWidget > QWidget {
+    background-color: #1e1e1e;
+}
+
+#controlRoot {
+    background-color: #1e1e1e;
+}
+
+/* ── Section headers ─────────────────────────────────────────── */
+#sectionHeader {
+    color: #ffffff;
+    font-weight: bold;
+    font-size: 9pt;
+    letter-spacing: 1px;
+    margin-top: 8px;
+    margin-bottom: 2px;
+}
+
+/* ── Separators ─────────────────────────────────────────────── */
+#separator {
+    color: #333333;
+    background-color: #333333;
+    border: none;
+    max-height: 1px;
+    margin: 6px 0;
+}
+
+/* ── Labels ──────────────────────────────────────────────────── */
+#subtleLabel {
+    color: #888888;
+    font-size: 9pt;
+}
+
+#paramLabel {
+    color: #cccccc;
+    font-size: 9pt;
+    margin-bottom: 1px;
+}
+
+/* ── Buttons (default) ───────────────────────────────────────── */
+QPushButton {
+    background-color: #2e2e2e;
+    color: #e0e0e0;
+    border: 1px solid #444444;
+    border-radius: 4px;
+    padding: 5px 12px;
+    min-height: 22px;
+}
+
+QPushButton:hover {
+    background-color: #3a3a3a;
+    border-color: #666666;
+}
+
+QPushButton:pressed {
+    background-color: #252525;
+}
+
+/* Action buttons (Choose File, Load SVG, color pickers) */
+QPushButton#actionButton {
+    background-color: #E05530;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 14px;
+    font-weight: bold;
+}
+
+QPushButton#actionButton:hover {
+    background-color: #FF6644;
+}
+
+QPushButton#actionButton:pressed {
+    background-color: #c04420;
+}
+
+/* Export button */
+QPushButton#exportButton {
+    background-color: #E05530;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 14px;
+    font-size: 11pt;
+    font-weight: bold;
+    min-height: 34px;
+}
+
+QPushButton#exportButton:hover {
+    background-color: #FF6644;
+}
+
+QPushButton#exportButton:pressed {
+    background-color: #c04420;
+}
+
+/* ── Sliders ─────────────────────────────────────────────────── */
+QSlider::groove:horizontal {
+    height: 4px;
+    background: #333333;
+    border-radius: 2px;
+}
+
+QSlider::sub-page:horizontal {
+    background: #E05530;
+    border-radius: 2px;
+}
+
+QSlider::handle:horizontal {
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    background: #E05530;
+    border-radius: 7px;
+    border: 2px solid #1e1e1e;
+}
+
+QSlider::handle:horizontal:hover {
+    background: #FF6644;
+}
+
+/* ── SpinBoxes ───────────────────────────────────────────────── */
+QSpinBox,
+QDoubleSpinBox {
+    background-color: #2a2a2a;
+    border: 1px solid #444444;
+    border-radius: 3px;
+    color: #e0e0e0;
+    padding: 2px 4px;
+}
+
+QSpinBox:focus,
+QDoubleSpinBox:focus {
+    border-color: #E05530;
+}
+
+QSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::up-button,
+QDoubleSpinBox::down-button {
+    width: 16px;
+    background-color: #333333;
+    border: none;
+}
+
+QSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover,
+QDoubleSpinBox::down-button:hover {
+    background-color: #444444;
+}
+
+/* ── ComboBox ────────────────────────────────────────────────── */
+QComboBox {
+    background-color: #2a2a2a;
+    border: 1px solid #444444;
+    border-radius: 3px;
+    color: #e0e0e0;
+    padding: 4px 8px;
+    min-height: 22px;
+}
+
+QComboBox:hover {
+    border-color: #666666;
+}
+
+QComboBox:focus {
+    border-color: #E05530;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #2a2a2a;
+    border: 1px solid #555555;
+    selection-background-color: #E05530;
+    color: #e0e0e0;
+    outline: none;
+}
+
+/* ── CheckBox ────────────────────────────────────────────────── */
+QCheckBox {
+    color: #cccccc;
+    spacing: 6px;
+}
+
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #555555;
+    border-radius: 2px;
+    background-color: #2a2a2a;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #E05530;
+    border-color: #E05530;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #E05530;
+}
+
+/* ── LineEdit ────────────────────────────────────────────────── */
+QLineEdit {
+    background-color: #2a2a2a;
+    border: 1px solid #444444;
+    border-radius: 3px;
+    color: #e0e0e0;
+    padding: 4px 8px;
+}
+
+QLineEdit:focus {
+    border-color: #E05530;
+}
+
+/* ── GroupBox (multi-symbol slots) ───────────────────────────── */
+QGroupBox {
+    border: 1px solid #333333;
+    border-radius: 4px;
+    margin-top: 8px;
+    padding-top: 12px;
+    color: #aaaaaa;
+    font-size: 9pt;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 4px;
+    left: 8px;
+    color: #888888;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────── */
+QScrollBar:vertical {
+    width: 8px;
+    background: #1e1e1e;
+}
+
+QScrollBar::handle:vertical {
+    background: #444444;
+    border-radius: 4px;
+    min-height: 20px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #666666;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+/* ── Status bar ──────────────────────────────────────────────── */
+QStatusBar {
+    background-color: #141414;
+    color: #888888;
+    font-size: 9pt;
+    border-top: 1px solid #2a2a2a;
+}
+
+/* ── Splitter ────────────────────────────────────────────────── */
+QSplitter::handle {
+    background-color: #2a2a2a;
+}
+
+/* ── App title in control panel header ───────────────────────── */
+#appTitle {
+    color: #ffffff;
+    font-size: 15pt;
+    font-weight: bold;
+    letter-spacing: 2px;
+}
