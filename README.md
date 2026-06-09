@@ -3,8 +3,6 @@
 A desktop application for high-quality halftone rendering of images.  
 Built with C++ and Qt6, targeting Windows.
 
-![Build](https://github.com/YOUR_USERNAME/ULTRA_Ditherer/actions/workflows/build.yml/badge.svg)
-
 ---
 
 ## Features
