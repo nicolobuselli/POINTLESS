@@ -51,10 +51,12 @@ protected:
 
 private:
     void updateDisplay();
+    QLabel*    m_iconLbl   = nullptr;
     QLabel*    m_valueLbl  = nullptr;
     QLineEdit* m_lineEdit  = nullptr;
     int        m_min, m_max, m_value;
     QString    m_suffix;
+    bool       m_editingValue = false;
     bool       m_dragging     = false;
     QPoint     m_dragStart;
     int        m_dragStartVal = 0;

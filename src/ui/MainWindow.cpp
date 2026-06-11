@@ -124,29 +124,29 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     if (!editableFocus) {
         if (event->type() == QEvent::ShortcutOverride) {
             auto* keyEvent = static_cast<QKeyEvent*>(event);
-            if (!keyEvent->isAutoRepeat()) {
-                if (keyEvent->key() == Qt::Key_Space || keyEvent->key() == Qt::Key_Shift) {
-                    event->accept();
-                    return true;
-                }
+            if (keyEvent->key() == Qt::Key_Space || keyEvent->key() == Qt::Key_Shift) {
+                event->accept();
+                return true;
             }
         }
 
         if (event->type() == QEvent::KeyPress) {
             auto* keyEvent = static_cast<QKeyEvent*>(event);
-            if (!keyEvent->isAutoRepeat()) {
-                if (keyEvent->key() == Qt::Key_Space) {
+            if (keyEvent->key() == Qt::Key_Space) {
+                if (!keyEvent->isAutoRepeat()) {
                     m_spaceDown = true;
                     updatePreviewInteractionState();
-                    event->accept();
-                    return true;
                 }
-                if (keyEvent->key() == Qt::Key_Shift) {
+                event->accept();
+                return true;
+            }
+            if (keyEvent->key() == Qt::Key_Shift) {
+                if (!keyEvent->isAutoRepeat()) {
                     m_shiftDown = true;
                     updatePreviewInteractionState();
-                    event->accept();
-                    return true;
                 }
+                event->accept();
+                return true;
             }
         } else if (event->type() == QEvent::KeyRelease) {
             auto* keyEvent = static_cast<QKeyEvent*>(event);

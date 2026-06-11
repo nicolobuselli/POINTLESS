@@ -36,11 +36,12 @@ DragSpinBox::DragSpinBox(const QString& iconRes, int minVal, int maxVal, int def
 
     const bool hasIcon = !iconRes.isEmpty();
     if (hasIcon) {
-        auto* ico = new QLabel(this);
-        ico->setPixmap(QIcon(iconRes).pixmap(16, 16));
-        ico->setFixedSize(16, 16);
-        ico->setAttribute(Qt::WA_TransparentForMouseEvents);
-        lay->addWidget(ico);
+        m_iconLbl = new QLabel(this);
+        m_iconLbl->setPixmap(QIcon(iconRes).pixmap(16, 16));
+        m_iconLbl->setFixedSize(16, 16);
+        m_iconLbl->setStyleSheet("background:transparent;");
+        m_iconLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+        lay->addWidget(m_iconLbl);
     }
 
     m_valueLbl = new QLabel(this);
@@ -87,27 +88,31 @@ void DragSpinBox::mouseReleaseEvent(QMouseEvent* e)
 void DragSpinBox::mouseDoubleClickEvent(QMouseEvent* e)
 {
     if (e->button() != Qt::LeftButton) return;
+    m_editingValue = true;
     if (!m_lineEdit) {
         m_lineEdit = new QLineEdit(this);
         m_lineEdit->setFrame(false);
-        m_lineEdit->setAlignment(Qt::AlignCenter);
+        m_lineEdit->setAlignment(m_valueLbl->alignment());
         m_lineEdit->setStyleSheet(
             "background:transparent; color:#E3E3E3; font-size:10pt; border:none; padding:0;");
         connect(m_lineEdit, &QLineEdit::editingFinished, m_lineEdit, [this]() {
             bool ok; int v = m_lineEdit->text().toInt(&ok);
             if (ok) { setValue(v); if (onValueChanged) onValueChanged(m_value); }
-            m_lineEdit->hide(); m_valueLbl->show();
+            m_editingValue = false;
+            m_lineEdit->hide();
+            updateDisplay();
         });
     }
-    m_valueLbl->hide();
-    m_lineEdit->setGeometry(rect().adjusted(2, 2, -2, -2));
+    // Keep layout stable while editing: preserve value-label slot and edit only in that area.
+    m_valueLbl->setText(QString());
+    m_lineEdit->setGeometry(m_valueLbl->geometry().adjusted(0, 0, 0, 0));
     m_lineEdit->setText(QString::number(m_value));
     m_lineEdit->show(); m_lineEdit->setFocus(); m_lineEdit->selectAll();
 }
 
 void DragSpinBox::updateDisplay()
 {
-    if (m_valueLbl) m_valueLbl->setText(QString::number(m_value) + m_suffix);
+    if (m_valueLbl && !m_editingValue) m_valueLbl->setText(QString::number(m_value) + m_suffix);
 }
 
 // ============================================================
