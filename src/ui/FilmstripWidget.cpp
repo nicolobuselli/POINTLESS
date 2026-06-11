@@ -7,6 +7,7 @@
 #include <QAbstractButton>
 #include <QPainter>
 #include <QPainterPath>
+#include <QSvgRenderer>
 #include <QMouseEvent>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -34,7 +35,7 @@ QStringList imagePathsFromMime(const QMimeData* mime)
     return out;
 }
 
-// ── Orange tilted "add" button ───────────────────────────────
+// ── Orange "add image" button (SVG asset) ────────────────────
 
 class AddImageButton : public QAbstractButton {
 public:
@@ -47,35 +48,19 @@ protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
 
-        const QPointF c(width() / 2.0, height() / 2.0);
-        const qreal w = 54, h = 72, r = 10;
+        static QSvgRenderer renderer(QString(":/icons/add_image.svg"));
 
-        // Back card
-        p.save();
-        p.translate(c);
-        p.rotate(-9);
-        p.setPen(Qt::NoPen);
-        p.setBrush(QColor("#B8430F"));
-        p.drawRoundedRect(QRectF(-w/2 - 4, -h/2 + 3, w, h), r, r);
-        p.restore();
-
-        // Front card
-        p.save();
-        p.translate(c);
-        p.rotate(7);
-        p.setPen(Qt::NoPen);
-        p.setBrush(underMouse() ? QColor("#FF6E33") : QColor("#F95B1E"));
-        p.drawRoundedRect(QRectF(-w/2, -h/2, w, h), r, r);
-
-        // Plus sign
-        QPen pen(Qt::white, 4);
-        pen.setCapStyle(Qt::RoundCap);
-        p.setPen(pen);
-        const qreal s = 11;
-        p.drawLine(QPointF(-s, 0), QPointF(s, 0));
-        p.drawLine(QPointF(0, -s), QPointF(0, s));
-        p.restore();
+        // Fit the 147×186 artwork inside the button, centred,
+        // with a slight grow on hover.
+        const QSizeF art(147.0, 186.0);
+        const qreal pad   = underMouse() ? 4.0 : 8.0;
+        const QRectF area = QRectF(rect()).adjusted(pad, pad, -pad, -pad);
+        QSizeF s = art.scaled(area.size(), Qt::KeepAspectRatio);
+        QRectF target(QPointF(area.center().x() - s.width()  / 2.0,
+                              area.center().y() - s.height() / 2.0), s);
+        renderer.render(&p, target);
     }
 };
 

@@ -166,6 +166,14 @@ void TonalControlsWidget::rebuildRows()
         m_rows.push_back({ swatch, slider });
 
         swatch->onClicked = [this, i, swatch]() { openTonePicker(i, swatch); };
+        swatch->onColorEdited = [this, i](QColor c) {
+            if (i >= int(m_settings.tones.size())) return;
+            m_settings.tones[i].color = c;
+            m_updating = true;
+            m_paletteCombo->setCurrentIndex(0);
+            m_updating = false;
+            emitChanged();
+        };
         connect(slider, &QSlider::valueChanged, this, [this, i](int v) {
             if (m_updating) return;
             if (i < int(m_settings.tones.size())) {

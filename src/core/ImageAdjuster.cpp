@@ -21,6 +21,8 @@ inline quint32 hash2d(quint32 x, quint32 y)
 
 // ---------------------------------------------------------------------------
 // Public entry point
+// Pipeline: resize → brightness → contrast → gamma → levels → saturation →
+//           blur → edge enhancement → sharpen → grain → posterize → threshold
 // ---------------------------------------------------------------------------
 
 QImage ImageAdjuster::apply(const QImage& src, const Adjustments& a)
@@ -29,23 +31,30 @@ QImage ImageAdjuster::apply(const QImage& src, const Adjustments& a)
 
     QImage img = src.convertToFormat(QImage::Format_ARGB32);
 
-    // Size
+    // 1. Resize
     if (a.sizePct != 100) {
         int w = qMax(8, img.width()  * a.sizePct / 100);
         int h = qMax(8, img.height() * a.sizePct / 100);
         img = img.scaled(w, h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
 
-    // Denoise: blend toward a small box blur
-    if (a.denoise > 0) {
-        QImage blurred = img;
-        int denoiseRadius = qMax(1, qRound(1.0f + a.denoise * 0.06f));
-        boxBlur(blurred, denoiseRadius);
-        float denoiseBlend = qBound(0.0f, a.denoise / 70.0f, 1.0f);
-        blend(img, blurred, denoiseBlend);
-    }
+    // 2. Brightness / Contrast
+    if (a.brightness != 0 || a.contrast != 0)
+        brightnessContrast(img, a.brightness, a.contrast);
 
-    // Blur
+    // 3. Gamma
+    if (a.gamma != 100)
+        applyGamma(img, a.gamma / 100.0f);
+
+    // 4. Levels
+    if (a.levelsBlack != 0 || a.levelsMid != 100 || a.levelsWhite != 255)
+        applyLevels(img, a.levelsBlack, a.levelsMid / 100.0f, a.levelsWhite);
+
+    // 5. Saturation
+    if (a.saturation != 0)
+        saturate(img, a.saturation);
+
+    // 6. Blur
     if (a.blur > 0) {
         int radius = qMax(1, qRound(a.blur * 0.35f));
         int passes = 2 + a.blur / 35;
@@ -53,21 +62,25 @@ QImage ImageAdjuster::apply(const QImage& src, const Adjustments& a)
             boxBlur(img, radius);
     }
 
-    // Sharpen (unsharp mask)
+    // 7. Edge Enhancement
+    if (a.edgeEnhancement > 0)
+        edgeEnhance(img, a.edgeEnhancement);
+
+    // 8. Sharpen (unsharp mask)
     if (a.sharpenStrength > 0)
         unsharpMask(img, a.sharpenStrength, a.sharpenRadius);
 
-    // Brightness / contrast
-    if (a.brightness != 0 || a.contrast != 0)
-        brightnessContrast(img, a.brightness, a.contrast);
+    // 9. Grain
+    if (a.grain > 0)
+        addGrain(img, a.grain);
 
-    // Saturation
-    if (a.saturation != 0)
-        saturate(img, a.saturation);
+    // 10. Posterize
+    if (a.posterize < 256)
+        applyPosterize(img, a.posterize);
 
-    // Noise
-    if (a.noise > 0)
-        addNoise(img, a.noise);
+    // 11. Threshold
+    if (a.threshold > 0)
+        applyThreshold(img, a.threshold);
 
     return img;
 }
@@ -171,6 +184,48 @@ void ImageAdjuster::brightnessContrast(QImage& img, int brightness, int contrast
     }
 }
 
+void ImageAdjuster::applyGamma(QImage& img, float gamma)
+{
+    if (gamma <= 0.0f) gamma = 0.01f;
+    uint8_t lut[256];
+    for (int i = 0; i < 256; ++i)
+        lut[i] = clamp255(qRound(qPow(i / 255.0, gamma) * 255.0));
+
+    const int w = img.width(), h = img.height();
+    for (int y = 0; y < h; ++y) {
+        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            QRgb p = line[x];
+            line[x] = qRgba(lut[qRed(p)], lut[qGreen(p)], lut[qBlue(p)], qAlpha(p));
+        }
+    }
+}
+
+void ImageAdjuster::applyLevels(QImage& img, int blackPoint, float midPoint, int whitePoint)
+{
+    const float range = float(whitePoint - blackPoint);
+    if (midPoint <= 0.0f) midPoint = 0.01f;
+
+    uint8_t lut[256];
+    for (int i = 0; i < 256; ++i) {
+        float v = (range > 0.0f) ? (i - blackPoint) / range : 0.0f;
+        v = qBound(0.0f, v, 1.0f);
+        // midPoint > 1 brightens, < 1 darkens — same convention as Photoshop Levels
+        if (midPoint != 1.0f)
+            v = qPow(v, 1.0f / midPoint);
+        lut[i] = clamp255(qRound(v * 255.0f));
+    }
+
+    const int w = img.width(), h = img.height();
+    for (int y = 0; y < h; ++y) {
+        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            QRgb p = line[x];
+            line[x] = qRgba(lut[qRed(p)], lut[qGreen(p)], lut[qBlue(p)], qAlpha(p));
+        }
+    }
+}
+
 void ImageAdjuster::saturate(QImage& img, int saturation)
 {
     const int s = qBound(0, 100 + saturation, 200);   // 0..200, 100 = identity
@@ -189,7 +244,62 @@ void ImageAdjuster::saturate(QImage& img, int saturation)
     }
 }
 
-void ImageAdjuster::addNoise(QImage& img, int amount)
+void ImageAdjuster::edgeEnhance(QImage& img, int amount)
+{
+    // Laplacian edge response added back to the original.
+    // Differs from unsharp mask: operates on luminance gradients, not per-channel
+    // blur differences, so flat regions stay untouched while edges gain contrast.
+    const int w = img.width(), h = img.height();
+    if (w < 3 || h < 3) return;
+
+    // Compute per-pixel Laplacian of luminance: 4*C - L - R - T - B
+    std::vector<int> lap(size_t(w) * size_t(h), 0);
+    for (int y = 1; y < h - 1; ++y) {
+        const QRgb* lc = reinterpret_cast<const QRgb*>(img.constScanLine(y));
+        const QRgb* lt = reinterpret_cast<const QRgb*>(img.constScanLine(y - 1));
+        const QRgb* lb = reinterpret_cast<const QRgb*>(img.constScanLine(y + 1));
+        auto lum = [](QRgb p) { return (qRed(p) * 54 + qGreen(p) * 183 + qBlue(p) * 19) >> 8; };
+        for (int x = 1; x < w - 1; ++x)
+            lap[size_t(y) * w + x] = 4 * lum(lc[x]) - lum(lc[x-1]) - lum(lc[x+1])
+                                     - lum(lt[x]) - lum(lb[x]);
+    }
+
+    // Blend the Laplacian response back; scale so 100% gives a strong but not
+    // destructive boost (max response ~4*255=1020, we add at most ~30% of that).
+    const float strength = amount / 100.0f * 0.30f;
+    for (int y = 0; y < h; ++y) {
+        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            int e = qRound(lap[size_t(y) * w + x] * strength);
+            QRgb p = line[x];
+            line[x] = qRgba(clamp255(qRed(p)   + e),
+                            clamp255(qGreen(p) + e),
+                            clamp255(qBlue(p)  + e),
+                            qAlpha(p));
+        }
+    }
+}
+
+void ImageAdjuster::unsharpMask(QImage& img, int strength, int radius)
+{
+    QImage blurred = img;
+    boxBlur(blurred, qMax(1, radius));
+
+    const float amount = strength / 100.0f * 1.5f;
+    const int w = img.width(), h = img.height();
+    for (int y = 0; y < h; ++y) {
+        QRgb*       d = reinterpret_cast<QRgb*>(img.scanLine(y));
+        const QRgb* b = reinterpret_cast<const QRgb*>(blurred.constScanLine(y));
+        for (int x = 0; x < w; ++x) {
+            int r  = clamp255(qRound(qRed(d[x])   + (qRed(d[x])   - qRed(b[x]))   * amount));
+            int g  = clamp255(qRound(qGreen(d[x]) + (qGreen(d[x]) - qGreen(b[x])) * amount));
+            int bl = clamp255(qRound(qBlue(d[x])  + (qBlue(d[x])  - qBlue(b[x]))  * amount));
+            d[x] = qRgba(r, g, bl, qAlpha(d[x]));
+        }
+    }
+}
+
+void ImageAdjuster::addGrain(QImage& img, int amount)
 {
     const float amp = amount * 1.6f;
     const int w = img.width(), h = img.height();
@@ -207,21 +317,40 @@ void ImageAdjuster::addNoise(QImage& img, int amount)
     }
 }
 
-void ImageAdjuster::unsharpMask(QImage& img, int strength, int radius)
+void ImageAdjuster::applyPosterize(QImage& img, int levels)
 {
-    QImage blurred = img;
-    boxBlur(blurred, qMax(1, radius));
+    if (levels >= 256) return;
+    levels = qMax(2, levels);
 
-    const float amount = strength / 100.0f * 1.5f;
+    uint8_t lut[256];
+    for (int i = 0; i < 256; ++i) {
+        int step = qRound(float(i) / 255.0f * (levels - 1));
+        lut[i] = clamp255(qRound(float(step) / float(levels - 1) * 255.0f));
+    }
+
     const int w = img.width(), h = img.height();
     for (int y = 0; y < h; ++y) {
-        QRgb*       d = reinterpret_cast<QRgb*>(img.scanLine(y));
-        const QRgb* b = reinterpret_cast<const QRgb*>(blurred.constScanLine(y));
+        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
         for (int x = 0; x < w; ++x) {
-            int r = clamp255(qRound(qRed(d[x])   + (qRed(d[x])   - qRed(b[x]))   * amount));
-            int g = clamp255(qRound(qGreen(d[x]) + (qGreen(d[x]) - qGreen(b[x])) * amount));
-            int bl = clamp255(qRound(qBlue(d[x]) + (qBlue(d[x])  - qBlue(b[x]))  * amount));
-            d[x] = qRgba(r, g, bl, qAlpha(d[x]));
+            QRgb p = line[x];
+            line[x] = qRgba(lut[qRed(p)], lut[qGreen(p)], lut[qBlue(p)], qAlpha(p));
+        }
+    }
+}
+
+void ImageAdjuster::applyThreshold(QImage& img, int threshold)
+{
+    // threshold == 0 means disabled (checked by caller, but guard here too)
+    if (threshold <= 0) return;
+
+    const int w = img.width(), h = img.height();
+    for (int y = 0; y < h; ++y) {
+        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
+        for (int x = 0; x < w; ++x) {
+            QRgb p = line[x];
+            int lum = (qRed(p) * 54 + qGreen(p) * 183 + qBlue(p) * 19) >> 8;
+            int v = (lum >= threshold) ? 255 : 0;
+            line[x] = qRgba(v, v, v, qAlpha(p));
         }
     }
 }

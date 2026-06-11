@@ -3,9 +3,14 @@
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <vector>
 
 namespace {
+
+// ============================================================
+//  Scalar helpers
+// ============================================================
 
 inline int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
@@ -14,7 +19,6 @@ inline float lumOf(float r, float g, float b)
     return 0.2126f * r + 0.7152f * g + 0.0722f * b;
 }
 
-// Tones sorted dark → light by level (ascending).
 std::vector<ToneEntry> sortedTones(const std::vector<ToneEntry>& tones)
 {
     std::vector<ToneEntry> t = tones;
@@ -23,11 +27,54 @@ std::vector<ToneEntry> sortedTones(const std::vector<ToneEntry>& tones)
     return t;
 }
 
-// ── Ordered threshold patterns ───────────────────────────────
+// ============================================================
+//  Single-pixel quantisation (shared by diffusion and dot diffusion)
+// ============================================================
 
+inline void quantizePixel(
+    float r, float g, float b,
+    bool imageColors, const std::vector<ToneEntry>& tones, int nTones,
+    float step, float inkLum,
+    float& cr, float& cg, float& cb, QRgb& outPx)
+{
+    if (imageColors) {
+        cr = qBound(0.0f, std::round(r / step) * step, 255.0f);
+        cg = qBound(0.0f, std::round(g / step) * step, 255.0f);
+        cb = qBound(0.0f, std::round(b / step) * step, 255.0f);
+        outPx = qRgba(int(cr), int(cg), int(cb), 255);
+    } else if (nTones <= 1) {
+        const float lum = lumOf(r, g, b);
+        const bool ink = std::fabs(lum - inkLum) <= std::fabs(lum - 255.0f);
+        if (ink) {
+            const QColor& c = tones.empty() ? QColor(Qt::black) : tones[0].color;
+            cr = c.red(); cg = c.green(); cb = c.blue();
+            outPx = qRgba(c.red(), c.green(), c.blue(), 255);
+        } else {
+            cr = 255; cg = 255; cb = 255;
+            outPx = qRgba(0, 0, 0, 0);
+        }
+    } else {
+        int best = 0;
+        float bestD = 1e12f;
+        for (int t = 0; t < nTones; ++t) {
+            const QColor& c = tones[t].color;
+            float dr = r - c.red(), dg = g - c.green(), db = b - c.blue();
+            float d = dr*dr + dg*dg + db*db;
+            if (d < bestD) { bestD = d; best = t; }
+        }
+        const QColor& c = tones[best].color;
+        cr = c.red(); cg = c.green(); cb = c.blue();
+        outPx = qRgba(c.red(), c.green(), c.blue(), 255);
+    }
+}
+
+// ============================================================
+//  Ordered threshold matrices
+// ============================================================
+
+// Bayer: recursive construction; n must be a power of two.
 std::vector<float> bayerMatrix(int n)
 {
-    // Recursive construction; n must be a power of two.
     std::vector<int> m = { 0 };
     int size = 1;
     while (size < n) {
@@ -36,10 +83,10 @@ std::vector<float> bayerMatrix(int n)
         for (int y = 0; y < size; ++y) {
             for (int x = 0; x < size; ++x) {
                 int v = m[size_t(y) * size + x] * 4;
-                nm[size_t(y) * s2 + x]                  = v;
-                nm[size_t(y) * s2 + x + size]           = v + 2;
-                nm[size_t(y + size) * s2 + x]           = v + 3;
-                nm[size_t(y + size) * s2 + x + size]    = v + 1;
+                nm[size_t(y) * s2 + x]                = v;
+                nm[size_t(y) * s2 + x + size]         = v + 2;
+                nm[size_t(y + size) * s2 + x]         = v + 3;
+                nm[size_t(y + size) * s2 + x + size]  = v + 1;
             }
         }
         m = std::move(nm);
@@ -51,7 +98,15 @@ std::vector<float> bayerMatrix(int n)
     return out;
 }
 
-// Classic clustered-dot 8×8 screen ("heavy" blobs).
+// Clustered dot: 4×4 (grows from centre outward — mimics a printing screen).
+const int kClustered4[16] = {
+    12, 5,  6, 13,
+     4, 0,  1,  7,
+    11, 3,  2,  8,
+    15, 10, 9, 14
+};
+
+// Clustered dot: 8×8 (denser, closer to newspaper half-tone).
 const int kClustered8[64] = {
     24, 10, 12, 26, 35, 47, 49, 37,
      8,  0,  2, 14, 45, 59, 61, 51,
@@ -63,48 +118,167 @@ const int kClustered8[64] = {
     32, 40, 54, 38, 31, 21, 19, 29
 };
 
-// ── Error-diffusion kernels ──────────────────────────────────
+// ============================================================
+//  Void-and-cluster mask generation
+//  Implements Ulichney's algorithm (1993).
+//  Produces a blue-noise-distributed threshold map on an n×n toroidal grid.
+//  Called once per unique (n, seed) pair and then cached.
+// ============================================================
 
-struct KTap { int da, db; float w; };   // da: along scan axis, db: rows below
+std::vector<float> generateVoidCluster(int n, uint32_t seed)
+{
+    const int N = n * n;
+    const float sigma  = std::max(1.5f, float(n) / 8.0f);
+    const float inv2s2 = 1.0f / (2.0f * sigma * sigma);
+    const int   R      = std::max(2, int(std::ceil(sigma * 2.5f)));
 
-const KTap kFloydSteinberg[] = {
-    { 1, 0, 7.f/16 }, { -1, 1, 3.f/16 }, { 0, 1, 5.f/16 }, { 1, 1, 1.f/16 }
+    // Precompute the Gaussian kernel offsets and weights.
+    struct KTap { int dx, dy; float w; };
+    std::vector<KTap> kernel;
+    kernel.reserve(size_t((2*R+1) * (2*R+1)));
+    for (int dy = -R; dy <= R; ++dy)
+        for (int dx = -R; dx <= R; ++dx)
+            kernel.push_back({ dx, dy, std::exp(-float(dx*dx + dy*dy) * inv2s2) });
+
+    std::vector<float> energy(N, 0.0f);
+    std::vector<bool>  occupied(N, false);
+
+    // Toroidal energy update.
+    auto addEnergy = [&](int cx, int cy, float sign) {
+        for (const KTap& k : kernel) {
+            int x = ((cx + k.dx) % n + n) % n;
+            int y = ((cy + k.dy) % n + n) % n;
+            energy[y * n + x] += sign * k.w;
+        }
+    };
+
+    // Xorshift32 deterministic PRNG.
+    uint32_t rng = seed ? seed : 0xDEADBEEFu;
+    auto xr32 = [&]() -> uint32_t {
+        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng;
+    };
+
+    // Random initial occupancy (N/2 occupied).
+    std::vector<int> perm(N);
+    std::iota(perm.begin(), perm.end(), 0);
+    for (int i = N - 1; i > 0; --i) {
+        int j = int(xr32() % unsigned(i + 1));
+        std::swap(perm[i], perm[j]);
+    }
+    for (int k = 0; k < N / 2; ++k) {
+        occupied[perm[k]] = true;
+        addEnergy(perm[k] % n, perm[k] / n, 1.0f);
+    }
+
+    std::vector<int> rank(N, -1);
+
+    // Phase 1: assign ranks N/2 … N-1 by removing the most-clustered point first.
+    for (int k = N - 1; k >= N / 2; --k) {
+        int maxI = -1; float maxE = -1e30f;
+        for (int i = 0; i < N; ++i)
+            if (occupied[i] && energy[i] > maxE) { maxE = energy[i]; maxI = i; }
+        rank[maxI] = k;
+        occupied[maxI] = false;
+        addEnergy(maxI % n, maxI / n, -1.0f);
+    }
+
+    // Phase 2: assign ranks 0 … N/2-1 by filling the most-void cell first.
+    for (int k = N / 2 - 1; k >= 0; --k) {
+        int minI = -1; float minE = 1e30f;
+        for (int i = 0; i < N; ++i)
+            if (!occupied[i] && energy[i] < minE) { minE = energy[i]; minI = i; }
+        rank[minI] = k;
+        occupied[minI] = true;
+        addEnergy(minI % n, minI / n, 1.0f);
+    }
+
+    std::vector<float> mask(N);
+    for (int i = 0; i < N; ++i) mask[i] = (rank[i] + 0.5f) / float(N);
+    return mask;
+}
+
+// Lazily initialised masks — thread-safe (C++11 static-local guarantee).
+const std::vector<float>& blueNoiseMask()
+{
+    // 64×64 void-and-cluster mask, seed A.
+    static const std::vector<float> m = generateVoidCluster(64, 0xF3A2C1D4u);
+    return m;
+}
+const std::vector<float>& voidClusterMask()
+{
+    // 32×32 void-and-cluster mask, seed B (different spatial frequency).
+    static const std::vector<float> m = generateVoidCluster(32, 0x1B7E4F93u);
+    return m;
+}
+
+// ============================================================
+//  Error-diffusion kernels
+//  KTap: { column_offset, row_offset, weight }
+//  column_offset is relative to the current pixel along the scan axis
+//  (negated automatically in serpentine passes).
+// ============================================================
+
+struct KTap { int da, db; float w; };
+
+// Floyd–Steinberg (1976)
+const KTap kFS[] = {
+    { 1,0, 7.f/16 }, { -1,1, 3.f/16 }, { 0,1, 5.f/16 }, { 1,1, 1.f/16 }
 };
+// False Floyd–Steinberg (lightweight approximation)
+const KTap kFFS[] = {
+    { 1,0, 3.f/8 }, { 0,1, 3.f/8 }, { 1,1, 2.f/8 }
+};
+// Jarvis–Judice–Ninke (1976)
 const KTap kJJN[] = {
-    { 1, 0, 7.f/48 }, { 2, 0, 5.f/48 },
-    { -2, 1, 3.f/48 }, { -1, 1, 5.f/48 }, { 0, 1, 7.f/48 }, { 1, 1, 5.f/48 }, { 2, 1, 3.f/48 },
-    { -2, 2, 1.f/48 }, { -1, 2, 3.f/48 }, { 0, 2, 5.f/48 }, { 1, 2, 3.f/48 }, { 2, 2, 1.f/48 }
+    { 1,0, 7.f/48 }, { 2,0, 5.f/48 },
+    { -2,1, 3.f/48 }, { -1,1, 5.f/48 }, { 0,1, 7.f/48 }, { 1,1, 5.f/48 }, { 2,1, 3.f/48 },
+    { -2,2, 1.f/48 }, { -1,2, 3.f/48 }, { 0,2, 5.f/48 }, { 1,2, 3.f/48 }, { 2,2, 1.f/48 }
 };
+// Burkes (1988)
 const KTap kBurkes[] = {
-    { 1, 0, 8.f/32 }, { 2, 0, 4.f/32 },
-    { -2, 1, 2.f/32 }, { -1, 1, 4.f/32 }, { 0, 1, 8.f/32 }, { 1, 1, 4.f/32 }, { 2, 1, 2.f/32 }
+    { 1,0, 8.f/32 }, { 2,0, 4.f/32 },
+    { -2,1, 2.f/32 }, { -1,1, 4.f/32 }, { 0,1, 8.f/32 }, { 1,1, 4.f/32 }, { 2,1, 2.f/32 }
 };
+// Atkinson (1987)
 const KTap kAtkinson[] = {
-    { 1, 0, 1.f/8 }, { 2, 0, 1.f/8 },
-    { -1, 1, 1.f/8 }, { 0, 1, 1.f/8 }, { 1, 1, 1.f/8 },
-    { 0, 2, 1.f/8 }
+    { 1,0, 1.f/8 }, { 2,0, 1.f/8 },
+    { -1,1, 1.f/8 }, { 0,1, 1.f/8 }, { 1,1, 1.f/8 },
+    { 0,2, 1.f/8 }
 };
-const KTap kLine[] = {
-    { 1, 0, 0.95f }
+// Sierra (1989)
+const KTap kSierra[] = {
+    { 1,0, 5.f/32 }, { 2,0, 3.f/32 },
+    { -2,1, 2.f/32 }, { -1,1, 4.f/32 }, { 0,1, 5.f/32 }, { 1,1, 4.f/32 }, { 2,1, 2.f/32 },
+    { -1,2, 2.f/32 }, { 0,2, 3.f/32 }, { 1,2, 2.f/32 }
+};
+// Sierra Lite / 2-4A (1989)
+const KTap kSierraLite[] = {
+    { 1,0, 2.f/4 }, { -1,1, 1.f/4 }, { 0,1, 1.f/4 }
+};
+// Stucki (1981)
+const KTap kStucki[] = {
+    { 1,0, 8.f/42 }, { 2,0, 4.f/42 },
+    { -2,1, 2.f/42 }, { -1,1, 4.f/42 }, { 0,1, 8.f/42 }, { 1,1, 4.f/42 }, { 2,1, 2.f/42 },
+    { -2,2, 1.f/42 }, { -1,2, 2.f/42 }, { 0,2, 4.f/42 }, { 1,2, 2.f/42 }, { 2,2, 1.f/42 }
 };
 
-} // namespace
+} // anonymous namespace
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
+// ============================================================
+//  DitherRenderer — public entry point
+// ============================================================
 
 bool DitherRenderer::isOrdered(DitherAlgorithm a)
 {
-    switch (a) {
-        case DitherAlgorithm::Bayer:
-        case DitherAlgorithm::DispersedModulation:
-        case DitherAlgorithm::HeavyModulation:
-        case DitherAlgorithm::CircuitModulation:
-            return true;
-        default:
-            return false;
-    }
+    return a == DitherAlgorithm::Bayer
+        || a == DitherAlgorithm::ClusteredDot
+        || a == DitherAlgorithm::BlueNoise
+        || a == DitherAlgorithm::VoidAndCluster;
+}
+
+bool DitherRenderer::isHybrid(DitherAlgorithm a)
+{
+    return a == DitherAlgorithm::DotDiffusion;
 }
 
 QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
@@ -114,7 +288,7 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
     const int ps = qBound(1, s.pixelSize, 32);
     QImage work = input;
     if (ps > 1) {
-        work = input.scaled(qMax(1, input.width() / ps),
+        work = input.scaled(qMax(1, input.width()  / ps),
                             qMax(1, input.height() / ps),
                             Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
@@ -123,8 +297,9 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
     QImage out(work.size(), QImage::Format_ARGB32);
     out.fill(Qt::transparent);
 
-    if (isOrdered(s.algorithm)) renderOrdered(work, out, s);
-    else                        renderDiffusion(work, out, s);
+    if      (isOrdered(s.algorithm)) renderOrdered     (work, out, s);
+    else if (isHybrid (s.algorithm)) renderDotDiffusion(work, out, s);
+    else                             renderDiffusion    (work, out, s);
 
     if (ps > 1)
         out = out.scaled(input.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
@@ -132,9 +307,9 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// Error diffusion
-// ---------------------------------------------------------------------------
+// ============================================================
+//  Error diffusion
+// ============================================================
 
 void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
                                      const DitherSettings& s)
@@ -143,17 +318,18 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
     const int h = work.height();
     if (w == 0 || h == 0) return;
 
-    const KTap* taps   = kFloydSteinberg;
-    int         nTaps  = 4;
-    bool        vertical = false;
+    const KTap* taps  = kFS;
+    int         nTaps = 4;
 
     switch (s.algorithm) {
-        case DitherAlgorithm::FloydSteinberg:    taps = kFloydSteinberg; nTaps = 4;  break;
-        case DitherAlgorithm::JarvisJudiceNinke: taps = kJJN;            nTaps = 12; break;
-        case DitherAlgorithm::Burkes:            taps = kBurkes;         nTaps = 7;  break;
-        case DitherAlgorithm::Atkinson:          taps = kAtkinson;       nTaps = 6;  break;
-        case DitherAlgorithm::RowModulation:     taps = kLine;           nTaps = 1;  break;
-        case DitherAlgorithm::ColumnModulation:  taps = kLine;           nTaps = 1; vertical = true; break;
+        case DitherAlgorithm::FloydSteinberg:      taps = kFS;         nTaps = 4;  break;
+        case DitherAlgorithm::FalseFloydSteinberg: taps = kFFS;        nTaps = 3;  break;
+        case DitherAlgorithm::JarvisJudiceNinke:   taps = kJJN;        nTaps = 12; break;
+        case DitherAlgorithm::Burkes:              taps = kBurkes;     nTaps = 7;  break;
+        case DitherAlgorithm::Atkinson:            taps = kAtkinson;   nTaps = 6;  break;
+        case DitherAlgorithm::Sierra:              taps = kSierra;     nTaps = 10; break;
+        case DitherAlgorithm::SierraLite:          taps = kSierraLite; nTaps = 3;  break;
+        case DitherAlgorithm::Stucki:              taps = kStucki;     nTaps = 12; break;
         default: break;
     }
 
@@ -163,6 +339,10 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
     const int   nTones      = int(tones.size());
     const int   L           = qBound(2, s.levels, 8);
     const float step        = 255.0f / float(L - 1);
+
+    float inkLum = 0.0f;
+    if (!imageColors && nTones == 1)
+        inkLum = lumOf(tones[0].color.red(), tones[0].color.green(), tones[0].color.blue());
 
     // Float channel buffers (source composited over white).
     std::vector<float> fr(size_t(w) * h), fg(size_t(w) * h), fb(size_t(w) * h);
@@ -178,71 +358,31 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
         }
     }
 
-    // Single-tone luminosity threshold: midpoint between ink and paper.
-    float inkLum = 0.0f;
-    if (!imageColors && nTones == 1)
-        inkLum = lumOf(tones[0].color.red(), tones[0].color.green(), tones[0].color.blue());
+    // Serpentine raster scan (horizontal).
+    for (int row = 0; row < h; ++row) {
+        const bool rev = (row & 1) != 0;
+        for (int ci = 0; ci < w; ++ci) {
+            const int col = rev ? w - 1 - ci : ci;
+            const size_t i = size_t(row) * w + col;
 
-    const int outer = vertical ? w : h;
-    const int inner = vertical ? h : w;
+            float cr, cg, cb; QRgb outPx;
+            quantizePixel(fr[i], fg[i], fb[i],
+                          imageColors, tones, nTones, step, inkLum,
+                          cr, cg, cb, outPx);
 
-    for (int b = 0; b < outer; ++b) {
-        const bool reverse = (b & 1) != 0;   // serpentine
-        for (int ai = 0; ai < inner; ++ai) {
-            const int a = reverse ? inner - 1 - ai : ai;
-            const int x = vertical ? b : a;
-            const int y = vertical ? a : b;
-            const size_t i = size_t(y) * w + x;
+            reinterpret_cast<QRgb*>(out.scanLine(row))[col] = outPx;
 
-            const float r = fr[i], g = fg[i], bl = fb[i];
-            float cr, cg, cb;          // chosen color value (for error)
-            QRgb  outPx;
-
-            if (imageColors) {
-                cr = qBound(0.0f, std::round(r / step) * step, 255.0f);
-                cg = qBound(0.0f, std::round(g / step) * step, 255.0f);
-                cb = qBound(0.0f, std::round(bl / step) * step, 255.0f);
-                outPx = qRgba(int(cr), int(cg), int(cb), 255);
-            } else if (nTones <= 1) {
-                const float lum = lumOf(r, g, bl);
-                const bool ink = std::fabs(lum - inkLum) <= std::fabs(lum - 255.0f);
-                if (ink) {
-                    const QColor& c = tones.empty() ? QColor(Qt::black) : tones[0].color;
-                    cr = c.red(); cg = c.green(); cb = c.blue();
-                    outPx = qRgba(c.red(), c.green(), c.blue(), 255);
-                } else {
-                    cr = 255; cg = 255; cb = 255;
-                    outPx = qRgba(0, 0, 0, 0);   // paper → background shows
-                }
-            } else {
-                int best = 0;
-                float bestD = 1e12f;
-                for (int t = 0; t < nTones; ++t) {
-                    const QColor& c = tones[t].color;
-                    float dr = r - c.red(), dg = g - c.green(), db = bl - c.blue();
-                    float d = dr*dr + dg*dg + db*db;
-                    if (d < bestD) { bestD = d; best = t; }
-                }
-                const QColor& c = tones[best].color;
-                cr = c.red(); cg = c.green(); cb = c.blue();
-                outPx = qRgba(c.red(), c.green(), c.blue(), 255);
-            }
-
-            reinterpret_cast<QRgb*>(out.scanLine(y))[x] = outPx;
-
-            const float er = (r  - cr) * strength;
-            const float eg = (g  - cg) * strength;
-            const float eb = (bl - cb) * strength;
+            const float er = (fr[i] - cr) * strength;
+            const float eg = (fg[i] - cg) * strength;
+            const float eb = (fb[i] - cb) * strength;
             if (er == 0.0f && eg == 0.0f && eb == 0.0f) continue;
 
             for (int t = 0; t < nTaps; ++t) {
-                int da = reverse ? -taps[t].da : taps[t].da;
-                int na = a + da;
-                int nb = b + taps[t].db;
-                if (na < 0 || na >= inner || nb < 0 || nb >= outer) continue;
-                int nx = vertical ? nb : na;
-                int ny = vertical ? na : nb;
-                size_t ni = size_t(ny) * w + nx;
+                const int da = rev ? -taps[t].da : taps[t].da;
+                const int nc = col + da;
+                const int nr = row + taps[t].db;
+                if (nc < 0 || nc >= w || nr < 0 || nr >= h) continue;
+                const size_t ni = size_t(nr) * w + nc;
                 fr[ni] += er * taps[t].w;
                 fg[ni] += eg * taps[t].w;
                 fb[ni] += eb * taps[t].w;
@@ -251,9 +391,9 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Ordered dithering
-// ---------------------------------------------------------------------------
+// ============================================================
+//  Ordered dithering
+// ============================================================
 
 void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
                                    const DitherSettings& s)
@@ -268,43 +408,55 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
     const int   nTones      = int(tones.size());
     const int   L           = qBound(2, s.levels, 8);
 
-    int bayerN = 8;
-    std::vector<float> bayer;
-    if (s.algorithm == DitherAlgorithm::Bayer) {
-        bayerN = (s.bayerSize == 2 || s.bayerSize == 4 ||
-                  s.bayerSize == 8 || s.bayerSize == 16) ? s.bayerSize : 8;
-        bayer = bayerMatrix(bayerN);
-    }
+    // --- Prepare the threshold lookup for this algorithm --------
+    // Returns a threshold in [0,1] for pixel (x,y).
+    std::function<float(int,int)> threshold;
 
-    auto threshold = [&](int x, int y) -> float {
-        switch (s.algorithm) {
-            case DitherAlgorithm::Bayer:
-                return bayer[size_t(y % bayerN) * bayerN + (x % bayerN)];
-            case DitherAlgorithm::DispersedModulation: {
-                // Interleaved gradient noise
-                float v = std::fmod(0.06711056f * x + 0.00583715f * y, 1.0f);
-                return std::fmod(52.9829189f * v, 1.0f);
-            }
-            case DitherAlgorithm::HeavyModulation:
+    if (s.algorithm == DitherAlgorithm::Bayer) {
+        const int bn = (s.bayerSize == 2 || s.bayerSize == 4 ||
+                        s.bayerSize == 8 || s.bayerSize == 16) ? s.bayerSize : 8;
+        const std::vector<float> bayer = bayerMatrix(bn);
+        threshold = [bayer, bn](int x, int y) -> float {
+            return bayer[size_t(y % bn) * bn + (x % bn)];
+        };
+
+    } else if (s.algorithm == DitherAlgorithm::ClusteredDot) {
+        // bayerSize ≤ 4 selects the 4×4 pattern; otherwise 8×8.
+        if (s.bayerSize <= 4) {
+            threshold = [](int x, int y) -> float {
+                return (kClustered4[((y & 3) << 2) | (x & 3)] + 0.5f) / 16.0f;
+            };
+        } else {
+            threshold = [](int x, int y) -> float {
                 return (kClustered8[((y & 7) << 3) | (x & 7)] + 0.5f) / 64.0f;
-            case DitherAlgorithm::CircuitModulation:
-                return (((x ^ y) & 15) + 0.5f) / 16.0f;
-            default:
-                return 0.5f;
+            };
         }
-    };
+
+    } else if (s.algorithm == DitherAlgorithm::BlueNoise) {
+        const std::vector<float>& mask = blueNoiseMask();
+        threshold = [&mask](int x, int y) -> float {
+            return mask[size_t((y & 63) * 64 + (x & 63))];
+        };
+
+    } else { // VoidAndCluster
+        const std::vector<float>& mask = voidClusterMask();
+        threshold = [&mask](int x, int y) -> float {
+            return mask[size_t((y & 31) * 32 + (x & 31))];
+        };
+    }
 
     for (int y = 0; y < h; ++y) {
         const QRgb* in  = reinterpret_cast<const QRgb*>(work.constScanLine(y));
         QRgb*       dst = reinterpret_cast<QRgb*>(out.scanLine(y));
+
         for (int x = 0; x < w; ++x) {
             const QRgb p = in[x];
-            const float a = qAlpha(p) / 255.0f;
-            const float r  = qRed(p)   * a + 255.0f * (1.0f - a);
-            const float g  = qGreen(p) * a + 255.0f * (1.0f - a);
-            const float bl = qBlue(p)  * a + 255.0f * (1.0f - a);
+            const float alpha = qAlpha(p) / 255.0f;
+            const float r  = qRed(p)   * alpha + 255.0f * (1.0f - alpha);
+            const float g  = qGreen(p) * alpha + 255.0f * (1.0f - alpha);
+            const float bl = qBlue(p)  * alpha + 255.0f * (1.0f - alpha);
 
-            // Strength compresses the threshold toward 0.5 (no dither).
+            // Compress threshold toward 0.5 as strength decreases.
             const float t = 0.5f + (threshold(x, y) - 0.5f) * strength;
 
             if (imageColors) {
@@ -316,6 +468,7 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
                     return clamp255(qRound(qBound(0, q, L - 1) * 255.0f / (L - 1)));
                 };
                 dst[x] = qRgba(quant(r), quant(g), quant(bl), 255);
+
             } else if (nTones <= 1) {
                 const float lum01 = lumOf(r, g, bl) / 255.0f;
                 if (lum01 < t) {
@@ -326,19 +479,111 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
                 }
             } else {
                 const float lum = lumOf(r, g, bl);
-                const float lo  = float(tones.front().level);
-                const float hi  = float(tones.back().level);
-                float v = qBound(lo, lum, hi);
-
                 int seg = 0;
-                while (seg < nTones - 2 && v > float(tones[seg + 1].level)) ++seg;
-                const float l0 = float(tones[seg].level);
-                const float l1 = float(tones[seg + 1].level);
+                while (seg < nTones - 2 && lum > float(tones[seg + 1].level)) ++seg;
+                const float l0   = float(tones[seg].level);
+                const float l1   = float(tones[seg + 1].level);
                 const float span = l1 - l0;
-                const float frac = (span > 0.5f) ? (v - l0) / span : 0.5f;
-
-                const QColor& c = (frac > t) ? tones[seg + 1].color : tones[seg].color;
+                const float frac = (span > 0.5f) ? (lum - l0) / span : 0.5f;
+                const QColor& c  = (frac > t) ? tones[seg + 1].color : tones[seg].color;
                 dst[x] = qRgba(c.red(), c.green(), c.blue(), 255);
+            }
+        }
+    }
+}
+
+// ============================================================
+//  Dot Diffusion (Knuth, 1987)
+//  Pixels are processed according to a class matrix instead of raster
+//  order. Error is diffused only to pixels not yet processed (higher
+//  class value), producing unique clustered textures that are
+//  substantially different from both Floyd and Bayer.
+// ============================================================
+
+void DitherRenderer::renderDotDiffusion(const QImage& work, QImage& out,
+                                        const DitherSettings& s)
+{
+    const int w = work.width();
+    const int h = work.height();
+    if (w == 0 || h == 0) return;
+
+    // 3×3 class matrix (Knuth's original).
+    // Class 0 marks the dot centre; higher classes are processed later.
+    //   5  2  6
+    //   1  0  3
+    //   7  4  8
+    static const int kClass[9] = { 5, 2, 6,  1, 0, 3,  7, 4, 8 };
+
+    // Group pixel indices by class (0..8) — O(N) bucket sort.
+    std::vector<std::vector<int>> groups(9);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            groups[kClass[(y % 3) * 3 + (x % 3)]].push_back(y * w + x);
+
+    const float strength    = qBound(0, s.strength, 100) / 100.0f;
+    const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
+    const auto  tones       = sortedTones(s.tonal.tones);
+    const int   nTones      = int(tones.size());
+    const int   L           = qBound(2, s.levels, 8);
+    const float step        = 255.0f / float(L - 1);
+
+    float inkLum = 0.0f;
+    if (!imageColors && nTones == 1)
+        inkLum = lumOf(tones[0].color.red(), tones[0].color.green(), tones[0].color.blue());
+
+    // Float channel buffers (source composited over white).
+    std::vector<float> fr(size_t(w) * h), fg(size_t(w) * h), fb(size_t(w) * h);
+    for (int y = 0; y < h; ++y) {
+        const QRgb* line = reinterpret_cast<const QRgb*>(work.constScanLine(y));
+        for (int x = 0; x < w; ++x) {
+            const QRgb p = line[x];
+            float a = qAlpha(p) / 255.0f;
+            size_t i = size_t(y) * w + x;
+            fr[i] = qRed(p)   * a + 255.0f * (1.0f - a);
+            fg[i] = qGreen(p) * a + 255.0f * (1.0f - a);
+            fb[i] = qBlue(p)  * a + 255.0f * (1.0f - a);
+        }
+    }
+
+    static const int dx8[8] = { -1, 0, 1, -1, 1, -1, 0, 1 };
+    static const int dy8[8] = { -1,-1,-1,  0, 0,  1, 1, 1 };
+
+    for (int cls = 0; cls < 9; ++cls) {
+        for (int idx : groups[cls]) {
+            const int x = idx % w;
+            const int y = idx / w;
+
+            float cr, cg, cb; QRgb outPx;
+            quantizePixel(fr[idx], fg[idx], fb[idx],
+                          imageColors, tones, nTones, step, inkLum,
+                          cr, cg, cb, outPx);
+
+            reinterpret_cast<QRgb*>(out.scanLine(y))[x] = outPx;
+
+            const float er = (fr[idx] - cr) * strength;
+            const float eg = (fg[idx] - cg) * strength;
+            const float eb = (fb[idx] - cb) * strength;
+            if (er == 0.0f && eg == 0.0f && eb == 0.0f) continue;
+
+            // Count future neighbours (class > cls) before distributing.
+            int nFuture = 0;
+            for (int k = 0; k < 8; ++k) {
+                const int nx = x + dx8[k], ny = y + dy8[k];
+                if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                if (kClass[(ny % 3) * 3 + (nx % 3)] > cls) ++nFuture;
+            }
+            if (nFuture == 0) continue;
+
+            const float we = 1.0f / float(nFuture);
+            for (int k = 0; k < 8; ++k) {
+                const int nx = x + dx8[k], ny = y + dy8[k];
+                if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                if (kClass[(ny % 3) * 3 + (nx % 3)] > cls) {
+                    const size_t ni = size_t(ny) * w + nx;
+                    fr[ni] += er * we;
+                    fg[ni] += eg * we;
+                    fb[ni] += eb * we;
+                }
             }
         }
     }

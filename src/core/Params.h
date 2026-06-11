@@ -21,21 +21,32 @@ enum class RenderMode {
 struct Adjustments {
     int brightness      = 0;    // -100..100
     int contrast        = 0;    // -100..100
+    int gamma           = 100;  // 10..300  → actual = value/100  (1.0 = neutral)
+    int levelsBlack     = 0;    // 0..255   — clips input shadows
+    int levelsMid       = 100;  // 10..500  → actual = value/100  (1.0 = neutral)
+    int levelsWhite     = 255;  // 0..255   — clips input highlights
     int saturation      = 0;    // -100..100
-    int sizePct         = 100;  // 10..200 — resamples the source
+    int sizePct         = 100;  // 10..200  — resamples the source
     int sharpenStrength = 0;    // 0..100
     int sharpenRadius   = 1;    // 1..10 px
-    int noise           = 0;    // 0..100
-    int denoise         = 0;    // 0..100
+    int edgeEnhancement = 0;    // 0..100
     int blur            = 0;    // 0..100
+    int grain           = 0;    // 0..100   (was: noise)
+    int posterize       = 256;  // 2..256   (256 = disabled)
+    int threshold       = 0;    // 0..255   (0 = disabled)
 };
 
 inline bool operator==(const Adjustments& a, const Adjustments& b) {
     return a.brightness == b.brightness && a.contrast == b.contrast
+        && a.gamma == b.gamma
+        && a.levelsBlack == b.levelsBlack && a.levelsMid == b.levelsMid
+        && a.levelsWhite == b.levelsWhite
         && a.saturation == b.saturation && a.sizePct == b.sizePct
         && a.sharpenStrength == b.sharpenStrength
         && a.sharpenRadius == b.sharpenRadius
-        && a.noise == b.noise && a.denoise == b.denoise && a.blur == b.blur;
+        && a.edgeEnhancement == b.edgeEnhancement
+        && a.blur == b.blur && a.grain == b.grain
+        && a.posterize == b.posterize && a.threshold == b.threshold;
 }
 inline bool operator!=(const Adjustments& a, const Adjustments& b) { return !(a == b); }
 
@@ -204,16 +215,22 @@ inline bool operator==(const HalftoneSettings& a, const HalftoneSettings& b) {
 // ============================================================
 
 enum class DitherAlgorithm {
-    FloydSteinberg = 0,
-    JarvisJudiceNinke,
-    Burkes,
-    Atkinson,
-    Bayer,
-    RowModulation,
-    ColumnModulation,
-    DispersedModulation,
-    HeavyModulation,
-    CircuitModulation
+    // ── Error Diffusion ──────────────────────────────────────────
+    FloydSteinberg      = 0,   // Classic; balanced worm artifacts
+    FalseFloydSteinberg = 1,   // Lightweight FS approximation; very fast
+    Atkinson            = 2,   // 75 % error; iconic retro / Mac aesthetic
+    Burkes              = 3,   // Simplified JJN; reduced directional bias
+    Sierra              = 4,   // Refined diffusion; smooth gradients
+    SierraLite          = 5,   // Minimal Sierra; real-time friendly
+    JarvisJudiceNinke   = 6,   // Wide kernel; exceptional tonal accuracy
+    Stucki              = 7,   // JJN variant; cleaner shadows
+    // ── Ordered Dithering ────────────────────────────────────────
+    Bayer               = 8,   // Threshold matrix; crisp geometric pattern
+    ClusteredDot        = 9,   // Halftone-style dot clusters; print-like
+    BlueNoise           = 10,  // Void-and-cluster mask; natural appearance
+    VoidAndCluster      = 11,  // Ulichney optimal mask; minimal repetition
+    // ── Hybrid ───────────────────────────────────────────────────
+    DotDiffusion        = 12   // Class-matrix ordered + error diffusion
 };
 
 struct DitherSettings {
@@ -260,7 +277,8 @@ struct AsciiSettings {
     float   gamma         = 1.0f;
     bool    invert        = false;
 
-    TonalSettings tonal { ToneMode::FixedTones, defaultTones(1) };
+    TonalSettings tonal { ToneMode::FixedTones,
+                          { ToneEntry{ QColor(0xC0, 0xC0, 0xC0), 0 } } };
 
     QString effectiveCharset() const {
         const auto& presets = asciiCharsetPresets();

@@ -6,25 +6,39 @@
 /**
  * DitherRenderer
  *
- * Quantizes the image with one of several dithering strategies:
- *  - Error diffusion: Floyd–Steinberg, Jarvis–Judice–Ninke, Burkes,
- *    Atkinson, Row/Column modulation (1-D diffusion).
- *  - Ordered: Bayer (2/4/8/16), Dispersed (interleaved gradient noise),
- *    Heavy (clustered-dot screen), Circuit (XOR pattern).
+ * Quantizes an image using one of three strategy families:
  *
- * Color targets follow the tonal settings:
- *  - Image colors  → per-channel quantization to `levels` steps.
- *  - 1 tone        → binary ink-on-transparent (background shows through).
- *  - 2+ tones      → full-coverage mapping onto the tone palette.
+ *  Error Diffusion — Floyd–Steinberg, False Floyd–Steinberg, Atkinson,
+ *    Burkes, Sierra, Sierra Lite, Jarvis–Judice–Ninke, Stucki.
+ *    Each pixel is quantized in scan order; the residual error is
+ *    propagated to unprocessed neighbours via a fixed kernel.
+ *
+ *  Ordered Dithering — Bayer (2/4/8/16), Clustered Dot (4/8),
+ *    Blue Noise (64-sample V&C mask), Void and Cluster (32-sample V&C).
+ *    Per-pixel threshold is looked up from a precomputed mask; the
+ *    operation is fully parallel and scales to any resolution.
+ *
+ *  Hybrid — Dot Diffusion.
+ *    Pixels are processed in the order defined by a class matrix
+ *    (Knuth, 1987) while still propagating quantization error to
+ *    unprocessed neighbours, combining the structure of ordered
+ *    dithering with the tonal accuracy of error diffusion.
+ *
+ * Color output follows the tonal settings:
+ *   ImageColors → per-channel quantization to `levels` steps.
+ *   1 tone      → binary ink-on-transparent (background visible).
+ *   2+ tones    → nearest-colour mapping onto the tone palette.
  */
 class DitherRenderer
 {
 public:
-    // Returns an image the same size as `input`.
     static QImage render(const QImage& input, const DitherSettings& s);
 
 private:
-    static bool isOrdered(DitherAlgorithm a);
-    static void renderDiffusion(const QImage& work, QImage& out, const DitherSettings& s);
-    static void renderOrdered  (const QImage& work, QImage& out, const DitherSettings& s);
+    static bool isOrdered  (DitherAlgorithm a);
+    static bool isHybrid   (DitherAlgorithm a);
+
+    static void renderDiffusion   (const QImage& work, QImage& out, const DitherSettings& s);
+    static void renderOrdered     (const QImage& work, QImage& out, const DitherSettings& s);
+    static void renderDotDiffusion(const QImage& work, QImage& out, const DitherSettings& s);
 };

@@ -4,6 +4,7 @@
         <file alias="logo.png">../assets/logo.png</file>
         <file alias="example.jpg">../assets/example.jpg</file>
         <file alias="icons/plus.svg">../assets/icons/plus.svg</file>
+        <file alias="icons/add_image.svg">../assets/icons/add_image.svg</file>
         <file alias="icons/minus.svg">../assets/icons/minus.svg</file>
         <file alias="icons/upload.svg">../assets/icons/upload.svg</file>
         <file alias="icons/opacity.svg">../assets/icons/opacity.svg</file>

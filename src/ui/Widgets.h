@@ -10,6 +10,7 @@
 #include <QLineEdit>
 #include <QColor>
 #include <functional>
+#include <array>
 
 // ============================================================
 //  Shared custom widgets for ULTRA_Ditherer panels.
@@ -42,6 +43,7 @@ public:
 
     int  value() const { return m_value; }
     void setValue(int v);
+    void setCompact();   // half-height variant with smaller font
 
 protected:
     void mousePressEvent(QMouseEvent* e) override;
@@ -56,10 +58,66 @@ private:
     QLineEdit* m_lineEdit  = nullptr;
     int        m_min, m_max, m_value;
     QString    m_suffix;
+    bool       m_compact      = false;
     bool       m_editingValue = false;
     bool       m_dragging     = false;
     QPoint     m_dragStart;
     int        m_dragStartVal = 0;
+};
+
+// ── LevelsWidget ─────────────────────────────────────────────
+// Photoshop-style levels editor: gradient track with three draggable
+// triangular handles (black · mid-gamma · white) and input boxes.
+//
+//  black : 0..255   — clips input shadows
+//  mid   : 10..500  — midpoint gamma × 100  (100 = neutral / γ 1.0)
+//  white : 0..255   — clips input highlights
+
+class LevelsWidget : public QWidget {
+public:
+    std::function<void()> onChanged;
+
+    explicit LevelsWidget(QWidget* parent = nullptr);
+
+    int  blackPoint() const { return m_black; }
+    int  midPoint()   const { return m_mid;   }
+    int  whitePoint() const { return m_white; }
+    void setValues(int black, int mid, int white);   // silent — no callback
+
+    // Supply a 256-bin luminance histogram (counts, not normalised).
+    // Pass an empty/zero array to clear.
+    void setHistogram(const std::array<int,256>& h);
+
+protected:
+    void paintEvent(QPaintEvent*) override;
+    void mousePressEvent(QMouseEvent*) override;
+    void mouseMoveEvent(QMouseEvent*) override;
+    void mouseReleaseEvent(QMouseEvent*) override;
+
+private:
+    enum class Handle { None, Black, Mid, White };
+
+    float  valToX(int v) const;
+    int    xToVal(float x) const;
+    float  midFracFrom(int midV) const;
+    float  midPixX() const;
+    int    midValFromX(float x) const;
+    Handle hitTest(QPoint p) const;
+    void   drawHandle(QPainter& p, float x, Handle h, bool active);
+    void   syncBoxes();
+
+    int    m_black = 0, m_mid = 100, m_white = 255;
+    Handle m_dragging       = Handle::None;
+    QPoint m_dragStart;
+    int    m_dragStartBlack = 0, m_dragStartMid = 100, m_dragStartWhite = 255;
+    bool   m_updating       = false;
+
+    std::array<int,256> m_histogram{};
+    bool                m_hasHistogram = false;
+
+    DragSpinBox* m_boxBlack = nullptr;
+    DragSpinBox* m_boxMid   = nullptr;
+    DragSpinBox* m_boxWhite = nullptr;
 };
 
 // ── SliderRow ────────────────────────────────────────────────
@@ -124,8 +182,9 @@ private:
 
 class FillSwatch : public QWidget {
 public:
-    std::function<void()>      onClicked;
-    std::function<void(float)> onOpacityDragged;
+    std::function<void()>       onClicked;
+    std::function<void(float)>  onOpacityDragged;
+    std::function<void(QColor)> onColorEdited;   // hex typed/pasted by hand
 
     FillSwatch(QColor color, float opacity, bool showOpacity = true,
                QWidget* parent = nullptr);
@@ -137,19 +196,23 @@ public:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void resizeEvent(QResizeEvent*) override;
     void mousePressEvent(QMouseEvent* e) override;
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
 
 private:
-    int dividerX() const;
+    int  dividerX() const;
+    void placeHexEdit();
+    void syncHexText();
 
-    QColor m_color;
-    float  m_opacity;
-    bool   m_showOpacity = true;
-    bool   m_dragging    = false;
-    QPoint m_pressPos;
-    float  m_dragStartOp = 1.f;
+    QColor     m_color;
+    float      m_opacity;
+    bool       m_showOpacity = true;
+    bool       m_dragging    = false;
+    QPoint     m_pressPos;
+    float      m_dragStartOp = 1.f;
+    QLineEdit* m_hexEdit     = nullptr;
 };
 
 // ── ColorPickerDialog ────────────────────────────────────────

@@ -400,9 +400,11 @@ void MainWindow::switchToImage(int index)
         m_preview->setImage({});
         m_preview->setStatus("Drop images here or use the orange button below");
         m_filmstrip->setActive(-1);
+        m_left->setSourceImage({});
         return;
     }
     m_current = index;
+    m_left->setSourceImage(m_images[index].source);
     applyParams(m_images[index].state);
     m_filmstrip->setActive(index);
     m_lastRender = {};

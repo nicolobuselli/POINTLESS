@@ -9,6 +9,9 @@
 #include <QScreen>
 #include <QIcon>
 #include <QEvent>
+#include <QPainterPath>
+#include <QStyle>
+#include <cmath>
 
 // ============================================================
 //  NoWheel*
@@ -59,6 +62,18 @@ void DragSpinBox::setValue(int v)
     updateDisplay();
 }
 
+void DragSpinBox::setCompact()
+{
+    m_compact = true;
+    setObjectName("dragSpinBoxCompact");   // QSS: smaller min/max-height
+    setFixedHeight(22);
+    layout()->setContentsMargins(12, 0, 12, 0);
+    m_valueLbl->setStyleSheet("color:#E3E3E3; font-size:9pt; background:transparent;");
+    // Re-polish so the new objectName picks up its QSS rule.
+    style()->unpolish(this);
+    style()->polish(this);
+}
+
 void DragSpinBox::mousePressEvent(QMouseEvent* e)
 {
     if (e->button() == Qt::LeftButton) {
@@ -93,8 +108,9 @@ void DragSpinBox::mouseDoubleClickEvent(QMouseEvent* e)
         m_lineEdit = new QLineEdit(this);
         m_lineEdit->setFrame(false);
         m_lineEdit->setAlignment(m_valueLbl->alignment());
-        m_lineEdit->setStyleSheet(
-            "background:transparent; color:#E3E3E3; font-size:10pt; border:none; padding:0;");
+        m_lineEdit->setStyleSheet(QString(
+            "background:transparent; color:#E3E3E3; font-size:%1pt; border:none; padding:0;")
+            .arg(m_compact ? 9 : 10));
         connect(m_lineEdit, &QLineEdit::editingFinished, m_lineEdit, [this]() {
             bool ok; int v = m_lineEdit->text().toInt(&ok);
             if (ok) { setValue(v); if (onValueChanged) onValueChanged(m_value); }
@@ -173,6 +189,276 @@ void SliderRow::setValue(int v)
     m_slider->blockSignals(false);
     m_box->setValue(m_slider->value());
     m_updating = false;
+}
+
+// ============================================================
+//  LevelsWidget
+// ============================================================
+
+namespace {
+    static constexpr int kLvHistH   = 92;   // rounded histogram box height
+    static constexpr int kLvStripH  = 16;   // handle strip below the box
+    static constexpr int kLvTrackH  = kLvHistH + kLvStripH;   // interactive zone
+    static constexpr int kLvRadius  = 10;   // histogram box corner radius
+    static constexpr int kLvHandleW = 13;   // handle base width (odd)
+    static constexpr int kLvMarginX = 8;    // side padding (handles stay inside)
+    static constexpr int kLvBoxH    = 22;   // compact input box height
+    static constexpr int kLvGap     = 6;
+    static constexpr int kLvTotalH  = kLvTrackH + kLvGap + kLvBoxH;
+} // namespace
+
+LevelsWidget::LevelsWidget(QWidget* parent)
+    : QWidget(parent)
+{
+    setFixedHeight(kLvTotalH);
+    setCursor(Qt::SizeHorCursor);
+
+    // Layout only occupies the bottom strip; top is custom-painted.
+    auto* vl = new QVBoxLayout(this);
+    vl->setContentsMargins(0, kLvTrackH + kLvGap, 0, 0);
+    vl->setSpacing(0);
+
+    auto* row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(10);
+    m_boxBlack = new DragSpinBox("", 0,   255,   0, "", this);
+    m_boxMid   = new DragSpinBox("", 10,  500, 100, "", this);
+    m_boxWhite = new DragSpinBox("", 0,   255, 255, "", this);
+    for (DragSpinBox* b : { m_boxBlack, m_boxMid, m_boxWhite })
+        b->setCompact();
+    row->addWidget(m_boxBlack, 1);
+    row->addWidget(m_boxMid,   1);
+    row->addWidget(m_boxWhite, 1);
+    vl->addLayout(row);
+
+    auto boxChanged = [this](int) {
+        if (m_updating) return;
+        m_black = qBound(0,  m_boxBlack->value(), 254);
+        m_white = qBound(m_black + 1, m_boxWhite->value(), 255);
+        m_mid   = qBound(10, m_boxMid->value(), 500);
+        syncBoxes();
+        update();
+        if (onChanged) onChanged();
+    };
+    m_boxBlack->onValueChanged = boxChanged;
+    m_boxMid->onValueChanged   = boxChanged;
+    m_boxWhite->onValueChanged = boxChanged;
+}
+
+float LevelsWidget::valToX(int v) const
+{
+    const float usable = float(width()) - 2.0f * kLvMarginX;
+    return kLvMarginX + v * usable / 255.0f;
+}
+
+int LevelsWidget::xToVal(float x) const
+{
+    const float usable = float(width()) - 2.0f * kLvMarginX;
+    if (usable <= 0.0f) return 0;
+    return qBound(0, int(std::round((x - kLvMarginX) * 255.0f / usable)), 255);
+}
+
+float LevelsWidget::midFracFrom(int midV) const
+{
+    // mid=100 → 0.5 (centre), mid→10 → 0.0 (left/dark), mid=500 → 1.0 (right/bright)
+    const float t = std::log(midV / 100.0f) / std::log(5.0f);
+    return qBound(0.0f, 0.5f + t * 0.5f, 1.0f);
+}
+
+float LevelsWidget::midPixX() const
+{
+    const float bx   = valToX(m_black);
+    const float wx   = valToX(m_white);
+    const float span = wx - bx;
+    return (span > 0.5f) ? bx + midFracFrom(m_mid) * span : (bx + wx) * 0.5f;
+}
+
+int LevelsWidget::midValFromX(float x) const
+{
+    const float bx   = valToX(m_black);
+    const float wx   = valToX(m_white);
+    const float span = wx - bx;
+    if (span < 1.0f) return 100;
+    const float frac = qBound(0.0f, (x - bx) / span, 1.0f);
+    const float t    = (frac - 0.5f) * 2.0f;
+    return qBound(10, int(std::round(100.0f * std::pow(5.0f, t))), 500);
+}
+
+LevelsWidget::Handle LevelsWidget::hitTest(QPoint pos) const
+{
+    if (pos.y() < kLvHistH - 4 || pos.y() > kLvTrackH + 2) return Handle::None;
+    const float bx = valToX(m_black);
+    const float wx = valToX(m_white);
+    const float mx = midPixX();
+    const float r  = float(kLvHandleW) * 0.7f;
+    if (std::fabs(float(pos.x()) - mx) <= r) return Handle::Mid;
+    if (std::fabs(float(pos.x()) - bx) <= r) return Handle::Black;
+    if (std::fabs(float(pos.x()) - wx) <= r) return Handle::White;
+    return Handle::None;
+}
+
+void LevelsWidget::drawHandle(QPainter& p, float x, Handle h, bool active)
+{
+    // Photoshop-style "house" pentagon pointing up at the histogram box.
+    const float tipY      = float(kLvHistH) + 2.0f;
+    const float shoulderY = tipY + 5.0f;
+    const float baseY     = float(kLvTrackH) - 1.0f;
+    const float hw        = float(kLvHandleW) * 0.5f;
+
+    const QPolygonF pent = QPolygonF()
+        << QPointF(x - hw, baseY)
+        << QPointF(x - hw, shoulderY)
+        << QPointF(x, tipY)
+        << QPointF(x + hw, shoulderY)
+        << QPointF(x + hw, baseY);
+
+    QColor fill, stroke;
+    switch (h) {
+        case Handle::Black:
+            fill   = QColor(0x0A, 0x0A, 0x0A);
+            stroke = active ? QColor("#D0D0D0") : QColor("#5D5D5D");
+            break;
+        case Handle::Mid:
+            fill   = QColor(0x82, 0x82, 0x82);
+            stroke = active ? QColor("#E0E0E0") : QColor("#A0A0A0");
+            break;
+        case Handle::White:
+            fill   = QColor(0xFF, 0xFF, 0xFF);
+            stroke = active ? QColor("#FFFFFF") : QColor("#909090");
+            break;
+        default: return;
+    }
+
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(stroke, 1.0f));
+    p.setBrush(fill);
+    p.drawPolygon(pent);
+}
+
+void LevelsWidget::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const int w = width();
+
+    // Rounded histogram box
+    const QRectF box(0.5, 0.5, w - 1.0, kLvHistH - 1.0);
+    QPainterPath boxPath;
+    boxPath.addRoundedRect(box, kLvRadius, kLvRadius);
+    p.setPen(QPen(QColor("#3B3B3B"), 1));
+    p.setBrush(QColor(0x27, 0x27, 0x27));
+    p.drawPath(boxPath);
+
+    // Histogram (log-scaled, light fill rising from the bottom of the box)
+    if (m_hasHistogram) {
+        float maxLog = 0.0f;
+        for (int i = 0; i < 256; ++i)
+            maxLog = std::max(maxLog, std::log1p(float(m_histogram[i])));
+
+        if (maxLog > 0.0f) {
+            const float usable  = float(w) - 2.0f * kLvMarginX;
+            const float bottomY = float(kLvHistH) - 1.0f;
+            const float barH    = float(kLvHistH) - 10.0f;
+
+            QPolygonF poly;
+            poly.reserve(258);
+            poly << QPointF(float(kLvMarginX), bottomY);
+            for (int i = 0; i < 256; ++i) {
+                const float x = kLvMarginX + i * usable / 255.0f;
+                const float t = std::log1p(float(m_histogram[i])) / maxLog;
+                poly << QPointF(x, bottomY - t * barH);
+            }
+            poly << QPointF(float(kLvMarginX) + usable, bottomY);
+
+            p.save();
+            p.setClipPath(boxPath);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(0xD9, 0xD9, 0xD9));
+            p.drawPolygon(poly);
+            p.restore();
+        }
+    }
+
+    // Handles below the box (black + white behind, mid on top)
+    drawHandle(p, valToX(m_black), Handle::Black, m_dragging == Handle::Black);
+    drawHandle(p, valToX(m_white), Handle::White, m_dragging == Handle::White);
+    drawHandle(p, midPixX(),       Handle::Mid,   m_dragging == Handle::Mid);
+}
+
+void LevelsWidget::mousePressEvent(QMouseEvent* e)
+{
+    if (e->button() != Qt::LeftButton) return;
+    if (e->pos().y() > kLvTrackH) return;
+    m_dragging = hitTest(e->pos());
+    if (m_dragging != Handle::None) {
+        m_dragStart      = e->pos();
+        m_dragStartBlack = m_black;
+        m_dragStartMid   = m_mid;
+        m_dragStartWhite = m_white;
+        e->accept();
+    }
+}
+
+void LevelsWidget::mouseMoveEvent(QMouseEvent* e)
+{
+    if (m_dragging == Handle::None) return;
+    const float dx = float(e->pos().x() - m_dragStart.x());
+
+    switch (m_dragging) {
+        case Handle::Black:
+            m_black = qBound(0, xToVal(valToX(m_dragStartBlack) + dx), m_white - 1);
+            break;
+        case Handle::White:
+            m_white = qBound(m_black + 1, xToVal(valToX(m_dragStartWhite) + dx), 255);
+            break;
+        case Handle::Mid: {
+            const float origMX = valToX(m_black)
+                               + midFracFrom(m_dragStartMid)
+                               * (valToX(m_white) - valToX(m_black));
+            const float newMX  = qBound(valToX(m_black), origMX + dx, valToX(m_white));
+            m_mid = midValFromX(newMX);
+            break;
+        }
+        default: break;
+    }
+
+    update();
+    syncBoxes();
+    if (onChanged) onChanged();
+}
+
+void LevelsWidget::mouseReleaseEvent(QMouseEvent* e)
+{
+    if (e->button() == Qt::LeftButton && m_dragging != Handle::None) {
+        m_dragging = Handle::None;
+        update();
+    }
+}
+
+void LevelsWidget::syncBoxes()
+{
+    m_updating = true;
+    m_boxBlack->setValue(m_black);
+    m_boxMid->setValue(m_mid);
+    m_boxWhite->setValue(m_white);
+    m_updating = false;
+}
+
+void LevelsWidget::setHistogram(const std::array<int,256>& h)
+{
+    m_histogram = h;
+    m_hasHistogram = false;
+    for (int v : h) if (v > 0) { m_hasHistogram = true; break; }
+    update();
+}
+
+void LevelsWidget::setValues(int black, int mid, int white)
+{
+    m_black = qBound(0,  black, 254);
+    m_white = qBound(m_black + 1, white, 255);
+    m_mid   = qBound(10, mid, 500);
+    syncBoxes();
+    update();
 }
 
 // ============================================================
@@ -289,10 +575,57 @@ FillSwatch::FillSwatch(QColor color, float opacity, bool showOpacity, QWidget* p
 {
     setFixedHeight(34);
     setCursor(Qt::PointingHandCursor);
+
+    // Selectable / hand-editable hex value over the painted area.
+    m_hexEdit = new QLineEdit(this);
+    m_hexEdit->setFrame(false);
+    m_hexEdit->setMaxLength(7);   // allow leading '#'
+    m_hexEdit->setCursor(Qt::IBeamCursor);
+    m_hexEdit->setStyleSheet(
+        "QLineEdit { background: transparent; border: none; color: #E3E3E3;"
+        " padding: 0; margin: 0; min-height: 0; font-size: 10pt; }");
+    syncHexText();
+
+    connect(m_hexEdit, &QLineEdit::returnPressed, m_hexEdit, [this]() {
+        m_hexEdit->clearFocus();   // triggers editingFinished
+    });
+    connect(m_hexEdit, &QLineEdit::editingFinished, m_hexEdit, [this]() {
+        const QString txt = m_hexEdit->text().trimmed().remove('#');
+        if (txt.length() == 6) {
+            const QColor parsed(QString("#") + txt);
+            if (parsed.isValid() && parsed != m_color) {
+                m_color = parsed;
+                update();
+                if (onColorEdited) onColorEdited(m_color);
+            }
+        }
+        syncHexText();   // normalise display (or revert invalid input)
+    });
 }
 
-void FillSwatch::setColor(QColor c)   { m_color = c; update(); }
+void FillSwatch::setColor(QColor c)   { m_color = c; syncHexText(); update(); }
 void FillSwatch::setOpacity(float op) { m_opacity = qBound(0.f, op, 1.f); update(); }
+
+void FillSwatch::syncHexText()
+{
+    m_hexEdit->blockSignals(true);
+    m_hexEdit->setText(m_color.name().mid(1).toUpper());
+    m_hexEdit->blockSignals(false);
+}
+
+void FillSwatch::placeHexEdit()
+{
+    const int padH   = 7;
+    const int sqSize = 20;
+    const int textX  = padH + sqSize + 6;
+    const int divX   = m_showOpacity ? dividerX() : width() - padH;
+    m_hexEdit->setGeometry(textX, 0, qMax(10, divX - textX - 4), height());
+}
+
+void FillSwatch::resizeEvent(QResizeEvent*)
+{
+    placeHexEdit();
+}
 
 int FillSwatch::dividerX() const { return width() - 55; }
 
@@ -332,13 +665,9 @@ void FillSwatch::paintEvent(QPaintEvent*)
     f.setWeight(QFont::Medium);
     p.setFont(f);
 
-    const int divX   = m_showOpacity ? dividerX() : width() - padH;
-    const int textX  = padH + sqSize + 6;
+    const int divX = m_showOpacity ? dividerX() : width() - padH;
 
-    p.setPen(QColor("#E3E3E3"));
-    p.drawText(QRect(textX, 0, divX - textX - 6, h),
-               Qt::AlignVCenter | Qt::AlignLeft,
-               m_color.name().mid(1).toUpper());
+    // Hex value is shown by the embedded QLineEdit (selectable/editable).
 
     if (m_showOpacity) {
         int divH   = 28;

@@ -95,6 +95,14 @@ QPushButton#tabBtn:hover {
 QPushButton#tabBtn:checked {
     background-color: #272727;
     color: #EEEEEE;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+}
+QPushButton#tabBtn[tabPos="first"]:checked {
+    border-top-left-radius: 0;
+}
+QPushButton#tabBtn[tabPos="last"]:checked {
+    border-top-right-radius: 0;
 }
 
 /* ── Filmstrip ───────────────────────────────────────────────── */
@@ -239,6 +247,18 @@ QSlider::handle:horizontal:hover {
     min-height: 34px;
 }
 #dragSpinBox:hover {
+    border-color: #828282;
+}
+
+/* Compact variant (Levels number boxes) */
+#dragSpinBoxCompact {
+    background-color: #3B3B3B;
+    border: 1px solid #5D5D5D;
+    border-radius: 6px;
+    min-height: 18px;
+    max-height: 22px;
+}
+#dragSpinBoxCompact:hover {
     border-color: #828282;
 }
 

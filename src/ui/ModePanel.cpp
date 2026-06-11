@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
+#include <QStandardItemModel>
 
 // ============================================================
 //  HalftonePage
@@ -326,6 +327,50 @@ private:
 //  DitherPage
 // ============================================================
 
+namespace {
+
+struct AlgoEntry {
+    DitherAlgorithm algo;
+    const char*     label;
+    const char*     description;
+};
+
+// Groups and items in display order.
+// A null label / description marks a category header (disabled item).
+const AlgoEntry kAlgoEntries[] = {
+    { DitherAlgorithm::FloydSteinberg,      nullptr,               "Error Diffusion"  },  // header
+    { DitherAlgorithm::FloydSteinberg,      "Floyd\xe2\x80\x93Steinberg",
+        "Classic 4-tap kernel. Balanced tonal accuracy with characteristic worm-pattern artifacts." },
+    { DitherAlgorithm::FalseFloydSteinberg, "False Floyd\xe2\x80\x93Steinberg",
+        "Lightweight 3-tap FS approximation. Faster, but produces more directional banding." },
+    { DitherAlgorithm::Atkinson,            "Atkinson",
+        "Diffuses 75\xe2\x80\x89% of error. Retains bright areas; the iconic Mac / early-desktop aesthetic." },
+    { DitherAlgorithm::Burkes,              "Burkes",
+        "Simplified JJN with a 7-tap 2-row kernel. Reduced directional bias, smooth mid-tones." },
+    { DitherAlgorithm::Sierra,              "Sierra",
+        "10-tap 3-row kernel. Refined gradients with less worm artifact than Floyd\xe2\x80\x93Steinberg." },
+    { DitherAlgorithm::SierraLite,          "Sierra Lite",
+        "Minimal 3-tap Sierra variant. Near real-time speed with good tonal fidelity." },
+    { DitherAlgorithm::JarvisJudiceNinke,   "Jarvis\xe2\x80\x93Judice\xe2\x80\x93Ninke",
+        "12-tap 3-row kernel. Wide diffusion yields exceptional tonal accuracy at the cost of speed." },
+    { DitherAlgorithm::Stucki,              "Stucki",
+        "JJN variant with adjusted weights. Cleaner shadow detail, slightly sharper edges." },
+    { DitherAlgorithm::Bayer,               nullptr,               "Ordered Dithering" }, // header
+    { DitherAlgorithm::Bayer,               "Bayer",
+        "Recursive threshold matrix. Crisp geometric cross-hatch pattern; scales to any matrix size." },
+    { DitherAlgorithm::ClusteredDot,        "Clustered Dot",
+        "Dot-cluster threshold map. Mimics analog printing screens; strong halftone look." },
+    { DitherAlgorithm::BlueNoise,           "Blue Noise",
+        "64\303\22764 void-and-cluster mask. Spectrally optimal; natural, grain-like appearance." },
+    { DitherAlgorithm::VoidAndCluster,      "Void and Cluster",
+        "32\303\22732 Ulichney optimal mask. Minimal tiling artifacts; visually quiet noise floor." },
+    { DitherAlgorithm::DotDiffusion,        nullptr,               "Hybrid"           }, // header
+    { DitherAlgorithm::DotDiffusion,        "Dot Diffusion",
+        "Knuth (1987) class-matrix scan with error propagation. Clustered dot structure meets tonal accuracy." },
+};
+
+} // namespace
+
 class DitherPage : public QWidget
 {
 public:
@@ -347,29 +392,49 @@ public:
 
             sl->addWidget(makeParamLabel("Algorithm"));
             m_algorithm = new NoWheelComboBox;
-            m_algorithm->addItems({
-                QString::fromUtf8("Floyd–Steinberg"),
-                QString::fromUtf8("Jarvis–Judice–Ninke"),
-                "Burkes",
-                "Atkinson",
-                "Bayer",
-                "Row modulation",
-                "Column modulation",
-                "Dispersed modulation",
-                "Heavy modulation",
-                "Circuit modulation"
-            });
+
+            // Build a model so we can insert non-selectable category headers.
+            auto* model = new QStandardItemModel(m_algorithm);
+            for (const auto& e : kAlgoEntries) {
+                const bool isHeader = (e.label == nullptr);
+                auto* item = new QStandardItem(isHeader
+                    ? QString("— %1 —").arg(QString::fromUtf8(e.description))
+                    : QString::fromUtf8(e.label));
+                if (isHeader) {
+                    item->setFlags(item->flags() & ~Qt::ItemIsEnabled & ~Qt::ItemIsSelectable);
+                    QFont f = item->font();
+                    f.setBold(true);
+                    item->setFont(f);
+                } else {
+                    item->setData(int(e.algo), Qt::UserRole);
+                    item->setToolTip(QString::fromUtf8(e.description));
+                }
+                model->appendRow(item);
+            }
+            m_algorithm->setModel(model);
+            // Select the first real item (skip first header row, which is index 0).
+            m_algorithm->setCurrentIndex(1);
             sl->addWidget(m_algorithm);
+
+            // Per-algorithm description label.
+            m_description = new QLabel;
+            m_description->setWordWrap(true);
+            m_description->setObjectName("paramLabel");
+            m_description->setStyleSheet(
+                "QLabel#paramLabel { color: #808080; font-size: 8pt; padding-top: 2px; }");
+            sl->addWidget(m_description);
 
             m_matrixRow = new QWidget;
             {
                 auto* ml = new QVBoxLayout(m_matrixRow);
                 ml->setContentsMargins(0, 0, 0, 0);
                 ml->setSpacing(4);
-                ml->addWidget(makeParamLabel("Bayer matrix"));
+                ml->addWidget(makeParamLabel("Matrix size"));
                 m_matrix = new NoWheelComboBox;
-                m_matrix->addItems({ QString::fromUtf8("2×2"), QString::fromUtf8("4×4"),
-                                     QString::fromUtf8("8×8"), QString::fromUtf8("16×16") });
+                m_matrix->addItems({ QString::fromUtf8("2\303\2272"),
+                                     QString::fromUtf8("4\303\2274"),
+                                     QString::fromUtf8("8\303\2278"),
+                                     QString::fromUtf8("16\303\22716") });
                 m_matrix->setCurrentIndex(2);
                 ml->addWidget(m_matrix);
             }
@@ -377,12 +442,18 @@ public:
             sl->addWidget(m_matrixRow);
 
             connect(m_algorithm, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int idx) {
-                m_matrixRow->setVisible(idx == int(DitherAlgorithm::Bayer));
+                    this, [this](int) {
+                const DitherAlgorithm a = currentAlgorithm();
+                const bool showMatrix =
+                    (a == DitherAlgorithm::Bayer || a == DitherAlgorithm::ClusteredDot);
+                m_matrixRow->setVisible(showMatrix);
+                updateDescription();
                 fire();
             });
             connect(m_matrix, QOverload<int>::of(&QComboBox::currentIndexChanged),
                     this, [this](int) { fire(); });
+
+            updateDescription();
         }
         vl->addWidget(new CollapsibleSection("Settings", settingsContent));
 
@@ -420,7 +491,7 @@ public:
     DitherSettings settings() const
     {
         DitherSettings s;
-        s.algorithm = static_cast<DitherAlgorithm>(m_algorithm->currentIndex());
+        s.algorithm = currentAlgorithm();
         static const int sizes[] = { 2, 4, 8, 16 };
         s.bayerSize = sizes[qBound(0, m_matrix->currentIndex(), 3)];
         s.pixelSize = m_pixelSize->value();
@@ -434,9 +505,22 @@ public:
     {
         m_updating = true;
         m_algorithm->blockSignals(true);
-        m_algorithm->setCurrentIndex(int(s.algorithm));
+
+        // Find the item whose UserRole data matches the algorithm enum value.
+        const int target = int(s.algorithm);
+        for (int i = 0; i < m_algorithm->count(); ++i) {
+            const QVariant data = m_algorithm->itemData(i, Qt::UserRole);
+            if (data.isValid() && data.toInt() == target) {
+                m_algorithm->setCurrentIndex(i);
+                break;
+            }
+        }
         m_algorithm->blockSignals(false);
-        m_matrixRow->setVisible(s.algorithm == DitherAlgorithm::Bayer);
+
+        const bool showMatrix = (s.algorithm == DitherAlgorithm::Bayer
+                               || s.algorithm == DitherAlgorithm::ClusteredDot);
+        m_matrixRow->setVisible(showMatrix);
+        updateDescription();
 
         int mi = 2;
         if      (s.bayerSize == 2)  mi = 0;
@@ -457,13 +541,34 @@ public:
 private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
-    NoWheelComboBox* m_algorithm = nullptr;
-    QWidget*         m_matrixRow = nullptr;
-    NoWheelComboBox* m_matrix    = nullptr;
-    SliderRow*       m_pixelSize = nullptr;
-    SliderRow*       m_strength  = nullptr;
-    SliderRow*       m_levels    = nullptr;
-    TonalControlsWidget* m_tonal = nullptr;
+    DitherAlgorithm currentAlgorithm() const
+    {
+        const QVariant v = m_algorithm->currentData(Qt::UserRole);
+        return v.isValid()
+            ? static_cast<DitherAlgorithm>(v.toInt())
+            : DitherAlgorithm::FloydSteinberg;
+    }
+
+    void updateDescription()
+    {
+        const DitherAlgorithm a = currentAlgorithm();
+        for (const auto& e : kAlgoEntries) {
+            if (e.label != nullptr && e.algo == a) {
+                m_description->setText(QString::fromUtf8(e.description));
+                return;
+            }
+        }
+        m_description->clear();
+    }
+
+    NoWheelComboBox* m_algorithm  = nullptr;
+    QLabel*          m_description = nullptr;
+    QWidget*         m_matrixRow  = nullptr;
+    NoWheelComboBox* m_matrix     = nullptr;
+    SliderRow*       m_pixelSize  = nullptr;
+    SliderRow*       m_strength   = nullptr;
+    SliderRow*       m_levels     = nullptr;
+    TonalControlsWidget* m_tonal  = nullptr;
     bool m_updating = false;
 };
 
@@ -547,7 +652,8 @@ public:
         vl->addSpacing(16);
 
         // ── Tonal controls ──────────────────────────────────
-        m_tonal = new TonalControlsWidget(TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
+        m_tonal = new TonalControlsWidget(TonalSettings{
+            ToneMode::FixedTones, { ToneEntry{ QColor(0xC0, 0xC0, 0xC0), 0 } } });
         m_tonal->onChanged = [this]() { fire(); };
         vl->addWidget(new CollapsibleSection("Tonal controls", m_tonal));
     }
@@ -630,6 +736,8 @@ ModePanel::ModePanel(QWidget* parent)
         m_tabHalftone = makeTab("Halftone");
         m_tabDither   = makeTab("Dither");
         m_tabAscii    = makeTab("Ascii");
+        m_tabHalftone->setProperty("tabPos", "first");
+        m_tabAscii->setProperty("tabPos", "last");
         m_tabHalftone->setChecked(true);
 
         connect(m_tabHalftone, &QPushButton::clicked, this, [this]() { setMode(RenderMode::Halftone, true); });
@@ -681,6 +789,7 @@ ModePanel::ModePanel(QWidget* parent)
 
         m_bgSwatch = new FillSwatch(QColor(0x0A, 0x0A, 0x0A), 1.0f, /*showOpacity*/ true);
         m_bgSwatch->onOpacityDragged = [this](float) { if (!m_updating) emit paramsChanged(); };
+        m_bgSwatch->onColorEdited    = [this](QColor) { if (!m_updating) emit paramsChanged(); };
         m_bgSwatch->onClicked = [this]() {
             auto* dlg = new ColorPickerDialog(m_bgSwatch->color(),
                                               m_bgSwatch->opacity(),
