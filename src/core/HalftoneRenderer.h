@@ -21,6 +21,7 @@ private:
         int                   row;
         int                   totalCols;
         int                   gs;
+        int                   padding;
     };
     static void renderRow(const RowJob& job);
 

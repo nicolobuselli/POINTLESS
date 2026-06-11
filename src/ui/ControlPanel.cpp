@@ -15,6 +15,8 @@
 #include <QPixmap>
 #include <QIcon>
 #include <QLineEdit>
+#include <QScreen>
+#include <QFileInfo>
 #include <functional>
 
 // ============================================================
@@ -224,6 +226,8 @@ private:
 
 class ColorPickerDialog : public QDialog {
 public:
+    std::function<void(QColor, float)> onColorChanged;
+
     ColorPickerDialog(QColor initial, float initialOpacity, QWidget* parent=nullptr)
         : QDialog(parent, Qt::Dialog | Qt::FramelessWindowHint)
         , m_a(initialOpacity)
@@ -348,15 +352,18 @@ private:
             m_s=s; m_v=v;
             m_opBar->setColor(selectedColor());
             updatePreviewAndHex();
+            if (onColorChanged) onColorChanged(selectedColor(), m_a);
         };
         m_hueBar->onChanged = [this](float h) {
             m_h=h;
             m_field->setHue(h);
             m_opBar->setColor(selectedColor());
             updatePreviewAndHex();
+            if (onColorChanged) onColorChanged(selectedColor(), m_a);
         };
         m_opBar->onChanged = [this](float a) {
             m_a=a; updatePreviewAndHex();
+            if (onColorChanged) onColorChanged(selectedColor(), m_a);
         };
         connect(m_hexInput, &QLineEdit::editingFinished, m_hexInput, [this]() {
             QString txt = m_hexInput->text().trimmed().remove('#');
@@ -366,6 +373,7 @@ private:
                     QColor c(rgb); c.getHsvF(&m_h,&m_s,&m_v);
                     if (m_h<0) m_h=0.f;
                     updateAllFromHSV();
+                    if (onColorChanged) onColorChanged(selectedColor(), m_a);
                 }
             }
         });
@@ -403,7 +411,7 @@ public:
 
     FillSwatch(QColor color, float opacity, QWidget* parent=nullptr)
         : QWidget(parent), m_color(color), m_opacity(opacity)
-    { setFixedHeight(62); setCursor(Qt::PointingHandCursor); }
+    { setFixedHeight(34); setCursor(Qt::PointingHandCursor); }
 
     QColor color()   const { return m_color; }
     float  opacity() const { return m_opacity; }
@@ -417,11 +425,11 @@ protected:
 
         p.setPen(QPen(QColor("#5D5D5D"), 1));
         p.setBrush(QColor("#3B3B3B"));
-        p.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 14, 14);
+        p.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 6, 6);
 
-        const int h      = height();
-        const int padH   = 19;
-        const int sqSize = 25;
+        const int h      = height();  // 34
+        const int padH   = 7;
+        const int sqSize = 20;
         const int sqY    = (h - sqSize) / 2;
 
         p.setPen(Qt::NoPen);
@@ -430,19 +438,19 @@ protected:
 
         QFont f;
         f.setFamilies({"Funnel Display", "Segoe UI", "Arial"});
-        f.setPixelSize(20);
+        f.setPixelSize(13);
         f.setWeight(QFont::Medium);
         p.setFont(f);
 
         int divX = dividerX();
 
         p.setPen(QColor("#E3E3E3"));
-        p.drawText(QRect(padH + sqSize + 10, 0, divX - (padH + sqSize + 18), h),
+        p.drawText(QRect(padH + sqSize + 6, 0, divX - (padH + sqSize + 12), h),
                    Qt::AlignVCenter | Qt::AlignLeft,
                    m_color.name().mid(1).toUpper());
 
-        // Vertical divider: 55px tall, centered
-        int divH   = 55;
+        // Vertical divider: 28px tall, centered
+        int divH   = 28;
         int divTop = (h - divH) / 2;
         p.setPen(QPen(QColor("#272727"), 1));
         p.drawLine(divX, divTop, divX, divTop + divH);
@@ -483,7 +491,7 @@ protected:
     }
 
 private:
-    int dividerX() const { return width() - 80; }
+    int dividerX() const { return width() - 55; }
 
     QColor m_color;
     float  m_opacity;
@@ -649,12 +657,12 @@ void ControlPanel::buildLayout()
     vlay->addSpacing(10);
 
     {
-        auto* row = new QHBoxLayout; row->setSpacing(8);
+        auto* row = new QHBoxLayout; row->setContentsMargins(0,0,0,0); row->setSpacing(8);
         auto* dsbOp = new DragSpinBox(":/icons/opacity.svg",       0, 100, 100, "%");
         auto* dsbCr = new DragSpinBox(":/icons/corner_radius.svg", 0,  50,   0, "");
         m_dsbOpacity = dsbOp; m_dsbCornerRadius = dsbCr;
         row->addWidget(dsbOp,1); row->addWidget(dsbCr,1);
-        auto* w = new QWidget; w->setLayout(row); vlay->addWidget(w);
+        auto* w = new QWidget; w->setLayout(row); w->setFixedHeight(34); vlay->addWidget(w);
         dsbOp->onValueChanged = [this](int){ if (!m_initializing) emit paramsChanged(); };
         dsbCr->onValueChanged = [this](int){ if (!m_initializing) emit paramsChanged(); };
     }
@@ -735,24 +743,41 @@ void ControlPanel::buildLayout()
         m_sldStrokeWidth->setRange(1,200); m_sldStrokeWidth->setValue(10);
         sl->addWidget(wLbl); sl->addWidget(m_sldStrokeWidth); sl->addSpacing(4);
 
-        m_strokeColorBtn = new QPushButton;
-        m_strokeColorBtn->setFixedHeight(34);
-        m_strokeColorBtn->setCursor(Qt::PointingHandCursor);
-        updateStrokeColorBtn();
+        auto* strokeSwatch = new FillSwatch(m_strokeColor, 1.0f);
+        m_strokeColorBtn = strokeSwatch;
         sl->addWidget(m_strokeColorBtn);
 
         connect(m_sldStrokeWidth, &QSlider::valueChanged, this, [this]() {
             if (!m_initializing) emit paramsChanged();
         });
-        connect(m_strokeColorBtn, &QPushButton::clicked, this, [this]() {
-            auto* dlg = new ColorPickerDialog(m_strokeColor, 1.0f, this);
+        strokeSwatch->onClicked = [this]() {
+            auto* sw = asFS(m_strokeColorBtn);
+            const QColor origColor = sw->color();
+
+            auto* dlg = new ColorPickerDialog(sw->color(), 1.0f, this);
+            QPoint gp = m_strokeColorBtn->mapToGlobal(QPoint(0, 0));
+            QRect sg  = m_strokeColorBtn->screen()->availableGeometry();
+            int dlgX  = qMax(sg.left(), gp.x() - dlg->width() - 8);
+            int dlgY  = qBound(sg.top(), gp.y(), sg.bottom() - dlg->height());
+            dlg->move(dlgX, dlgY);
+
+            dlg->onColorChanged = [this](QColor c, float) {
+                asFS(m_strokeColorBtn)->setColor(c);
+                m_strokeColor = c;
+                if (!m_initializing) emit paramsChanged();
+            };
+
             if (dlg->exec() == QDialog::Accepted) {
                 m_strokeColor = dlg->selectedColor();
-                updateStrokeColorBtn();
+                asFS(m_strokeColorBtn)->setColor(m_strokeColor);
+                if (!m_initializing) emit paramsChanged();
+            } else {
+                asFS(m_strokeColorBtn)->setColor(origColor);
+                m_strokeColor = origColor;
                 if (!m_initializing) emit paramsChanged();
             }
             dlg->deleteLater();
-        });
+        };
     }
     m_strokeContent->setVisible(false);
     vlay->addWidget(m_strokeContent);
@@ -772,14 +797,14 @@ void ControlPanel::buildLayout()
     vlay->addSpacing(10);
 
     {
-        auto* labelsRow = new QHBoxLayout; labelsRow->setSpacing(8);
+        auto* labelsRow = new QHBoxLayout; labelsRow->setContentsMargins(0,0,0,0); labelsRow->setSpacing(8);
         auto* nameLbl = new QLabel("Output name"); nameLbl->setObjectName("paramLabel");
         auto* typeLbl = new QLabel("Type of file"); typeLbl->setObjectName("paramLabel");
         labelsRow->addWidget(nameLbl,2); labelsRow->addWidget(typeLbl,1);
         auto* lw = new QWidget; lw->setLayout(labelsRow); vlay->addWidget(lw);
         vlay->addSpacing(4);
 
-        auto* fieldsRow = new QHBoxLayout; fieldsRow->setSpacing(8);
+        auto* fieldsRow = new QHBoxLayout; fieldsRow->setContentsMargins(0,0,0,0); fieldsRow->setSpacing(8);
         m_edtOutputName = new QLineEdit("output");
         m_cmbFormat     = new NoWheelComboBox;
         m_cmbFormat->addItems({"SVG","PNG","JPG"});
@@ -888,10 +913,17 @@ void ControlPanel::addShapeSlot(HalftoneShape shape, const QString& svgPath)
         svgLay->setContentsMargins(0,0,30,0);
         slot.svgBtn = new QPushButton;
         slot.svgBtn->setObjectName("uploadBtn");
-        slot.svgBtn->setIcon(QIcon(":/icons/upload.svg"));
-        slot.svgBtn->setIconSize(QSize(16,17));
-        slot.svgBtn->setText("  Upload SVG");
         slot.svgBtn->setFixedHeight(34);
+        if (svgPath.isEmpty()) {
+            slot.svgBtn->setIcon(QIcon(":/icons/upload.svg"));
+            slot.svgBtn->setIconSize(QSize(16,17));
+            slot.svgBtn->setText("  Upload SVG");
+        } else {
+            slot.svgBtn->setText("  Change SVG");
+            const int ci = static_cast<int>(HalftoneShape::CustomSVG);
+            slot.combo->setItemIcon(ci, QIcon(svgPath));
+            slot.combo->setItemText(ci, "  " + QFileInfo(svgPath).baseName());
+        }
         svgLay->addWidget(slot.svgBtn);
     }
     slot.svgRow->setVisible(shape == HalftoneShape::CustomSVG);
@@ -912,10 +944,16 @@ void ControlPanel::addShapeSlot(HalftoneShape shape, const QString& svgPath)
         svgRow->setVisible(idx == static_cast<int>(HalftoneShape::CustomSVG));
         if (!m_initializing) emit paramsChanged();
     });
-    connect(svgBtn, &QPushButton::clicked, this, [this,slotWidget]() {
-        QString path = QFileDialog::getOpenFileName(this,"Load SVG","","SVG files (*.svg)");
+    QComboBox* combo = slot.combo;
+    connect(svgBtn, &QPushButton::clicked, this, [this, slotWidget, svgBtn, combo]() {
+        QString path = QFileDialog::getOpenFileName(this, "Load SVG", "", "SVG files (*.svg)");
         if (!path.isEmpty()) {
-            for (auto& s : m_shapeSlots) if (s.widget==slotWidget) { s.svgPath=path; break; }
+            for (auto& s : m_shapeSlots) if (s.widget == slotWidget) { s.svgPath = path; break; }
+            const int ci = static_cast<int>(HalftoneShape::CustomSVG);
+            combo->setItemIcon(ci, QIcon(path));
+            combo->setItemText(ci, "  " + QFileInfo(path).baseName());
+            svgBtn->setIcon(QIcon());
+            svgBtn->setText("  Change SVG");
             if (!m_initializing) emit paramsChanged();
         }
     });
@@ -998,10 +1036,28 @@ void ControlPanel::openColorPicker(int idx)
 {
     if (idx<0 || idx>=m_fillSlots.size()) return;
     auto* sw  = asFS(m_fillSlots[idx].swatch);
+
+    const QColor origColor   = sw->color();
+    const float  origOpacity = sw->opacity();
+
     auto* dlg = new ColorPickerDialog(sw->color(), sw->opacity(), this);
-    if (dlg->exec() == QDialog::Accepted) {
-        sw->setColor(dlg->selectedColor());
-        sw->setOpacity(dlg->selectedOpacity());
+    QPoint gp = sw->mapToGlobal(QPoint(0, 0));
+    QRect sg  = sw->screen()->availableGeometry();
+    int dlgX  = qMax(sg.left(), gp.x() - dlg->width() - 8);
+    int dlgY  = qBound(sg.top(), gp.y(), sg.bottom() - dlg->height());
+    dlg->move(dlgX, dlgY);
+
+    dlg->onColorChanged = [this, idx](QColor c, float a) {
+        if (idx < m_fillSlots.size()) {
+            asFS(m_fillSlots[idx].swatch)->setColor(c);
+            asFS(m_fillSlots[idx].swatch)->setOpacity(a);
+            if (!m_initializing) emit paramsChanged();
+        }
+    };
+
+    if (dlg->exec() != QDialog::Accepted) {
+        sw->setColor(origColor);
+        sw->setOpacity(origOpacity);
         if (!m_initializing) emit paramsChanged();
     }
     dlg->deleteLater();
@@ -1019,12 +1075,5 @@ void ControlPanel::updateStrokeUI()
 
 void ControlPanel::updateStrokeColorBtn()
 {
-    float lum = 0.299f*m_strokeColor.redF() + 0.587f*m_strokeColor.greenF() + 0.114f*m_strokeColor.blueF();
-    QString tc = (lum > 0.55f) ? "#272727" : "#E3E3E3";
-    m_strokeColorBtn->setStyleSheet(QString(
-        "QPushButton{background-color:%1;border:1px solid #5D5D5D;border-radius:6px;"
-        "color:%2;font-size:9pt;text-align:left;padding-left:10px;}"
-        "QPushButton:hover{border-color:#828282;}"
-    ).arg(m_strokeColor.name(), tc));
-    m_strokeColorBtn->setText(m_strokeColor.name().mid(1).toUpper());
+    asFS(m_strokeColorBtn)->setColor(m_strokeColor);
 }

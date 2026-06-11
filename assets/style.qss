@@ -70,7 +70,7 @@ QPushButton#uploadBtn {
     border: 1px solid #5D5D5D;
     border-radius: 6px;
     padding: 0 14px;
-    min-height: 34px;
+    min-height: 32px;
     font-size: 10pt;
     text-align: left;
 }
@@ -89,7 +89,7 @@ QPushButton#exportBtn {
     border: 1px solid #5D5D5D;
     border-radius: 6px;
     padding: 0 14px;
-    min-height: 40px;
+    min-height: 38px;
     font-size: 10pt;
     font-weight: 600;
 }
@@ -190,7 +190,7 @@ QSlider::handle:horizontal:hover {
     background-color: #3B3B3B;
     border: 1px solid #5D5D5D;
     border-radius: 6px;
-    min-height: 34px;
+    min-height: 32px;
 }
 #dragSpinBox:hover {
     border-color: #828282;

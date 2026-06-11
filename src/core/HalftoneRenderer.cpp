@@ -28,25 +28,31 @@ void HalftoneRenderer::render(const QImage& input, QPainter& output,
                            ? input
                            : input.convertToFormat(QImage::Format_RGB32);
 
+    // Padding lets shapes extend beyond their grid row without being clipped.
+    const int padding = qRound(params.symbolSize * gs) + 2;
+
     QVector<QImage> rowImages(rows);
     for (int r = 0; r < rows; ++r) {
         int cellY = r * gs;
         int cellH = qMin(gs, imgH - cellY);
-        rowImages[r] = QImage(imgW, cellH, QImage::Format_ARGB32_Premultiplied);
+        rowImages[r] = QImage(imgW, cellH + 2 * padding, QImage::Format_ARGB32_Premultiplied);
         rowImages[r].fill(Qt::transparent);
     }
 
     QVector<RowJob> jobs(rows);
     for (int r = 0; r < rows; ++r) {
-        jobs[r] = { &input, &inputRGB, &rowImages[r], &params, r, cols, gs };
+        jobs[r] = { &input, &inputRGB, &rowImages[r], &params, r, cols, gs, padding };
     }
 
     QtConcurrent::blockingMap(jobs, &HalftoneRenderer::renderRow);
 
+    output.save();
+    output.setClipRect(0, 0, imgW, imgH);
     for (int r = 0; r < rows; ++r) {
         int cellY = r * gs;
-        output.drawImage(0, cellY, rowImages[r]);
+        output.drawImage(0, cellY - padding, rowImages[r]);
     }
+    output.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -60,11 +66,12 @@ void HalftoneRenderer::renderRow(const RowJob& job)
     QImage&               canvas   = *job.canvas;
     const HalftoneParams& params   = *job.params;
 
-    const int gs   = job.gs;
-    const int row  = job.row;
-    const int cols = job.totalCols;
-    const int imgW = input.width();
-    const int imgH = input.height();
+    const int gs      = job.gs;
+    const int row     = job.row;
+    const int cols    = job.totalCols;
+    const int padding = job.padding;
+    const int imgW    = input.width();
+    const int imgH    = input.height();
 
     QPainter painter(&canvas);
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -82,7 +89,7 @@ void HalftoneRenderer::renderRow(const RowJob& job)
         int cellH = qMin(gs, imgH - cellY);
 
         float cx = cellX + cellW * 0.5f;
-        float cy = cellH * 0.5f;
+        float cy = cellH * 0.5f + padding;
 
         float lum      = sampleLuminosity(inputRGB, cellX, cellY, cellW, cellH);
         float baseR    = (gs * 0.5f) * params.symbolSize;
@@ -147,14 +154,29 @@ void HalftoneRenderer::renderRow(const RowJob& job)
                 cachedSvgPath    = svgPath;
             }
             if (svgRendererCache && svgRendererCache->isValid()) {
-                float size = r * 2.0f;
+                int isize = qMax(1, qCeil(r * 2.0f));
+
+                // Render SVG into temp image then colorize with fillColor
+                QImage svgImg(isize, isize, QImage::Format_ARGB32_Premultiplied);
+                svgImg.fill(Qt::transparent);
+                {
+                    QPainter sp(&svgImg);
+                    sp.setRenderHint(QPainter::Antialiasing, true);
+                    svgRendererCache->render(&sp, QRectF(0, 0, isize, isize));
+                }
+                {
+                    QPainter cp(&svgImg);
+                    cp.setCompositionMode(QPainter::CompositionMode_SourceIn);
+                    cp.fillRect(svgImg.rect(), fillColor);
+                }
+
                 QTransform t;
                 t.translate(cx, cy);
                 t.rotate(rotationDeg);
-                t.translate(-size * 0.5f, -size * 0.5f);
+                t.translate(-isize * 0.5f, -isize * 0.5f);
                 painter.setTransform(t);
-                painter.setOpacity(fillAlpha * params.opacity);
-                svgRendererCache->render(&painter, QRectF(0, 0, size, size));
+                painter.setOpacity(1.0);
+                painter.drawImage(QPointF(0, 0), svgImg);
             }
         } else {
             QPainterPath path = buildShape(shape, 0.0f, 0.0f, r, params.cornerRadius);

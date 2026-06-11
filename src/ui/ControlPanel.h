@@ -97,7 +97,7 @@ private:
     QWidget*     m_strokeContent;
     QPushButton* m_strokeToggleBtn;
     QSlider*     m_sldStrokeWidth;
-    QPushButton* m_strokeColorBtn;
+    QWidget*     m_strokeColorBtn;   // actual type: FillSwatch (defined in .cpp)
     QColor       m_strokeColor = Qt::black;
 
     void updateStrokeUI();

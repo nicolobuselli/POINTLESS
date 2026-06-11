@@ -1,24 +1,6 @@
 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M16.3281 1.01367H21.2211C21.7576 1.01367 22.1925 1.44861 22.1925 1.98514V6.85122" stroke="url(#paint0_linear_1851_1521)" stroke-width="2" stroke-linecap="round"/>
-<path d="M6.86426 22.1926L1.97133 22.1926C1.4348 22.1926 0.999864 21.7577 0.999864 21.2212L0.999865 16.3551" stroke="url(#paint1_linear_1851_1521)" stroke-width="2" stroke-linecap="round"/>
-<path d="M1.01367 6.8645L1.01367 1.97157C1.01367 1.43505 1.44861 1.00011 1.98514 1.00011L6.85122 1.00011" stroke="url(#paint2_linear_1851_1521)" stroke-width="2" stroke-linecap="round"/>
-<path d="M22.2236 16.3281L22.2236 21.2211C22.2236 21.7576 21.7887 22.1925 21.2522 22.1925L16.3861 22.1925" stroke="url(#paint3_linear_1851_1521)" stroke-width="2" stroke-linecap="round"/>
-<defs>
-<linearGradient id="paint0_linear_1851_1521" x1="19.2603" y1="1.01367" x2="19.2603" y2="6.85122" gradientUnits="userSpaceOnUse">
-<stop stop-color="#E2E2E2"/>
-<stop offset="1" stop-color="#F1F1F1"/>
-</linearGradient>
-<linearGradient id="paint1_linear_1851_1521" x1="3.93206" y1="22.1926" x2="3.93206" y2="16.3551" gradientUnits="userSpaceOnUse">
-<stop stop-color="#E2E2E2"/>
-<stop offset="1" stop-color="#F1F1F1"/>
-</linearGradient>
-<linearGradient id="paint2_linear_1851_1521" x1="1.01367" y1="3.93231" x2="6.85122" y2="3.9323" gradientUnits="userSpaceOnUse">
-<stop stop-color="#E2E2E2"/>
-<stop offset="1" stop-color="#F1F1F1"/>
-</linearGradient>
-<linearGradient id="paint3_linear_1851_1521" x1="22.2236" y1="19.2603" x2="16.3861" y2="19.2603" gradientUnits="userSpaceOnUse">
-<stop stop-color="#E2E2E2"/>
-<stop offset="1" stop-color="#F1F1F1"/>
-</linearGradient>
-</defs>
+<path d="M16.3281 1.01367H21.2211C21.7576 1.01367 22.1925 1.44861 22.1925 1.98514V6.85122" stroke="#E3E3E3" stroke-width="2" stroke-linecap="round"/>
+<path d="M6.86426 22.1926L1.97133 22.1926C1.4348 22.1926 0.999864 21.7577 0.999864 21.2212L0.999865 16.3551" stroke="#E3E3E3" stroke-width="2" stroke-linecap="round"/>
+<path d="M1.01367 6.8645L1.01367 1.97157C1.01367 1.43505 1.44861 1.00011 1.98514 1.00011L6.85122 1.00011" stroke="#E3E3E3" stroke-width="2" stroke-linecap="round"/>
+<path d="M22.2236 16.3281L22.2236 21.2211C22.2236 21.7576 21.7887 22.1925 21.2522 22.1925L16.3861 22.1925" stroke="#E3E3E3" stroke-width="2" stroke-linecap="round"/>
 </svg>

@@ -1,13 +1,13 @@
 <svg width="25" height="25" viewBox="0 0 25 25" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect x="1" y="1" width="22.5688" height="22.5688" rx="2" stroke="#E4E4E4" stroke-width="2"/>
-<rect x="5.37207" y="17.4441" width="2.03559" height="2.03559" fill="#E4E4E4"/>
-<rect x="9.39258" y="17.4441" width="2.03559" height="2.03559" fill="#E4E4E4"/>
-<rect x="9.39258" y="13.3728" width="2.03559" height="2.03559" fill="#E4E4E4"/>
-<rect x="13.4121" y="13.3728" width="2.03559" height="2.03559" fill="#E4E4E4"/>
-<rect x="13.4121" y="17.4441" width="2.03559" height="2.03559" fill="#E4E4E4"/>
-<rect x="17.4326" y="17.4441" width="2.03559" height="2.03559" fill="#E4E4E4"/>
-<rect x="17.4326" y="13.3728" width="2.03559" height="2.03559" fill="#E4E4E4"/>
-<rect x="17.4326" y="9.30176" width="2.03559" height="2.03559" fill="#E4E4E4"/>
-<rect x="17.4326" y="5.23096" width="2.03559" height="2.03559" fill="#E4E4E4"/>
-<rect x="13.4121" y="9.30176" width="2.03559" height="2.03559" fill="#E4E4E4"/>
+<rect x="1" y="1" width="22.5688" height="22.5688" rx="2" stroke="#E3E3E3" stroke-width="2"/>
+<rect x="5.37207" y="17.4441" width="2.03559" height="2.03559" fill="none" stroke="#E3E3E3" stroke-width="0.8"/>
+<rect x="9.39258" y="17.4441" width="2.03559" height="2.03559" fill="none" stroke="#E3E3E3" stroke-width="0.8"/>
+<rect x="9.39258" y="13.3728" width="2.03559" height="2.03559" fill="none" stroke="#E3E3E3" stroke-width="0.8"/>
+<rect x="13.4121" y="13.3728" width="2.03559" height="2.03559" fill="none" stroke="#E3E3E3" stroke-width="0.8"/>
+<rect x="13.4121" y="17.4441" width="2.03559" height="2.03559" fill="none" stroke="#E3E3E3" stroke-width="0.8"/>
+<rect x="17.4326" y="17.4441" width="2.03559" height="2.03559" fill="none" stroke="#E3E3E3" stroke-width="0.8"/>
+<rect x="17.4326" y="13.3728" width="2.03559" height="2.03559" fill="none" stroke="#E3E3E3" stroke-width="0.8"/>
+<rect x="17.4326" y="9.30176" width="2.03559" height="2.03559" fill="none" stroke="#E3E3E3" stroke-width="0.8"/>
+<rect x="17.4326" y="5.23096" width="2.03559" height="2.03559" fill="none" stroke="#E3E3E3" stroke-width="0.8"/>
+<rect x="13.4121" y="9.30176" width="2.03559" height="2.03559" fill="none" stroke="#E3E3E3" stroke-width="0.8"/>
 </svg>
