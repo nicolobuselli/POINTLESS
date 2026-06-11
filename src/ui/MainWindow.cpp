@@ -69,6 +69,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     setCentralWidget(central);
 
+    qApp->installEventFilter(this);
+
     // ── Signals ──────────────────────────────────────────────
     connect(m_left,  &AdjustmentsPanel::adjustmentsChanged, this, &MainWindow::onParamsChanged);
     connect(m_left,  &AdjustmentsPanel::exportRequested,    this, &MainWindow::onExport);
@@ -115,6 +117,59 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow() = default;
 
+bool MainWindow::eventFilter(QObject* obj, QEvent* event)
+{
+    const bool editableFocus = qobject_cast<QLineEdit*>(QApplication::focusWidget()) != nullptr;
+
+    if (!editableFocus) {
+        if (event->type() == QEvent::ShortcutOverride) {
+            auto* keyEvent = static_cast<QKeyEvent*>(event);
+            if (!keyEvent->isAutoRepeat()) {
+                if (keyEvent->key() == Qt::Key_Space || keyEvent->key() == Qt::Key_Shift) {
+                    event->accept();
+                    return true;
+                }
+            }
+        }
+
+        if (event->type() == QEvent::KeyPress) {
+            auto* keyEvent = static_cast<QKeyEvent*>(event);
+            if (!keyEvent->isAutoRepeat()) {
+                if (keyEvent->key() == Qt::Key_Space) {
+                    m_spaceDown = true;
+                    updatePreviewInteractionState();
+                    event->accept();
+                    return true;
+                }
+                if (keyEvent->key() == Qt::Key_Shift) {
+                    m_shiftDown = true;
+                    updatePreviewInteractionState();
+                    event->accept();
+                    return true;
+                }
+            }
+        } else if (event->type() == QEvent::KeyRelease) {
+            auto* keyEvent = static_cast<QKeyEvent*>(event);
+            if (!keyEvent->isAutoRepeat()) {
+                if (keyEvent->key() == Qt::Key_Space) {
+                    m_spaceDown = false;
+                    updatePreviewInteractionState();
+                    event->accept();
+                    return true;
+                }
+                if (keyEvent->key() == Qt::Key_Shift) {
+                    m_shiftDown = false;
+                    updatePreviewInteractionState();
+                    event->accept();
+                    return true;
+                }
+            }
+        }
+    }
+
+    return QMainWindow::eventFilter(obj, event);
+}
+
 void MainWindow::updateDisplayedPreview()
 {
     if (m_current < 0) {
@@ -126,9 +181,13 @@ void MainWindow::updateDisplayedPreview()
         const QImage adjustedOnly = ImageAdjuster::apply(
             m_images[m_current].source,
             m_images[m_current].state.adjustments);
+        m_preview->setOriginalImage(adjustedOnly);
+        m_preview->setShowOriginal(true);
         m_preview->setImage(adjustedOnly);
         return;
     }
+
+    m_preview->setShowOriginal(false);
 
     if (!m_lastRender.isNull()) {
         m_preview->setImage(m_lastRender);
@@ -140,31 +199,38 @@ void MainWindow::updateDisplayedPreview()
     }
 }
 
+void MainWindow::updatePreviewInteractionState()
+{
+    m_showOriginalWhileSpace = m_shiftDown;
+
+    if (m_current >= 0) {
+        const QImage adjustedOnly = ImageAdjuster::apply(
+            m_images[m_current].source,
+            m_images[m_current].state.adjustments);
+        m_preview->setOriginalImage(adjustedOnly);
+    }
+
+    m_preview->setPanMode(m_spaceDown && !m_shiftDown);
+    updateDisplayedPreview();
+
+    if (m_shiftDown) {
+        m_preview->setStatus("Original + adjustments (hold Shift)");
+    } else if (m_spaceDown) {
+        m_preview->setStatus("Pan (hold Space and drag)");
+    } else if (!m_lastRender.isNull()) {
+        m_preview->setStatus("Done");
+    } else if (!m_lastPreviewFrame.isNull()) {
+        m_preview->setStatus("Preview (full render pending…)");
+    }
+}
+
 void MainWindow::keyPressEvent(QKeyEvent* event)
 {
-    if (!event->isAutoRepeat() && event->key() == Qt::Key_Space && m_current >= 0) {
-        m_showOriginalWhileSpace = true;
-        updateDisplayedPreview();
-        m_preview->setStatus("Original + adjustments (hold Space)");
-        event->accept();
-        return;
-    }
     QMainWindow::keyPressEvent(event);
 }
 
 void MainWindow::keyReleaseEvent(QKeyEvent* event)
 {
-    if (!event->isAutoRepeat() && event->key() == Qt::Key_Space) {
-        m_showOriginalWhileSpace = false;
-        updateDisplayedPreview();
-        if (!m_lastRender.isNull()) {
-            m_preview->setStatus("Done");
-        } else if (!m_lastPreviewFrame.isNull()) {
-            m_preview->setStatus("Preview (full render pending…)");
-        }
-        event->accept();
-        return;
-    }
     QMainWindow::keyReleaseEvent(event);
 }
 
@@ -211,6 +277,11 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
         m_lastPreviewFrame = result;
     } else {
         m_lastRender = result;
+    }
+    if (m_current >= 0) {
+        m_preview->setOriginalImage(ImageAdjuster::apply(
+            m_images[m_current].source,
+            m_images[m_current].state.adjustments));
     }
     updateDisplayedPreview();
     m_preview->setStatus(isPreview ? "Preview (full render pending…)" : "Done");
@@ -321,6 +392,11 @@ void MainWindow::switchToImage(int index)
         m_lastRender = {};
         m_lastPreviewFrame = {};
         m_showOriginalWhileSpace = false;
+        m_spaceDown = false;
+        m_shiftDown = false;
+        m_preview->setPanMode(false);
+        m_preview->setShowOriginal(false);
+        m_preview->resetZoom();
         m_preview->setImage({});
         m_preview->setStatus("Drop images here or use the orange button below");
         m_filmstrip->setActive(-1);
@@ -331,6 +407,12 @@ void MainWindow::switchToImage(int index)
     m_filmstrip->setActive(index);
     m_lastRender = {};
     m_lastPreviewFrame = {};
+    m_spaceDown = false;
+    m_shiftDown = false;
+    m_showOriginalWhileSpace = false;
+    m_preview->setPanMode(false);
+    m_preview->setShowOriginal(false);
+    m_preview->resetZoom();
     scheduleRender();
 }
 
@@ -356,6 +438,15 @@ void MainWindow::onThumbSelected(int index)
 void MainWindow::onThumbCloseRequested(int index)
 {
     if (index < 0 || index >= m_images.size()) return;
+
+    const auto reply = QMessageBox::question(
+        this,
+        "Are you sure?",
+        "All the progress will be lost",
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (reply != QMessageBox::Yes) return;
+
     m_filmstrip->removeThumb(index);
     m_images.removeAt(index);
 

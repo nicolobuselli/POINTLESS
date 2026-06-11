@@ -25,13 +25,13 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     auto* content = new QWidget;
     content->setObjectName("controlRoot");
     auto* vlay = new QVBoxLayout(content);
-    vlay->setContentsMargins(16, 18, 16, 16);
+    vlay->setContentsMargins(16, 16, 16, 14);
     vlay->setSpacing(0);
 
     auto* rows = new QWidget;
     auto* rl = new QVBoxLayout(rows);
     rl->setContentsMargins(0, 0, 0, 0);
-    rl->setSpacing(12);
+    rl->setSpacing(8);
 
     auto addRow = [&](SliderRow*& target, const QString& label,
                       int minV, int maxV, int defV) {
@@ -52,7 +52,7 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
 
     auto* btnReset = new QPushButton("Reset adjustments");
     btnReset->setObjectName("exportBtn");
-    btnReset->setFixedHeight(34);
+    btnReset->setFixedHeight(42);
     connect(btnReset, &QPushButton::clicked, this, &AdjustmentsPanel::resetRequested);
     rl->addWidget(btnReset);
 
@@ -67,11 +67,11 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     auto* exportBox = new QWidget;
     exportBox->setObjectName("exportBox");
     auto* ev = new QVBoxLayout(exportBox);
-    ev->setContentsMargins(16, 14, 16, 16);
-    ev->setSpacing(4);
+    ev->setContentsMargins(16, 12, 16, 14);
+    ev->setSpacing(2);
 
     ev->addWidget(makeSectionTitle("Export"));
-    ev->addSpacing(8);
+    ev->addSpacing(6);
 
     {
         auto* labelsRow = new QHBoxLayout;
@@ -90,7 +90,7 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
         fieldsRow->addWidget(m_edtOutputName, 2);
         fieldsRow->addWidget(m_cmbFormat, 1);
         ev->addLayout(fieldsRow);
-        ev->addSpacing(10);
+        ev->addSpacing(8);
 
         auto* btnExport = new QPushButton("Export");
         btnExport->setObjectName("exportBtn");

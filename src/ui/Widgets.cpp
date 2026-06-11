@@ -28,10 +28,10 @@ DragSpinBox::DragSpinBox(const QString& iconRes, int minVal, int maxVal, int def
     setObjectName("dragSpinBox");
     setFrameShape(QFrame::NoFrame);
     setCursor(Qt::SizeHorCursor);
-    setFixedHeight(34);
+    setFixedHeight(38);
 
     auto* lay = new QHBoxLayout(this);
-    lay->setContentsMargins(8, 0, 8, 0);
+    lay->setContentsMargins(8, 1, 8, 1);
     lay->setSpacing(6);
 
     const bool hasIcon = !iconRes.isEmpty();
@@ -134,7 +134,7 @@ SliderRow::SliderRow(const QString& label, int minVal, int maxVal, int defVal,
     m_slider->setValue(defVal);
 
     m_box = new DragSpinBox(QString(), minVal, maxVal, defVal);
-    m_box->setFixedSize(46, 30);
+    m_box->setFixedSize(48, 38);
 
     row->addWidget(m_slider, 1);
     row->addWidget(m_box);
@@ -483,12 +483,12 @@ private:
 
 ColorPickerDialog::ColorPickerDialog(QColor initial, float initialOpacity,
                                      bool showOpacity, QWidget* parent)
-    : QDialog(parent, Qt::Dialog | Qt::FramelessWindowHint)
+    : QDialog(parent, Qt::FramelessWindowHint | Qt::Popup)
     , m_a(initialOpacity)
 {
     setAttribute(Qt::WA_TranslucentBackground);
-    setModal(true);
-    setFixedSize(300, showOpacity ? 370 : 330);
+    setModal(false);
+    setFixedSize(300, showOpacity ? 315 : 275);
 
     initial.getHsvF(&m_h, &m_s, &m_v);
     if (m_h < 0) m_h = 0.f;
@@ -526,19 +526,17 @@ void ColorPickerDialog::paintEvent(QPaintEvent*)
 
 void ColorPickerDialog::mousePressEvent(QMouseEvent* e)
 {
-    if (e->button() == Qt::LeftButton && e->pos().y() < 44)
-        m_dragOffset = e->globalPosition().toPoint() - frameGeometry().topLeft();
+    QDialog::mousePressEvent(e);
 }
 
 void ColorPickerDialog::mouseMoveEvent(QMouseEvent* e)
 {
-    if ((e->buttons() & Qt::LeftButton) && !m_dragOffset.isNull())
-        move(e->globalPosition().toPoint() - m_dragOffset);
+    QDialog::mouseMoveEvent(e);
 }
 
 void ColorPickerDialog::mouseReleaseEvent(QMouseEvent* e)
 {
-    if (e->button() == Qt::LeftButton) m_dragOffset = {};
+    QDialog::mouseReleaseEvent(e);
 }
 
 void ColorPickerDialog::buildUI(bool showOpacity)
@@ -546,21 +544,6 @@ void ColorPickerDialog::buildUI(bool showOpacity)
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(16, 14, 16, 14);
     root->setSpacing(8);
-
-    {
-        auto* row = new QHBoxLayout;
-        auto* title = new QLabel("Pick Color");
-        title->setStyleSheet("color:#EEEEEE;font-size:10pt;font-weight:600;background:transparent;");
-        auto* xBtn = new QPushButton(QString::fromUtf8("×"));
-        xBtn->setFixedSize(20, 20);
-        xBtn->setStyleSheet(
-            "QPushButton{background:transparent;border:none;color:#828282;"
-            "font-size:16pt;padding:0;}"
-            "QPushButton:hover{color:#E3E3E3;}");
-        connect(xBtn, &QPushButton::clicked, this, &QDialog::reject);
-        row->addWidget(title, 1); row->addWidget(xBtn);
-        root->addLayout(row);
-    }
 
     m_field = new ColorFieldWidget;
     m_field->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -595,21 +578,6 @@ void ColorPickerDialog::buildUI(bool showOpacity)
         root->addLayout(row);
     }
 
-    {
-        auto* row = new QHBoxLayout; row->setSpacing(8);
-        QString bs =
-            "QPushButton{background:#3B3B3B;border:1px solid #5D5D5D;border-radius:6px;"
-            "color:#E3E3E3;font-size:9pt;min-height:30px;padding:0 16px;}"
-            "QPushButton:hover{background:#484848;border-color:#828282;}";
-        auto* cancelBtn = new QPushButton("Cancel");
-        auto* okBtn     = new QPushButton("OK");
-        cancelBtn->setStyleSheet(bs);
-        okBtn->setStyleSheet(bs + "QPushButton{font-weight:600;}");
-        connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
-        connect(okBtn,     &QPushButton::clicked, this, &QDialog::accept);
-        row->addStretch(); row->addWidget(cancelBtn); row->addWidget(okBtn);
-        root->addLayout(row);
-    }
 
     m_field->onChanged = [this](float s, float v) {
         m_s = s; m_v = v;

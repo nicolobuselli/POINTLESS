@@ -182,9 +182,11 @@ void TonalControlsWidget::rebuildRows()
 void TonalControlsWidget::openTonePicker(int idx, QWidget* anchor)
 {
     if (idx < 0 || idx >= int(m_settings.tones.size())) return;
-    const QColor orig = m_settings.tones[idx].color;
-
-    auto* dlg = new ColorPickerDialog(orig, 1.0f, /*showOpacity*/ false, this);
+    auto* dlg = new ColorPickerDialog(m_settings.tones[idx].color,
+                                      1.0f,
+                                      /*showOpacity*/ false,
+                                      this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->moveNextTo(anchor);
 
     dlg->onColorChanged = [this, idx](QColor c, float) {
@@ -197,16 +199,9 @@ void TonalControlsWidget::openTonePicker(int idx, QWidget* anchor)
         emitChanged();
     };
 
-    if (dlg->exec() == QDialog::Accepted) {
-        m_settings.tones[idx].color = dlg->selectedColor();
-        if (idx < int(m_rows.size())) m_rows[idx].swatch->setColor(dlg->selectedColor());
-        emitChanged();
-    } else {
-        m_settings.tones[idx].color = orig;
-        if (idx < int(m_rows.size())) m_rows[idx].swatch->setColor(orig);
-        emitChanged();
-    }
-    dlg->deleteLater();
+    dlg->show();
+    dlg->raise();
+    dlg->activateWindow();
 }
 
 void TonalControlsWidget::emitChanged()

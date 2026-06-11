@@ -92,6 +92,22 @@ inline std::vector<ToneEntry> defaultTones(int n)
     return out;
 }
 
+inline std::vector<ToneEntry> defaultAccentTones(int n)
+{
+    std::vector<ToneEntry> out;
+    if (n <= 1) {
+        out.push_back({ QColor(0xFD, 0x5A, 0x1F), 0 });
+        return out;
+    }
+
+    const QColor accent(0xFD, 0x5A, 0x1F);
+    for (int i = 0; i < n; ++i) {
+        const float t = float(i) / float(n - 1);
+        out.push_back({ accent, 255 - qRound(t * 255.0f) });
+    }
+    return out;
+}
+
 // Index of the tone whose level is nearest to the given luminosity.
 inline int pickToneIndex(const std::vector<ToneEntry>& tones, float lum01)
 {
@@ -172,7 +188,7 @@ struct HalftoneSettings {
     float opacity      = 1.0f;
     float cornerRadius = 0.0f;
 
-    TonalSettings tonal { ToneMode::FixedTones, defaultTones(3) };
+    TonalSettings tonal { ToneMode::FixedTones, defaultAccentTones(1) };
 };
 
 inline bool operator==(const HalftoneSettings& a, const HalftoneSettings& b) {
@@ -207,7 +223,7 @@ struct DitherSettings {
     int             strength  = 100;  // 0..100
     int             levels    = 2;    // 2..8 per channel (image colors mode)
 
-    TonalSettings tonal { ToneMode::FixedTones, defaultTones(1) };
+    TonalSettings tonal { ToneMode::FixedTones, defaultAccentTones(1) };
 };
 
 inline bool operator==(const DitherSettings& a, const DitherSettings& b) {
@@ -272,7 +288,7 @@ struct SessionParams {
     DitherSettings   dither;
     AsciiSettings    ascii;
 
-    QColor background        = QColor(0xD9, 0xD9, 0xD9);
+    QColor background        = QColor(0x0A, 0x0A, 0x0A);
     float  backgroundOpacity = 1.0f;
 };
 

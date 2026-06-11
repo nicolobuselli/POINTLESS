@@ -4,6 +4,8 @@
 #include <QPaintEvent>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QWheelEvent>
+#include <QMouseEvent>
 #include <QMimeData>
 #include <QUrl>
 #include <QFileInfo>
@@ -41,21 +43,68 @@ void PreviewWidget::setImage(const QImage& img)
     update();
 }
 
+void PreviewWidget::setOriginalImage(const QImage& img)
+{
+    m_originalImage = img;
+    if (m_showOriginal) {
+        updateScaled();
+        update();
+    }
+}
+
 void PreviewWidget::setStatus(const QString& text)
 {
     m_status = text;
     update();
 }
 
+void PreviewWidget::resetZoom()
+{
+    m_zoomFactor = 1.0;
+    m_panOffset = {};
+    m_dragging = false;
+    m_dragButton = Qt::NoButton;
+    updateScaled();
+    update();
+}
+
+void PreviewWidget::setShowOriginal(bool show)
+{
+    if (m_showOriginal == show) return;
+    m_showOriginal = show;
+    updateScaled();
+    update();
+}
+
+void PreviewWidget::setPanMode(bool enabled)
+{
+    if (m_panMode == enabled) return;
+    m_panMode = enabled;
+    if (!enabled && m_dragButton == Qt::LeftButton) {
+        m_dragging = false;
+        m_dragButton = Qt::NoButton;
+    }
+    setCursor(enabled ? Qt::OpenHandCursor : Qt::ArrowCursor);
+}
+
+const QImage& PreviewWidget::currentSource() const
+{
+    if (m_showOriginal && !m_originalImage.isNull()) return m_originalImage;
+    return m_image;
+}
+
 void PreviewWidget::updateScaled()
 {
-    if (m_image.isNull()) { m_scaled = {}; return; }
+    const QImage& source = currentSource();
+    if (source.isNull()) { m_scaled = {}; return; }
     // Upscaling: nearest-neighbor preserves crisp symbol edges.
     // Downscaling: smooth avoids moiré on dense patterns.
-    const bool upscaling = (m_image.width()  <= size().width()
-                         && m_image.height() <= size().height());
+    const QSize targetSize = QSize(qMax(1, int(size().width()  * m_zoomFactor)),
+                                   qMax(1, int(size().height() * m_zoomFactor)));
+    const bool upscaling = (source.width()  <= targetSize.width()
+                         && source.height() <= targetSize.height());
     const auto mode = upscaling ? Qt::FastTransformation : Qt::SmoothTransformation;
-    m_scaled = m_image.scaled(size(), Qt::KeepAspectRatio, mode);
+    m_scaled = source.scaled(targetSize, Qt::KeepAspectRatio, mode);
 }
 
 void PreviewWidget::resizeEvent(QResizeEvent* event)
@@ -64,14 +113,76 @@ void PreviewWidget::resizeEvent(QResizeEvent* event)
     updateScaled();
 }
 
+void PreviewWidget::wheelEvent(QWheelEvent* event)
+{
+    if (!(event->modifiers() & Qt::ControlModifier)) {
+        event->ignore();
+        return;
+    }
+
+    const int delta = event->angleDelta().y();
+    if (delta == 0) {
+        event->accept();
+        return;
+    }
+
+    const double factorStep = (delta > 0) ? 1.12 : 1.0 / 1.12;
+    m_zoomFactor = qBound(0.2, m_zoomFactor * factorStep, 8.0);
+    updateScaled();
+    update();
+
+    setToolTip(QString("Zoom %1%").arg(int(m_zoomFactor * 100.0)));
+    event->accept();
+}
+
+void PreviewWidget::mousePressEvent(QMouseEvent* event)
+{
+    const bool leftPan = m_panMode && event->button() == Qt::LeftButton;
+    const bool middlePan = event->button() == Qt::MiddleButton;
+    if (!m_scaled.isNull() && (leftPan || middlePan)) {
+        m_dragging = true;
+        m_dragButton = event->button();
+        m_lastDragPos = event->pos();
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
+{
+    if (m_dragging && event->buttons().testFlag(m_dragButton)) {
+        const QPoint delta = event->pos() - m_lastDragPos;
+        m_panOffset += delta;
+        m_lastDragPos = event->pos();
+        update();
+        event->accept();
+        return;
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (m_dragging && event->button() == m_dragButton) {
+        m_dragging = false;
+        m_dragButton = Qt::NoButton;
+        setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
 void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter p(this);
     p.fillRect(rect(), QColor("#1E1E1E"));
 
     if (!m_scaled.isNull()) {
-        const int x = (width()  - m_scaled.width())  / 2;
-        const int y = (height() - m_scaled.height()) / 2;
+        const int x = (width()  - m_scaled.width())  / 2 + m_panOffset.x();
+        const int y = (height() - m_scaled.height()) / 2 + m_panOffset.y();
 
         // Checkerboard under transparent output
         if (m_scaled.hasAlphaChannel()) {

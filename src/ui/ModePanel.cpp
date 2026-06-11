@@ -30,7 +30,7 @@ public:
         {
             auto* sl = new QVBoxLayout(settingsContent);
             sl->setContentsMargins(0, 0, 0, 0);
-            sl->setSpacing(10);
+            sl->setSpacing(8);
 
             m_dpi = new SliderRow("Input DPI", 18, 300, 72);
             m_dpi->onValueChanged = [this](int) { fire(); };
@@ -51,14 +51,14 @@ public:
             m_shapesContainer = new QWidget;
             m_shapesLayout = new QVBoxLayout(m_shapesContainer);
             m_shapesLayout->setContentsMargins(0, 0, 0, 0);
-            m_shapesLayout->setSpacing(6);
+            m_shapesLayout->setSpacing(4);
             sl->addWidget(m_shapesContainer);
 
             m_thresholdRow = new QWidget;
             {
                 auto* tl = new QVBoxLayout(m_thresholdRow);
                 tl->setContentsMargins(0, 4, 0, 0);
-                tl->setSpacing(4);
+                tl->setSpacing(2);
                 tl->addWidget(makeParamLabel("Threshold"));
                 m_sldThreshold = new NoWheelSlider(Qt::Horizontal);
                 m_sldThreshold->setRange(0, 255);
@@ -85,7 +85,7 @@ public:
         {
             auto* pl = new QVBoxLayout(paramsContent);
             pl->setContentsMargins(0, 0, 0, 0);
-            pl->setSpacing(10);
+            pl->setSpacing(8);
 
             m_grid   = new SliderRow("Grid",    2, 100,  20);
             m_gamma  = new SliderRow("Gamma",  10, 500, 100);
@@ -98,7 +98,7 @@ public:
 
             auto* row = new QHBoxLayout;
             row->setContentsMargins(0, 0, 0, 0);
-            row->setSpacing(8);
+            row->setSpacing(6);
             m_opacity      = new DragSpinBox(":/icons/opacity.svg",       0, 100, 100, "%");
             m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0,  50,   0, "");
             m_opacity->onValueChanged      = [this](int) { fire(); };
@@ -114,7 +114,7 @@ public:
         vl->addSpacing(16);
 
         // ── Tonal controls ──────────────────────────────────
-        m_tonal = new TonalControlsWidget(TonalSettings{ ToneMode::FixedTones, defaultTones(3) });
+        m_tonal = new TonalControlsWidget(TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
         m_tonal->onChanged = [this]() { fire(); };
         vl->addWidget(new CollapsibleSection("Tonal controls", m_tonal));
 
@@ -180,6 +180,15 @@ private:
         QString          svgPath;
     };
 
+    void refreshMinusButtons()
+    {
+        for (int i = 0; i < m_shapeSlots.size(); ++i) {
+            const bool removable = (i > 0);
+            m_shapeSlots[i].minusBtn->setVisible(removable);
+            m_shapeSlots[i].minusBtn->setEnabled(removable);
+        }
+    }
+
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
     void clearShapeSlots()
@@ -220,7 +229,7 @@ private:
             svgLay->setContentsMargins(0, 0, 30, 0);
             slot.svgBtn = new QPushButton;
             slot.svgBtn->setObjectName("uploadBtn");
-            slot.svgBtn->setFixedHeight(34);
+            slot.svgBtn->setFixedHeight(38);
             if (svgPath.isEmpty()) {
                 slot.svgBtn->setIcon(QIcon(":/icons/upload.svg"));
                 slot.svgBtn->setIconSize(QSize(16, 17));
@@ -240,8 +249,7 @@ private:
 
         m_shapeSlots.append(slot);
         m_shapesLayout->addWidget(slot.widget);
-
-        for (auto& s : m_shapeSlots) s.minusBtn->setEnabled(m_shapeSlots.size() > 1);
+        refreshMinusButtons();
 
         QWidget*         slotWidget = slot.widget;
         QWidget*         svgRow     = slot.svgRow;
@@ -284,7 +292,7 @@ private:
         m_shapesLayout->removeWidget(slotWidget);
         slotWidget->deleteLater();
         m_shapeSlots.removeAt(idx);
-        for (auto& s : m_shapeSlots) s.minusBtn->setEnabled(m_shapeSlots.size() > 1);
+        refreshMinusButtons();
         refreshThreshold();
         fire();
     }
@@ -292,8 +300,7 @@ private:
     void refreshThreshold()
     {
         m_thresholdRow->setVisible(m_shapeSlots.size() > 1);
-        if (!m_shapeSlots.isEmpty())
-            m_shapeSlots[0].minusBtn->setEnabled(m_shapeSlots.size() > 1);
+        refreshMinusButtons();
     }
 
     SliderRow*           m_dpi             = nullptr;
@@ -388,7 +395,7 @@ public:
         {
             auto* pl = new QVBoxLayout(paramsContent);
             pl->setContentsMargins(0, 0, 0, 0);
-            pl->setSpacing(10);
+            pl->setSpacing(8);
 
             m_pixelSize = new SliderRow("Pixel size", 1, 16, 2);
             m_strength  = new SliderRow("Strength",   0, 100, 100);
@@ -405,7 +412,7 @@ public:
         vl->addSpacing(16);
 
         // ── Tonal controls ──────────────────────────────────
-        m_tonal = new TonalControlsWidget(TonalSettings{ ToneMode::FixedTones, defaultTones(1) });
+        m_tonal = new TonalControlsWidget(TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
         m_tonal->onChanged = [this]() { fire(); };
         vl->addWidget(new CollapsibleSection("Tonal controls", m_tonal));
     }
@@ -481,7 +488,7 @@ public:
         {
             auto* sl = new QVBoxLayout(settingsContent);
             sl->setContentsMargins(0, 0, 0, 0);
-            sl->setSpacing(10);
+            sl->setSpacing(8);
 
             sl->addWidget(makeParamLabel("Charset"));
             m_charset = new NoWheelComboBox;
@@ -524,7 +531,7 @@ public:
         {
             auto* pl = new QVBoxLayout(paramsContent);
             pl->setContentsMargins(0, 0, 0, 0);
-            pl->setSpacing(10);
+            pl->setSpacing(8);
 
             m_cellSize = new SliderRow("Cell size", 4, 48, 12);
             m_gamma    = new SliderRow("Gamma",    10, 500, 100);
@@ -540,7 +547,7 @@ public:
         vl->addSpacing(16);
 
         // ── Tonal controls ──────────────────────────────────
-        m_tonal = new TonalControlsWidget(TonalSettings{ ToneMode::FixedTones, defaultTones(1) });
+        m_tonal = new TonalControlsWidget(TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
         m_tonal->onChanged = [this]() { fire(); };
         vl->addWidget(new CollapsibleSection("Tonal controls", m_tonal));
     }
@@ -672,28 +679,23 @@ ModePanel::ModePanel(QWidget* parent)
         bl->setSpacing(8);
         bl->addWidget(makeSectionTitle("Background"));
 
-        m_bgSwatch = new FillSwatch(QColor(0xD9, 0xD9, 0xD9), 1.0f, /*showOpacity*/ true);
+        m_bgSwatch = new FillSwatch(QColor(0x0A, 0x0A, 0x0A), 1.0f, /*showOpacity*/ true);
         m_bgSwatch->onOpacityDragged = [this](float) { if (!m_updating) emit paramsChanged(); };
         m_bgSwatch->onClicked = [this]() {
-            const QColor origColor = m_bgSwatch->color();
-            const float  origOp    = m_bgSwatch->opacity();
-
-            auto* dlg = new ColorPickerDialog(origColor, origOp, /*showOpacity*/ true, this);
+            auto* dlg = new ColorPickerDialog(m_bgSwatch->color(),
+                                              m_bgSwatch->opacity(),
+                                              /*showOpacity*/ true,
+                                              this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
             dlg->moveNextTo(m_bgSwatch);
             dlg->onColorChanged = [this](QColor c, float a) {
                 m_bgSwatch->setColor(c);
                 m_bgSwatch->setOpacity(a);
                 if (!m_updating) emit paramsChanged();
             };
-            if (dlg->exec() == QDialog::Accepted) {
-                m_bgSwatch->setColor(dlg->selectedColor());
-                m_bgSwatch->setOpacity(dlg->selectedOpacity());
-            } else {
-                m_bgSwatch->setColor(origColor);
-                m_bgSwatch->setOpacity(origOp);
-            }
-            emit paramsChanged();
-            dlg->deleteLater();
+            dlg->show();
+            dlg->raise();
+            dlg->activateWindow();
         };
         bl->addWidget(m_bgSwatch);
 

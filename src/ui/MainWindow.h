@@ -59,8 +59,10 @@ private:
     void addImages(const QStringList& paths);
     void switchToImage(int index);
     void updateDisplayedPreview();
+    void updatePreviewInteractionState();
 
 protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
 
@@ -77,5 +79,7 @@ private:
     QImage m_lastRender;
     QImage m_lastPreviewFrame;
     bool   m_showOriginalWhileSpace = false;
+    bool   m_spaceDown = false;
+    bool   m_shiftDown = false;
     QTimer m_undoTimer;
 };

@@ -19,6 +19,10 @@ QWidget {
     border: none;
 }
 
+QLabel {
+    qproperty-textInteractionFlags: TextSelectableByMouse;
+}
+
 QMainWindow {
     background-color: #1E1E1E;
 }
@@ -95,14 +99,14 @@ QPushButton#tabBtn:checked {
 
 /* ── Filmstrip ───────────────────────────────────────────────── */
 #filmstrip {
-    background-color: #1E1E1E;
+    background-color: #272727;
     border-top: 1px solid #3B3B3B;
 }
 
 #filmstripScroll,
 #filmstripScroll > QWidget > QWidget,
 #filmstripRow {
-    background-color: #1E1E1E;
+    background-color: #272727;
 }
 
 /* ── Upload / action buttons ─────────────────────────────────── */
@@ -112,7 +116,7 @@ QPushButton#uploadBtn {
     border: 1px solid #5D5D5D;
     border-radius: 6px;
     padding: 0 14px;
-    min-height: 32px;
+    min-height: 36px;
     font-size: 10pt;
     text-align: left;
 }
@@ -131,7 +135,7 @@ QPushButton#exportBtn {
     border: 1px solid #5D5D5D;
     border-radius: 6px;
     padding: 0 14px;
-    min-height: 38px;
+    min-height: 40px;
     font-size: 10pt;
     font-weight: 600;
 }
@@ -169,7 +173,7 @@ QComboBox {
     border-radius: 6px;
     color: #E3E3E3;
     padding: 0 10px;
-    min-height: 34px;
+    min-height: 38px;
     selection-background-color: transparent;
 }
 QComboBox:hover   { border-color: #828282; }
@@ -232,7 +236,7 @@ QSlider::handle:horizontal:hover {
     background-color: #3B3B3B;
     border: 1px solid #5D5D5D;
     border-radius: 6px;
-    min-height: 32px;
+    min-height: 34px;
 }
 #dragSpinBox:hover {
     border-color: #828282;
@@ -245,7 +249,7 @@ QLineEdit {
     border-radius: 6px;
     color: #E3E3E3;
     padding: 0 10px;
-    min-height: 34px;
+    min-height: 38px;
 }
 QLineEdit:focus {
     border-color: #828282;
