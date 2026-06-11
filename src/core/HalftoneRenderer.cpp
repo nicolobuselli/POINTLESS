@@ -6,10 +6,11 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QtMath>
 #include <cmath>
+#include <memory>
 #include <random>
 
 // ---------------------------------------------------------------------------
-// Public entry point — splits work into row jobs, runs in parallel
+// Public entry point
 // ---------------------------------------------------------------------------
 
 void HalftoneRenderer::render(const QImage& input, QPainter& output,
@@ -23,8 +24,10 @@ void HalftoneRenderer::render(const QImage& input, QPainter& output,
     const int cols = (imgW + gs - 1) / gs;
     const int rows = (imgH + gs - 1) / gs;
 
-    // Each row renders into its own QImage, then we composite them.
-    // This avoids any locking on the painter.
+    const QImage inputRGB = (input.format() == QImage::Format_RGB32)
+                           ? input
+                           : input.convertToFormat(QImage::Format_RGB32);
+
     QVector<QImage> rowImages(rows);
     for (int r = 0; r < rows; ++r) {
         int cellY = r * gs;
@@ -33,16 +36,13 @@ void HalftoneRenderer::render(const QImage& input, QPainter& output,
         rowImages[r].fill(Qt::transparent);
     }
 
-    // Build job list
     QVector<RowJob> jobs(rows);
     for (int r = 0; r < rows; ++r) {
-        jobs[r] = { &input, &rowImages[r], &params, r, cols, gs };
+        jobs[r] = { &input, &inputRGB, &rowImages[r], &params, r, cols, gs };
     }
 
-    // Run in parallel
     QtConcurrent::blockingMap(jobs, &HalftoneRenderer::renderRow);
 
-    // Composite row images onto the output painter
     for (int r = 0; r < rows; ++r) {
         int cellY = r * gs;
         output.drawImage(0, cellY, rowImages[r]);
@@ -50,23 +50,30 @@ void HalftoneRenderer::render(const QImage& input, QPainter& output,
 }
 
 // ---------------------------------------------------------------------------
-// Per-row rendering (runs on thread pool threads)
+// Per-row rendering
 // ---------------------------------------------------------------------------
 
 void HalftoneRenderer::renderRow(const RowJob& job)
 {
-    const QImage&         input  = *job.input;
-    QImage&               canvas = *job.canvas;
-    const HalftoneParams& params = *job.params;
+    const QImage&         input    = *job.input;
+    const QImage&         inputRGB = *job.inputRGB;
+    QImage&               canvas   = *job.canvas;
+    const HalftoneParams& params   = *job.params;
 
-    const int gs    = job.gs;
-    const int row   = job.row;
-    const int cols  = job.totalCols;
-    const int imgW  = input.width();
-    const int imgH  = input.height();
+    const int gs   = job.gs;
+    const int row  = job.row;
+    const int cols = job.totalCols;
+    const int imgW = input.width();
+    const int imgH = input.height();
 
     QPainter painter(&canvas);
     painter.setRenderHint(QPainter::Antialiasing, true);
+
+    std::unique_ptr<QSvgRenderer> svgRendererCache;
+    QString cachedSvgPath;
+
+    const auto& shapesVec = params.shapes;
+    const auto& fillsVec  = params.fills;
 
     for (int col = 0; col < cols; ++col) {
         int cellX = col * gs;
@@ -74,11 +81,10 @@ void HalftoneRenderer::renderRow(const RowJob& job)
         int cellW = qMin(gs, imgW - cellX);
         int cellH = qMin(gs, imgH - cellY);
 
-        // cx/cy in canvas-local coordinates (row strip starts at y=0)
         float cx = cellX + cellW * 0.5f;
         float cy = cellH * 0.5f;
 
-        float lum      = sampleLuminosity(input, cellX, cellY, cellW, cellH);
+        float lum      = sampleLuminosity(inputRGB, cellX, cellY, cellW, cellH);
         float baseR    = (gs * 0.5f) * params.symbolSize;
         float darkness = 1.0f - lum;
         float scale    = std::pow(darkness, 1.0f / qMax(0.01f, params.gamma));
@@ -87,27 +93,43 @@ void HalftoneRenderer::renderRow(const RowJob& job)
         if (r < 0.5f) continue;
 
         // Shape selection
-        HalftoneShape shape   = params.shape;
-        QString       svgPath = params.customSvgPath;
+        HalftoneShape shape   = shapesVec.empty() ? HalftoneShape::Circle : shapesVec[0].shape;
+        QString       svgPath = shapesVec.empty() ? QString()              : shapesVec[0].svgPath;
 
-        if (params.multiSymbolEnabled) {
+        if (shapesVec.size() > 1) {
             int lumInt = static_cast<int>(lum * 255.f);
-            shape   = params.symbolSlots[0].shape;
-            svgPath = params.symbolSlots[0].svgPath;
-            for (int s = 3; s >= 0; --s) {
-                if (lumInt >= params.symbolSlots[s].threshold) {
-                    shape   = params.symbolSlots[s].shape;
-                    svgPath = params.symbolSlots[s].svgPath;
-                    break;
-                }
-            }
+            int n      = static_cast<int>(shapesVec.size());
+            int bias   = params.multiThreshold - 128;
+            int adj    = qBound(0, lumInt + bias, 255);
+            int idx    = qBound(0, adj * n / 256, n - 1);
+            shape   = shapesVec[idx].shape;
+            svgPath = shapesVec[idx].svgPath;
         }
 
-        // Fill color
-        QColor fillColor = params.fillColor;
-        if (params.useImageColors)
-            fillColor = sampleAverageColor(input, cellX, cellY, cellW, cellH);
-        fillColor.setAlphaF(params.opacity);
+        // Fill color selection
+        QColor fillColor;
+        float  fillAlpha;
+
+        if (params.useImageColors) {
+            fillColor = sampleAverageColor(inputRGB, cellX, cellY, cellW, cellH);
+            fillAlpha = fillsVec.empty() ? 1.0f : fillsVec[0].opacity;
+        } else if (fillsVec.empty()) {
+            fillColor = QColor(0xD9, 0xD9, 0xD9);
+            fillAlpha = 1.0f;
+        } else {
+            fillColor = fillsVec[0].color;
+            fillAlpha = fillsVec[0].opacity;
+            if (fillsVec.size() > 1) {
+                int lumInt = static_cast<int>(lum * 255.f);
+                int n      = static_cast<int>(fillsVec.size());
+                int bias   = params.multiThreshold - 128;
+                int adj    = qBound(0, lumInt + bias, 255);
+                int idx    = qBound(0, adj * n / 256, n - 1);
+                fillColor  = fillsVec[idx].color;
+                fillAlpha  = fillsVec[idx].opacity;
+            }
+        }
+        fillColor.setAlphaF(fillAlpha * params.opacity);
 
         // Jitter
         float rotationDeg = 0.0f;
@@ -120,20 +142,22 @@ void HalftoneRenderer::renderRow(const RowJob& job)
         painter.save();
 
         if (shape == HalftoneShape::CustomSVG && !svgPath.isEmpty()) {
-            // SVG: render via QSvgRenderer
-            QSvgRenderer svgRenderer(svgPath);
-            if (svgRenderer.isValid()) {
+            if (cachedSvgPath != svgPath) {
+                svgRendererCache = std::make_unique<QSvgRenderer>(svgPath);
+                cachedSvgPath    = svgPath;
+            }
+            if (svgRendererCache && svgRendererCache->isValid()) {
                 float size = r * 2.0f;
                 QTransform t;
                 t.translate(cx, cy);
                 t.rotate(rotationDeg);
                 t.translate(-size * 0.5f, -size * 0.5f);
                 painter.setTransform(t);
-                painter.setOpacity(params.opacity);
-                svgRenderer.render(&painter, QRectF(0, 0, size, size));
+                painter.setOpacity(fillAlpha * params.opacity);
+                svgRendererCache->render(&painter, QRectF(0, 0, size, size));
             }
         } else {
-            QPainterPath path = buildShape(shape, 0.0f, 0.0f, r);
+            QPainterPath path = buildShape(shape, 0.0f, 0.0f, r, params.cornerRadius);
 
             QTransform t;
             t.translate(cx, cy);
@@ -161,6 +185,18 @@ void HalftoneRenderer::renderRow(const RowJob& job)
 // Shape builders
 // ---------------------------------------------------------------------------
 
+QPainterPath HalftoneRenderer::buildTriangle(float cx, float cy, float r)
+{
+    QPainterPath p;
+    constexpr float k2pi3 = 2.0f * static_cast<float>(M_PI) / 3.0f;
+    float a0 = -static_cast<float>(M_PI_2);
+    p.moveTo(cx + r * std::cos(a0),          cy + r * std::sin(a0));
+    p.lineTo(cx + r * std::cos(a0 + k2pi3),  cy + r * std::sin(a0 + k2pi3));
+    p.lineTo(cx + r * std::cos(a0 + 2*k2pi3), cy + r * std::sin(a0 + 2*k2pi3));
+    p.closeSubpath();
+    return p;
+}
+
 QPainterPath HalftoneRenderer::buildCircle(float cx, float cy, float r)
 {
     QPainterPath p;
@@ -168,10 +204,15 @@ QPainterPath HalftoneRenderer::buildCircle(float cx, float cy, float r)
     return p;
 }
 
-QPainterPath HalftoneRenderer::buildSquare(float cx, float cy, float r)
+QPainterPath HalftoneRenderer::buildSquare(float cx, float cy, float r, float cornerRadius)
 {
     QPainterPath p;
-    p.addRect(cx - r, cy - r, r * 2, r * 2);
+    if (cornerRadius > 0.0f) {
+        float cr = qMin(cornerRadius, r);
+        p.addRoundedRect(cx - r, cy - r, r * 2.0f, r * 2.0f, cr, cr);
+    } else {
+        p.addRect(cx - r, cy - r, r * 2.0f, r * 2.0f);
+    }
     return p;
 }
 
@@ -179,9 +220,9 @@ QPainterPath HalftoneRenderer::buildStar(float cx, float cy, float r, int points
 {
     QPainterPath p;
     float innerR = r * 0.4f;
-    float step   = M_PI / points;
+    float step   = static_cast<float>(M_PI) / points;
     for (int i = 0; i < points * 2; ++i) {
-        float angle = i * step - M_PI_2;
+        float angle = i * step - static_cast<float>(M_PI_2);
         float rad   = (i % 2 == 0) ? r : innerR;
         float x     = cx + std::cos(angle) * rad;
         float y     = cy + std::sin(angle) * rad;
@@ -192,61 +233,15 @@ QPainterPath HalftoneRenderer::buildStar(float cx, float cy, float r, int points
     return p;
 }
 
-QPainterPath HalftoneRenderer::buildSpark(float cx, float cy, float r)
-{
-    QPainterPath p;
-    float thin = r * 0.18f;
-    p.moveTo(cx,        cy - r);
-    p.lineTo(cx + thin, cy - thin);
-    p.lineTo(cx + r,    cy);
-    p.lineTo(cx + thin, cy + thin);
-    p.lineTo(cx,        cy + r);
-    p.lineTo(cx - thin, cy + thin);
-    p.lineTo(cx - r,    cy);
-    p.lineTo(cx - thin, cy - thin);
-    p.closeSubpath();
-    return p;
-}
-
-QPainterPath HalftoneRenderer::buildCrossX(float cx, float cy, float r)
-{
-    QPainterPath p;
-    float w = r * 0.28f;
-    p.moveTo(cx - r,     cy - r + w);
-    p.lineTo(cx - r + w, cy - r);
-    p.lineTo(cx,         cy - w);
-    p.lineTo(cx + r - w, cy - r);
-    p.lineTo(cx + r,     cy - r + w);
-    p.lineTo(cx + w,     cy);
-    p.lineTo(cx + r,     cy + r - w);
-    p.lineTo(cx + r - w, cy + r);
-    p.lineTo(cx,         cy + w);
-    p.lineTo(cx - r + w, cy + r);
-    p.lineTo(cx - r,     cy + r - w);
-    p.lineTo(cx - w,     cy);
-    p.closeSubpath();
-    return p;
-}
-
-QPainterPath HalftoneRenderer::buildPlus(float cx, float cy, float r)
-{
-    float w = r * 0.28f;
-    QPainterPath p;
-    p.addRect(cx - r, cy - w, r * 2, w * 2);
-    p.addRect(cx - w, cy - r, w * 2, r * 2);
-    return p.simplified();
-}
-
-QPainterPath HalftoneRenderer::buildShape(HalftoneShape shape, float cx, float cy, float r)
+QPainterPath HalftoneRenderer::buildShape(HalftoneShape shape, float cx, float cy, float r,
+                                           float cornerRadius)
 {
     switch (shape) {
-        case HalftoneShape::Circle:  return buildCircle(cx, cy, r);
-        case HalftoneShape::Square:  return buildSquare(cx, cy, r);
-        case HalftoneShape::Star:    return buildStar  (cx, cy, r);
-        case HalftoneShape::Spark:   return buildSpark (cx, cy, r);
-        case HalftoneShape::CrossX:  return buildCrossX(cx, cy, r);
-        case HalftoneShape::Plus:    return buildPlus  (cx, cy, r);
-        default:                     return buildCircle(cx, cy, r);
+        case HalftoneShape::Triangle: return buildTriangle(cx, cy, r);
+        case HalftoneShape::Circle:   return buildCircle  (cx, cy, r);
+        case HalftoneShape::Square:   return buildSquare  (cx, cy, r, cornerRadius);
+        case HalftoneShape::Star:     return buildStar    (cx, cy, r);
+        default:                      return buildCircle  (cx, cy, r);
     }
 }
 
@@ -254,15 +249,12 @@ QPainterPath HalftoneRenderer::buildShape(HalftoneShape shape, float cx, float c
 // Sampling helpers
 // ---------------------------------------------------------------------------
 
-float HalftoneRenderer::sampleLuminosity(const QImage& img,
+float HalftoneRenderer::sampleLuminosity(const QImage& rgb,
                                           int cellX, int cellY,
                                           int cellW, int cellH)
 {
     double sum   = 0.0;
     int    count = 0;
-    const QImage rgb = img.format() == QImage::Format_RGB32
-                     ? img : img.convertToFormat(QImage::Format_RGB32);
-
     for (int y = cellY; y < cellY + cellH; ++y) {
         const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
         for (int x = cellX; x < cellX + cellW; ++x) {
@@ -274,15 +266,12 @@ float HalftoneRenderer::sampleLuminosity(const QImage& img,
     return count == 0 ? 1.0f : static_cast<float>(sum / (count * 255.0));
 }
 
-QColor HalftoneRenderer::sampleAverageColor(const QImage& img,
+QColor HalftoneRenderer::sampleAverageColor(const QImage& rgb,
                                              int cellX, int cellY,
                                              int cellW, int cellH)
 {
     long long r = 0, g = 0, b = 0;
     int count = 0;
-    const QImage rgb = img.format() == QImage::Format_RGB32
-                     ? img : img.convertToFormat(QImage::Format_RGB32);
-
     for (int y = cellY; y < cellY + cellH; ++y) {
         const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
         for (int x = cellX; x < cellX + cellW; ++x) {

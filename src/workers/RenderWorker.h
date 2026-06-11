@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QImage>
 #include <QTimer>
+#include <QFutureWatcher>
 #include "../core/HalftoneParams.h"
 
 /**
@@ -36,6 +37,8 @@ signals:
 
 private slots:
     void onFullTimerTimeout();
+    void onFastRenderFinished();
+    void onFullRenderFinished();
 
 private:
     static QImage doRender(QImage source, HalftoneParams params);
@@ -44,9 +47,10 @@ private:
     QImage         m_sourceImage;
     HalftoneParams m_latestParams;
 
-    // Guard against racing results from old tasks
-    int  m_fastGeneration = 0;
-    int  m_fullGeneration = 0;
+    QFutureWatcher<QImage> m_fastWatcher;
+    QFutureWatcher<QImage> m_fullWatcher;
+    bool m_fastPending = false;
+    bool m_fullPending = false;
 
     void launchFast();
     void launchFull();

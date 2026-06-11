@@ -4,24 +4,16 @@
 #include <QWidget>
 #include <QComboBox>
 #include <QSlider>
-#include <QDoubleSpinBox>
-#include <QSpinBox>
 #include <QLabel>
-#include <QCheckBox>
 #include <QLineEdit>
 #include <QPushButton>
-#include <QGroupBox>
-#include <array>
+#include <QVBoxLayout>
+#include <QFrame>
+#include <QColor>
+#include <QVector>
+#include <QImage>
 #include "../core/HalftoneParams.h"
 
-/**
- * ControlPanel
- *
- * Scrollable right panel containing all halftone parameter controls.
- * Emits paramsChanged() whenever any control is modified.
- * Emits exportRequested() when the Export button is clicked.
- * Emits fileRequested()   when Choose File is clicked.
- */
 class ControlPanel : public QScrollArea
 {
     Q_OBJECT
@@ -32,6 +24,7 @@ public:
     HalftoneParams currentParams() const;
     QString        outputFileName()  const;
     QString        outputFormat()    const;
+    void           setSourcePreview(const QImage& img);
 
 signals:
     void paramsChanged();
@@ -40,82 +33,79 @@ signals:
 
 private:
     void buildLayout();
-    void connectSignals();
 
-    QWidget* buildSectionHeader(const QString& title);
-    QFrame*  buildSeparator();
+    QWidget*     makeSectionHeader(const QString& title, QPushButton** plusOut = nullptr);
+    QFrame*      makeSeparator();
+    QPushButton* makeIconButton(const QString& iconRes);
+    QWidget*     makeSliderCol(const QString& lbl, QSlider** sldOut,
+                               int minVal, int maxVal, int defVal);
+    QWidget*     make2ColSliders(
+                    const QString& lbl1, QSlider** sld1, int min1, int max1, int def1,
+                    const QString& lbl2, QSlider** sld2, int min2, int max2, int def2);
 
-    // Helper: creates Label + QSlider + QDoubleSpinBox in a row, returns slider
-    QWidget* makeFloatRow(const QString& label,
-                          QSlider** sliderOut, QDoubleSpinBox** spinOut,
-                          double minVal, double maxVal, double defVal, int sliderScale = 100);
+    // ── Source image ──────────────────────────────────────────────
+    QLabel*      m_sourcePreview;
 
-    QWidget* makeIntRow(const QString& label,
-                        QSlider** sliderOut, QSpinBox** spinOut,
-                        int minVal, int maxVal, int defVal);
+    // ── Halftone shape ────────────────────────────────────────────
+    QWidget*     m_shapesContainer;
+    QVBoxLayout* m_shapesLayout;
+    QWidget*     m_thresholdRow;
+    QSlider*     m_sldThreshold;
 
-    // Sync helpers
-    static void syncSliderToSpin(QSlider* s, QDoubleSpinBox* spin, int scale);
-    static void syncSpinToSlider(QSlider* s, QDoubleSpinBox* spin, int scale);
-
-    // --- LOAD FILE ---
-    QPushButton* m_btnChooseFile;
-    QLabel*      m_lblFilePath;
-
-    // --- HALFTONE SHAPE ---
-    QComboBox*   m_cmbShape;
-    QWidget*     m_wgtSvgRow;
-    QPushButton* m_btnLoadSvg;
-    QLabel*      m_lblSvgPath;
-    QString      m_svgPath;
-
-    // --- PARAMETERS ---
-    QSlider*       m_sldGridSize;
-    QSpinBox*      m_spnGridSize;
-    QSlider*       m_sldGamma;
-    QDoubleSpinBox* m_spnGamma;
-    QSlider*       m_sldJitter;
-    QDoubleSpinBox* m_spnJitter;
-    QSlider*       m_sldOpacity;
-    QDoubleSpinBox* m_spnOpacity;
-    QSlider*       m_sldSymbolSize;
-    QDoubleSpinBox* m_spnSymbolSize;
-
-    // --- STROKE ---
-    QCheckBox*     m_chkStroke;
-    QSlider*       m_sldStrokeWidth;
-    QDoubleSpinBox* m_spnStrokeWidth;
-    QSlider*       m_sldStrokeRadius;
-    QDoubleSpinBox* m_spnStrokeRadius;
-    QPushButton*   m_btnStrokeColor;
-    QLabel*        m_lblStrokeColor;
-    QColor         m_strokeColor { Qt::black };
-
-    // --- COLOR ---
-    QPushButton*   m_btnFillColor;
-    QLabel*        m_lblFillColor;
-    QColor         m_fillColor { Qt::black };
-    QCheckBox*     m_chkUseImageColors;
-
-    // --- MULTI-SYMBOL ---
-    QCheckBox*     m_chkMultiSymbol;
-    QWidget*       m_wgtMultiSymbol;   // container shown/hidden
-
-    struct SymbolSlotUI {
-        QPushButton*   btnLoad;
-        QLabel*        lblName;
-        QComboBox*     cmbShape;
-        QSlider*       sldThreshold;
-        QSpinBox*      spnThreshold;
-        QString        svgPath;
+    struct ShapeSlot {
+        QWidget*     widget   = nullptr;
+        QComboBox*   combo    = nullptr;
+        QPushButton* minusBtn = nullptr;
+        QWidget*     svgRow   = nullptr;
+        QPushButton* svgBtn   = nullptr;
+        QString      svgPath;
     };
-    std::array<SymbolSlotUI, 4> m_slots;
+    QVector<ShapeSlot> m_shapeSlots;
 
-    // --- EXPORT ---
-    QPushButton*   m_btnExport;
-    QComboBox*     m_cmbFormat;
-    QLineEdit*     m_edtOutputName;
+    void addShapeSlot(HalftoneShape shape = HalftoneShape::Circle, const QString& svgPath = {});
+    void removeShapeSlot(QWidget* slotWidget);
+    void refreshThresholdVisibility();
 
-    // Block recursive signals during init
+    // ── Parameters ────────────────────────────────────────────────
+    QSlider*     m_sldGrid;
+    QSlider*     m_sldGamma;
+    QSlider*     m_sldJitter;
+    QSlider*     m_sldSize;
+    QFrame*      m_dsbOpacity;
+    QFrame*      m_dsbCornerRadius;
+
+    // ── Fill ──────────────────────────────────────────────────────
+    bool         m_useImageColors = false;
+    QPushButton* m_useImageColorsBtn = nullptr;
+    QPushButton* m_fillPlusBtn       = nullptr;
+    QWidget*     m_fillsContainer;
+    QVBoxLayout* m_fillsLayout;
+
+    struct FillSlot {
+        QWidget*     widget   = nullptr;
+        QWidget*     swatch   = nullptr;   // actual type: FillSwatch (defined in .cpp)
+        QPushButton* minusBtn = nullptr;
+    };
+    QVector<FillSlot> m_fillSlots;
+
+    void addFillSlot(QColor color = QColor(0xD9, 0xD9, 0xD9), float opacity = 1.0f);
+    void removeFillSlot(QWidget* slotWidget);
+    void openColorPicker(int idx);
+
+    // ── Stroke ────────────────────────────────────────────────────
+    bool         m_strokeEnabled = false;
+    QWidget*     m_strokeContent;
+    QPushButton* m_strokeToggleBtn;
+    QSlider*     m_sldStrokeWidth;
+    QPushButton* m_strokeColorBtn;
+    QColor       m_strokeColor = Qt::black;
+
+    void updateStrokeUI();
+    void updateStrokeColorBtn();
+
+    // ── Export ────────────────────────────────────────────────────
+    QLineEdit*   m_edtOutputName;
+    QComboBox*   m_cmbFormat;
+
     bool m_initializing = true;
 };

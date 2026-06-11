@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QFile>
+#include <QFontDatabase>
 #include "ui/MainWindow.h"
 
 int main(int argc, char* argv[])
@@ -8,6 +9,8 @@ int main(int argc, char* argv[])
     app.setApplicationName("ULTRA_Ditherer");
     app.setApplicationVersion("1.0.0");
     app.setOrganizationName("ULTRA_Ditherer");
+
+    QFontDatabase::addApplicationFont(":/fonts/FunnelDisplay.ttf");
 
     // Load stylesheet
     QFile qss(":/style.qss");

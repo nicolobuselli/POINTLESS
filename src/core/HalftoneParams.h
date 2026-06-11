@@ -2,61 +2,47 @@
 
 #include <QColor>
 #include <QString>
-#include <QImage>
-#include <array>
+#include <vector>
 
 enum class HalftoneShape {
+    Triangle,
     Circle,
     Square,
     Star,
-    Spark,
-    CrossX,
-    Plus,
     CustomSVG
 };
 
-struct SymbolSlot {
-    HalftoneShape shape     = HalftoneShape::Circle;
-    QString       svgPath;          // used when shape == CustomSVG
-    int           threshold = 0;    // luminosity lower bound [0-255]
+struct ShapeEntry {
+    HalftoneShape shape   = HalftoneShape::Circle;
+    QString       svgPath;
+};
+
+struct FillEntry {
+    QColor color   = QColor(0xD9, 0xD9, 0xD9);
+    float  opacity = 1.0f;
 };
 
 struct HalftoneParams {
+    // Shapes: 1-4 active slots
+    std::vector<ShapeEntry> shapes         = { ShapeEntry{} };
+    int                     multiThreshold = 128; // luminosity split [0-255], only when shapes.size() > 1
+
     // Grid
-    int   gridSize    = 20;         // pixels per cell
+    int   gridSize     = 20;
 
-    // Symbol scaling
-    float gamma       = 1.0f;       // luminosity -> size exponent
-    float symbolSize  = 1.0f;       // global scale multiplier
+    // Symbol transform
+    float gamma        = 1.0f;
+    float symbolSize   = 1.0f;
+    float jitter       = 0.0f;
+    float opacity      = 1.0f;
+    float cornerRadius = 0.0f;
 
-    // Jitter (rotation)
-    float jitter      = 0.0f;       // [0-1], 1 = up to 360° random rotation
-
-    // Opacity
-    float opacity     = 1.0f;
-
-    // Shape
-    HalftoneShape shape = HalftoneShape::Circle;
-    QString       customSvgPath;
+    // Fill: 1+ active slots
+    bool                    useImageColors = false;
+    std::vector<FillEntry> fills           = { FillEntry{} };
 
     // Stroke
-    bool  strokeEnabled = false;
-    float strokeWidth   = 1.0f;
-    float strokeRadius  = 0.0f;
-    QColor strokeColor  = Qt::black;
-
-    // Fill color
-    QColor fillColor    = Qt::black;
-    bool   useImageColors = false;
-
-    // Multi-symbol mode
-    bool multiSymbolEnabled = false;
-    std::array<SymbolSlot, 4> symbolSlots;
-
-    HalftoneParams() {
-        // Default thresholds: 0, 64, 128, 192
-        for (int i = 0; i < 4; ++i) {
-            symbolSlots[i].threshold = i * 64;
-        }
-    }
+    bool   strokeEnabled = false;
+    float  strokeWidth   = 1.0f;
+    QColor strokeColor   = Qt::black;
 };

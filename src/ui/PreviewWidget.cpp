@@ -31,11 +31,13 @@ void PreviewWidget::setStatus(const QString& text)
 
 void PreviewWidget::updateScaled()
 {
-    if (m_image.isNull()) {
-        m_scaled = {};
-        return;
-    }
-    m_scaled = m_image.scaled(size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    if (m_image.isNull()) { m_scaled = {}; return; }
+    // Upscaling: nearest-neighbor preserves crisp halftone symbol edges.
+    // Downscaling: smooth avoids moiré on dense halftones.
+    const bool upscaling = (m_image.width()  <= size().width()
+                         && m_image.height() <= size().height());
+    const auto mode = upscaling ? Qt::FastTransformation : Qt::SmoothTransformation;
+    m_scaled = m_image.scaled(size(), Qt::KeepAspectRatio, mode);
 }
 
 void PreviewWidget::resizeEvent(QResizeEvent* event)
@@ -47,7 +49,7 @@ void PreviewWidget::resizeEvent(QResizeEvent* event)
 void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter p(this);
-    p.fillRect(rect(), QColor("#000000"));
+    p.fillRect(rect(), QColor("#1E1E1E"));
 
     if (!m_scaled.isNull()) {
         // Centre the image
