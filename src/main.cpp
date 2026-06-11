@@ -6,7 +6,7 @@ int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
     app.setApplicationName("ULTRA_Ditherer");
-    app.setApplicationVersion("1.0.0");
+    app.setApplicationVersion("2.0.0");
     app.setOrganizationName("ULTRA_Ditherer");
 
     // Load stylesheet
@@ -16,7 +16,7 @@ int main(int argc, char* argv[])
     }
 
     MainWindow w;
-    w.show();
+    w.showMaximized();
 
     return app.exec();
 }

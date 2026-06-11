@@ -19,9 +19,15 @@ set(SOURCES
     src/main.cpp
 
     # Core (pure logic)
+    src/core/Params.h
+    src/core/ImageAdjuster.cpp
+    src/core/ImageAdjuster.h
     src/core/HalftoneRenderer.cpp
     src/core/HalftoneRenderer.h
-    src/core/HalftoneParams.h
+    src/core/DitherRenderer.cpp
+    src/core/DitherRenderer.h
+    src/core/AsciiRenderer.cpp
+    src/core/AsciiRenderer.h
 
     # Workers
     src/workers/RenderWorker.cpp
@@ -32,8 +38,16 @@ set(SOURCES
     src/ui/MainWindow.h
     src/ui/PreviewWidget.cpp
     src/ui/PreviewWidget.h
-    src/ui/ControlPanel.cpp
-    src/ui/ControlPanel.h
+    src/ui/Widgets.cpp
+    src/ui/Widgets.h
+    src/ui/TonalControlsWidget.cpp
+    src/ui/TonalControlsWidget.h
+    src/ui/AdjustmentsPanel.cpp
+    src/ui/AdjustmentsPanel.h
+    src/ui/ModePanel.cpp
+    src/ui/ModePanel.h
+    src/ui/FilmstripWidget.cpp
+    src/ui/FilmstripWidget.h
 
     # Resources
     src/resources.qrc

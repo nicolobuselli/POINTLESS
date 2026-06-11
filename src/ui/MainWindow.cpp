@@ -1,17 +1,38 @@
 #include "MainWindow.h"
 #include "PreviewWidget.h"
-#include "ControlPanel.h"
+#include "AdjustmentsPanel.h"
+#include "ModePanel.h"
+#include "FilmstripWidget.h"
+#include "Widgets.h"
 #include "../workers/RenderWorker.h"
-#include "../core/HalftoneRenderer.h"
+#include "../core/ImageAdjuster.h"
 
-#include <QSplitter>
-#include <QFileDialog>
-#include <QMessageBox>
-#include <QStatusBar>
-#include <QFileInfo>
-#include <QSvgGenerator>
-#include <QPainter>
 #include <QApplication>
+#include <QClipboard>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QPainter>
+#include <QShortcut>
+#include <QSvgGenerator>
+
+namespace {
+constexpr int kMaxUndoSteps   = 100;
+constexpr int kUndoDebounceMs = 400;
+
+QFrame* makeVSeparator()
+{
+    auto* f = new QFrame;
+    f->setObjectName("vseparator");
+    f->setFrameShape(QFrame::NoFrame);
+    f->setFixedWidth(1);
+    return f;
+}
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -19,91 +40,333 @@ MainWindow::MainWindow(QWidget* parent)
 {
     setWindowTitle("ULTRA TOOL — Ditherer");
     setWindowIcon(QIcon(":/logo.png"));
-    setMinimumSize(960, 600);
-    resize(1400, 860);
+    setMinimumSize(1100, 680);
 
-    auto* splitter = new QSplitter(Qt::Horizontal, this);
-    splitter->setHandleWidth(1);
+    // ── Layout ───────────────────────────────────────────────
+    auto* central = new QWidget;
+    auto* hl = new QHBoxLayout(central);
+    hl->setContentsMargins(0, 0, 0, 0);
+    hl->setSpacing(0);
 
-    m_preview  = new PreviewWidget(splitter);
-    m_controls = new ControlPanel(splitter);
+    m_left = new AdjustmentsPanel;
 
-    splitter->addWidget(m_preview);
-    splitter->addWidget(m_controls);
-    splitter->setStretchFactor(0, 4);
-    splitter->setStretchFactor(1, 1);
-    splitter->setSizes({1100, 300});
+    auto* centerWidget = new QWidget;
+    auto* cv = new QVBoxLayout(centerWidget);
+    cv->setContentsMargins(0, 0, 0, 0);
+    cv->setSpacing(0);
+    m_preview   = new PreviewWidget;
+    m_filmstrip = new FilmstripWidget;
+    cv->addWidget(m_preview, 1);
+    cv->addWidget(m_filmstrip);
 
-    setCentralWidget(splitter);
-    statusBar()->showMessage("Ready");
+    m_right = new ModePanel;
 
-    connect(m_controls, &ControlPanel::fileRequested,   this, &MainWindow::onChooseFile);
-    connect(m_controls, &ControlPanel::paramsChanged,   this, &MainWindow::onParamsChanged);
-    connect(m_controls, &ControlPanel::exportRequested, this, &MainWindow::onExport);
-    connect(m_preview,  &PreviewWidget::fileDropped,    this, &MainWindow::onFileDropped);
+    hl->addWidget(m_left);
+    hl->addWidget(makeVSeparator());
+    hl->addWidget(centerWidget, 1);
+    hl->addWidget(makeVSeparator());
+    hl->addWidget(m_right);
+
+    setCentralWidget(central);
+
+    // ── Signals ──────────────────────────────────────────────
+    connect(m_left,  &AdjustmentsPanel::adjustmentsChanged, this, &MainWindow::onParamsChanged);
+    connect(m_left,  &AdjustmentsPanel::exportRequested,    this, &MainWindow::onExport);
+    connect(m_left,  &AdjustmentsPanel::resetRequested,     this, [this]() {
+        if (m_current < 0) return;
+        SessionParams p = m_images[m_current].state;
+        p.adjustments = Adjustments{};
+        m_images[m_current].state = p;
+        applyParams(p);
+        scheduleRender();
+        m_undoTimer.start();
+    });
+    connect(m_right, &ModePanel::paramsChanged,             this, &MainWindow::onParamsChanged);
+
+    connect(m_preview,   &PreviewWidget::filesDropped,           this, &MainWindow::onFilesDropped);
+    connect(m_filmstrip, &FilmstripWidget::filesDropped,         this, &MainWindow::onFilesDropped);
+    connect(m_filmstrip, &FilmstripWidget::addRequested,         this, &MainWindow::onAddRequested);
+    connect(m_filmstrip, &FilmstripWidget::thumbSelected,        this, &MainWindow::onThumbSelected);
+    connect(m_filmstrip, &FilmstripWidget::thumbCloseRequested,  this, &MainWindow::onThumbCloseRequested);
+
     connect(m_worker, &RenderWorker::renderComplete, this, &MainWindow::onRenderComplete);
     connect(m_worker, &RenderWorker::renderStarted, this, [this](bool isPreview) {
-        statusBar()->showMessage(isPreview ? "Preview…" : "Rendering full resolution…");
+        m_preview->setStatus(isPreview ? "Preview…" : "Rendering full resolution…");
     });
 
-    loadImage(":/example.jpg");
+    // ── Undo debounce ────────────────────────────────────────
+    m_undoTimer.setSingleShot(true);
+    m_undoTimer.setInterval(kUndoDebounceMs);
+    connect(&m_undoTimer, &QTimer::timeout, this, &MainWindow::pushUndoSnapshot);
+
+    // ── Shortcuts ────────────────────────────────────────────
+    auto addShortcut = [this](const QKeySequence& seq, auto slot) {
+        auto* sc = new QShortcut(seq, this);
+        connect(sc, &QShortcut::activated, this, slot);
+    };
+    addShortcut(QKeySequence("Ctrl+Z"),       &MainWindow::undo);
+    addShortcut(QKeySequence("Ctrl+Shift+Z"), &MainWindow::redo);
+    addShortcut(QKeySequence("Ctrl+Y"),       &MainWindow::redo);
+    addShortcut(QKeySequence("Ctrl+C"),       &MainWindow::copyToClipboard);
+
+    // ── Demo image ───────────────────────────────────────────
+    addImages({ ":/example.jpg" });
 }
 
 MainWindow::~MainWindow() = default;
 
-// ---------------------------------------------------------------------------
-// File loading
-// ---------------------------------------------------------------------------
-
-void MainWindow::onChooseFile()
+void MainWindow::updateDisplayedPreview()
 {
-    QString path = QFileDialog::getOpenFileName(
-        this, "Open Image", "",
-        "Images (*.png *.jpg *.jpeg *.bmp);;All Files (*)");
-    if (!path.isEmpty()) loadImage(path);
-}
-
-void MainWindow::onFileDropped(const QString& path)
-{
-    loadImage(path);
-}
-
-void MainWindow::loadImage(const QString& path)
-{
-    QImage img(path);
-    if (img.isNull()) {
-        QMessageBox::warning(this, "Error", "Could not load image:\n" + path);
+    if (m_current < 0) {
+        m_preview->setImage({});
         return;
     }
 
-    m_sourceImage    = img;
-    m_sourceFilePath = path;
-    m_sourceFormat   = QFileInfo(path).suffix().toLower();
+    if (m_showOriginalWhileSpace) {
+        const QImage adjustedOnly = ImageAdjuster::apply(
+            m_images[m_current].source,
+            m_images[m_current].state.adjustments);
+        m_preview->setImage(adjustedOnly);
+        return;
+    }
 
-    m_controls->setSourcePreview(m_sourceImage);
-    statusBar()->showMessage("Loaded: " + QFileInfo(path).fileName());
-    scheduleRender();
+    if (!m_lastRender.isNull()) {
+        m_preview->setImage(m_lastRender);
+        return;
+    }
+
+    if (!m_lastPreviewFrame.isNull()) {
+        m_preview->setImage(m_lastPreviewFrame);
+    }
+}
+
+void MainWindow::keyPressEvent(QKeyEvent* event)
+{
+    if (!event->isAutoRepeat() && event->key() == Qt::Key_Space && m_current >= 0) {
+        m_showOriginalWhileSpace = true;
+        updateDisplayedPreview();
+        m_preview->setStatus("Original + adjustments (hold Space)");
+        event->accept();
+        return;
+    }
+    QMainWindow::keyPressEvent(event);
+}
+
+void MainWindow::keyReleaseEvent(QKeyEvent* event)
+{
+    if (!event->isAutoRepeat() && event->key() == Qt::Key_Space) {
+        m_showOriginalWhileSpace = false;
+        updateDisplayedPreview();
+        if (!m_lastRender.isNull()) {
+            m_preview->setStatus("Done");
+        } else if (!m_lastPreviewFrame.isNull()) {
+            m_preview->setStatus("Preview (full render pending…)");
+        }
+        event->accept();
+        return;
+    }
+    QMainWindow::keyReleaseEvent(event);
 }
 
 // ---------------------------------------------------------------------------
-// Rendering
+// Params <-> panels
 // ---------------------------------------------------------------------------
+
+SessionParams MainWindow::collectParams() const
+{
+    SessionParams p;
+    p.adjustments       = m_left->adjustments();
+    p.mode              = m_right->mode();
+    p.halftone          = m_right->halftoneSettings();
+    p.dither            = m_right->ditherSettings();
+    p.ascii             = m_right->asciiSettings();
+    p.background        = m_right->background();
+    p.backgroundOpacity = m_right->backgroundOpacity();
+    return p;
+}
+
+void MainWindow::applyParams(const SessionParams& p)
+{
+    m_left->setAdjustments(p.adjustments);
+    m_right->setAll(p);
+}
 
 void MainWindow::onParamsChanged()
 {
+    if (m_current < 0) return;
+    m_images[m_current].state = collectParams();
     scheduleRender();
+    m_undoTimer.start();
 }
 
 void MainWindow::scheduleRender()
 {
-    if (m_sourceImage.isNull()) return;
-    m_worker->requestRender(m_sourceImage, m_controls->currentParams());
+    if (m_current < 0) return;
+    m_worker->requestRender(m_images[m_current].source, m_images[m_current].state);
 }
 
 void MainWindow::onRenderComplete(QImage result, bool isPreview)
 {
-    m_preview->setImage(result);
-    statusBar()->showMessage(isPreview ? "Preview (full render pending…)" : "Done");
+    if (isPreview) {
+        m_lastPreviewFrame = result;
+    } else {
+        m_lastRender = result;
+    }
+    updateDisplayedPreview();
+    m_preview->setStatus(isPreview ? "Preview (full render pending…)" : "Done");
+}
+
+// ---------------------------------------------------------------------------
+// Undo / redo
+// ---------------------------------------------------------------------------
+
+void MainWindow::pushUndoSnapshot()
+{
+    if (m_current < 0) return;
+    SessionImage& img = m_images[m_current];
+
+    if (img.undoIndex >= 0 && img.undoIndex < img.undoStack.size()
+        && img.undoStack[img.undoIndex] == img.state)
+        return;   // nothing actually changed
+
+    // Drop redo branch
+    while (img.undoStack.size() > img.undoIndex + 1)
+        img.undoStack.removeLast();
+
+    img.undoStack.append(img.state);
+    if (img.undoStack.size() > kMaxUndoSteps)
+        img.undoStack.removeFirst();
+    img.undoIndex = img.undoStack.size() - 1;
+}
+
+void MainWindow::undo()
+{
+    if (auto* le = qobject_cast<QLineEdit*>(QApplication::focusWidget())) {
+        le->undo();
+        return;
+    }
+    if (m_current < 0) return;
+    m_undoTimer.stop();
+    pushUndoSnapshot();   // capture pending edits so redo can return here
+
+    SessionImage& img = m_images[m_current];
+    if (img.undoIndex <= 0) return;
+    --img.undoIndex;
+    img.state = img.undoStack[img.undoIndex];
+    applyParams(img.state);
+    scheduleRender();
+}
+
+void MainWindow::redo()
+{
+    if (auto* le = qobject_cast<QLineEdit*>(QApplication::focusWidget())) {
+        le->redo();
+        return;
+    }
+    if (m_current < 0) return;
+    m_undoTimer.stop();
+
+    SessionImage& img = m_images[m_current];
+    if (img.undoIndex >= img.undoStack.size() - 1) return;
+    ++img.undoIndex;
+    img.state = img.undoStack[img.undoIndex];
+    applyParams(img.state);
+    scheduleRender();
+}
+
+void MainWindow::copyToClipboard()
+{
+    if (auto* le = qobject_cast<QLineEdit*>(QApplication::focusWidget())) {
+        le->copy();
+        return;
+    }
+    if (!m_lastRender.isNull()) {
+        QApplication::clipboard()->setImage(m_lastRender);
+        m_preview->setStatus("Copied to clipboard");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session images
+// ---------------------------------------------------------------------------
+
+void MainWindow::addImages(const QStringList& paths)
+{
+    int lastAdded = -1;
+    for (const QString& path : paths) {
+        QImage img(path);
+        if (img.isNull()) {
+            QMessageBox::warning(this, "Error", "Could not load image:\n" + path);
+            continue;
+        }
+
+        SessionImage si;
+        si.name   = path.startsWith(":/") ? "example" : QFileInfo(path).fileName();
+        si.source = img;
+        si.state  = (m_current >= 0) ? collectParams() : SessionParams{};
+        si.undoStack.append(si.state);
+        si.undoIndex = 0;
+
+        m_images.append(si);
+        m_filmstrip->addThumb(img, si.name);
+        lastAdded = m_images.size() - 1;
+    }
+    if (lastAdded >= 0) switchToImage(lastAdded);
+}
+
+void MainWindow::switchToImage(int index)
+{
+    if (index < 0 || index >= m_images.size()) {
+        m_current = -1;
+        m_lastRender = {};
+        m_lastPreviewFrame = {};
+        m_showOriginalWhileSpace = false;
+        m_preview->setImage({});
+        m_preview->setStatus("Drop images here or use the orange button below");
+        m_filmstrip->setActive(-1);
+        return;
+    }
+    m_current = index;
+    applyParams(m_images[index].state);
+    m_filmstrip->setActive(index);
+    m_lastRender = {};
+    m_lastPreviewFrame = {};
+    scheduleRender();
+}
+
+void MainWindow::onAddRequested()
+{
+    const QStringList paths = QFileDialog::getOpenFileNames(
+        this, "Add Images", "",
+        "Images (*.png *.jpg *.jpeg *.bmp *.webp *.gif *.tif *.tiff);;All Files (*)");
+    if (!paths.isEmpty()) addImages(paths);
+}
+
+void MainWindow::onFilesDropped(const QStringList& paths)
+{
+    addImages(paths);
+}
+
+void MainWindow::onThumbSelected(int index)
+{
+    if (index == m_current) return;
+    switchToImage(index);
+}
+
+void MainWindow::onThumbCloseRequested(int index)
+{
+    if (index < 0 || index >= m_images.size()) return;
+    m_filmstrip->removeThumb(index);
+    m_images.removeAt(index);
+
+    if (m_images.isEmpty()) {
+        switchToImage(-1);
+    } else if (index == m_current) {
+        switchToImage(qMin(index, m_images.size() - 1));
+    } else {
+        if (index < m_current) --m_current;
+        m_filmstrip->setActive(m_current);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -112,13 +375,16 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
 
 void MainWindow::onExport()
 {
-    if (m_sourceImage.isNull()) {
+    if (m_current < 0) {
         QMessageBox::information(this, "Export", "No image loaded.");
         return;
     }
 
-    QString format = m_controls->outputFormat().toLower();
-    QString name   = m_controls->outputFileName();
+    const QImage&       source = m_images[m_current].source;
+    const SessionParams params = m_images[m_current].state;
+
+    QString format = m_left->outputFormat().toLower();
+    QString name   = m_left->outputFileName();
     if (name.isEmpty()) name = "output";
 
     QString filter;
@@ -131,25 +397,34 @@ void MainWindow::onExport()
     if (savePath.isEmpty()) return;
 
     if (format == "svg") {
+        const QImage adjusted = ImageAdjuster::apply(source, params.adjustments);
+
         QSvgGenerator gen;
         gen.setFileName(savePath);
-        gen.setSize(m_sourceImage.size());
-        gen.setViewBox(QRect(QPoint(0, 0), m_sourceImage.size()));
+        gen.setSize(adjusted.size());
+        gen.setViewBox(QRect(QPoint(0, 0), adjusted.size()));
         gen.setTitle("ULTRA_Ditherer export");
 
         QPainter painter(&gen);
-        auto params = m_controls->currentParams();
-        HalftoneRenderer renderer;
-        renderer.render(m_sourceImage, painter, params);
+        if (params.backgroundOpacity > 0.001f) {
+            QColor bg = params.background;
+            bg.setAlphaF(params.backgroundOpacity);
+            painter.fillRect(QRect(QPoint(0, 0), adjusted.size()), bg);
+        }
+        RenderWorker::renderModeInto(painter, adjusted, params);
         painter.end();
     } else {
-        QImage canvas(m_sourceImage.size(), QImage::Format_ARGB32_Premultiplied);
-        canvas.fill(Qt::transparent);
-        QPainter painter(&canvas);
-        auto params = m_controls->currentParams();
-        HalftoneRenderer renderer;
-        renderer.render(m_sourceImage, painter, params);
-        painter.end();
+        QImage canvas = RenderWorker::renderDocument(source, params);
+
+        if (format == "jpg") {
+            // JPEG has no alpha — flatten on white
+            QImage flat(canvas.size(), QImage::Format_RGB32);
+            flat.fill(Qt::white);
+            QPainter fp(&flat);
+            fp.drawImage(0, 0, canvas);
+            fp.end();
+            canvas = flat;
+        }
 
         int quality = (format == "jpg") ? 95 : -1;
         if (!canvas.save(savePath, format.toUpper().toUtf8().constData(), quality)) {
@@ -159,6 +434,5 @@ void MainWindow::onExport()
         }
     }
 
-    statusBar()->showMessage("Exported: " + savePath);
-    QMessageBox::information(this, "Export", "Saved to:\n" + savePath);
+    m_preview->setStatus("Exported: " + savePath);
 }

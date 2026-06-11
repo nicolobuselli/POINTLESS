@@ -51,16 +51,58 @@ QScrollArea > QWidget > QWidget {
 
 /* ── Separator ───────────────────────────────────────────────── */
 #separator {
-    background-color: #828282;
+    background-color: #3B3B3B;
     min-height: 1px;
     max-height: 1px;
 }
 
-/* ── Source image preview ────────────────────────────────────── */
-#sourcePreview {
-    background-color: #E3E3E3;
-    border-radius: 6px;
-    min-height: 110px;
+#vseparator {
+    background-color: #161616;
+    min-width: 1px;
+    max-width: 1px;
+}
+
+/* ── Side panels ─────────────────────────────────────────────── */
+#sidePanel {
+    background-color: #272727;
+}
+
+#exportBox {
+    background-color: #272727;
+    border-top: 1px solid #3B3B3B;
+}
+
+/* ── Mode tabs ───────────────────────────────────────────────── */
+#tabRow {
+    background-color: #1E1E1E;
+}
+
+QPushButton#tabBtn {
+    background-color: #1E1E1E;
+    color: #828282;
+    border: none;
+    border-radius: 0;
+    font-size: 10pt;
+    font-weight: 600;
+}
+QPushButton#tabBtn:hover {
+    color: #B2B2B2;
+}
+QPushButton#tabBtn:checked {
+    background-color: #272727;
+    color: #EEEEEE;
+}
+
+/* ── Filmstrip ───────────────────────────────────────────────── */
+#filmstrip {
+    background-color: #1E1E1E;
+    border-top: 1px solid #3B3B3B;
+}
+
+#filmstripScroll,
+#filmstripScroll > QWidget > QWidget,
+#filmstripRow {
+    background-color: #1E1E1E;
 }
 
 /* ── Upload / action buttons ─────────────────────────────────── */

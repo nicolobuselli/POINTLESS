@@ -6,9 +6,9 @@
 /**
  * PreviewWidget
  *
- * Custom widget that displays the halftone-processed image,
- * scaled to fit while preserving aspect ratio.
- * Shows a "drop file here" placeholder when no image is loaded.
+ * Displays the processed image, scaled to fit while preserving aspect
+ * ratio, with a checkerboard under transparent areas.
+ * Accepts image drops (multiple files at once).
  */
 class PreviewWidget : public QWidget
 {
@@ -27,7 +27,7 @@ protected:
     void dropEvent(QDropEvent* event) override;
 
 signals:
-    void fileDropped(const QString& path);
+    void filesDropped(const QStringList& paths);
 
 private:
     QImage  m_image;

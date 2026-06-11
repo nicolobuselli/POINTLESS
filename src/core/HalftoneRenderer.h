@@ -1,6 +1,6 @@
 #pragma once
 
-#include "HalftoneParams.h"
+#include "Params.h"
 #include <QImage>
 #include <QPainter>
 #include <QPainterPath>
@@ -10,18 +10,18 @@ class HalftoneRenderer
 public:
     HalftoneRenderer() = default;
 
-    void render(const QImage& input, QPainter& output, const HalftoneParams& params);
+    void render(const QImage& input, QPainter& output, const HalftoneSettings& params);
 
 private:
     struct RowJob {
-        const QImage*         input;
-        const QImage*         inputRGB;
-        QImage*               canvas;
-        const HalftoneParams* params;
-        int                   row;
-        int                   totalCols;
-        int                   gs;
-        int                   padding;
+        const QImage*           input;
+        const QImage*           inputRGB;
+        QImage*                 canvas;
+        const HalftoneSettings* params;
+        int                     row;
+        int                     totalCols;
+        int                     gs;
+        int                     padding;
     };
     static void renderRow(const RowJob& job);
 

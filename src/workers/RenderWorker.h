@@ -2,20 +2,24 @@
 
 #include <QObject>
 #include <QImage>
+#include <QPainter>
 #include <QTimer>
 #include <QFutureWatcher>
-#include "../core/HalftoneParams.h"
+#include "../core/Params.h"
 
 /**
  * RenderWorker
  *
  * Two-pass rendering strategy:
- *  1. FAST PASS — fires immediately, renders a downscaled version (max 512px)
+ *  1. FAST PASS — fires immediately, renders a downscaled version (max 600px)
  *     for instant visual feedback while the user drags sliders.
  *  2. FULL PASS — fires after FULL_DELAY_MS of inactivity, renders at
  *     full resolution.
  *
  * Both passes run on QThreadPool via QtConcurrent::run so the UI never blocks.
+ *
+ * The static helpers implement the shared document pipeline
+ * (adjustments → mode renderer → background) and are reused by export.
  */
 class RenderWorker : public QObject
 {
@@ -25,11 +29,18 @@ public:
     explicit RenderWorker(QObject* parent = nullptr);
     ~RenderWorker() override;
 
-    void requestRender(const QImage& source, const HalftoneParams& params);
+    void requestRender(const QImage& source, const SessionParams& params);
 
-    // Tune these if needed
     static constexpr int FAST_MAX_PX   = 600;   // max dimension for preview
-    static constexpr int FULL_DELAY_MS = 350;    // ms idle before full render
+    static constexpr int FULL_DELAY_MS = 350;   // ms idle before full render
+
+    // Shared pipeline ------------------------------------------------------
+    // Full raster pipeline: adjustments + background + mode renderer.
+    static QImage renderDocument(const QImage& source, const SessionParams& params);
+    // Mode renderer only, into an open painter (used for SVG export).
+    // `adjusted` must already have the adjustments applied.
+    static void   renderModeInto(QPainter& painter, const QImage& adjusted,
+                                 const SessionParams& params);
 
 signals:
     void renderComplete(QImage result, bool isPreview);
@@ -41,11 +52,11 @@ private slots:
     void onFullRenderFinished();
 
 private:
-    static QImage doRender(QImage source, HalftoneParams params);
+    static SessionParams scaledForPreview(const SessionParams& params, float scale);
 
-    QTimer         m_fullTimer;
-    QImage         m_sourceImage;
-    HalftoneParams m_latestParams;
+    QTimer        m_fullTimer;
+    QImage        m_sourceImage;
+    SessionParams m_latestParams;
 
     QFutureWatcher<QImage> m_fastWatcher;
     QFutureWatcher<QImage> m_fullWatcher;

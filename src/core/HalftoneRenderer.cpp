@@ -14,7 +14,7 @@
 // ---------------------------------------------------------------------------
 
 void HalftoneRenderer::render(const QImage& input, QPainter& output,
-                               const HalftoneParams& params)
+                               const HalftoneSettings& params)
 {
     if (input.isNull()) return;
 
@@ -61,10 +61,10 @@ void HalftoneRenderer::render(const QImage& input, QPainter& output,
 
 void HalftoneRenderer::renderRow(const RowJob& job)
 {
-    const QImage&         input    = *job.input;
-    const QImage&         inputRGB = *job.inputRGB;
-    QImage&               canvas   = *job.canvas;
-    const HalftoneParams& params   = *job.params;
+    const QImage&           input    = *job.input;
+    const QImage&           inputRGB = *job.inputRGB;
+    QImage&                 canvas   = *job.canvas;
+    const HalftoneSettings& params   = *job.params;
 
     const int gs      = job.gs;
     const int row     = job.row;
@@ -72,6 +72,7 @@ void HalftoneRenderer::renderRow(const RowJob& job)
     const int padding = job.padding;
     const int imgW    = input.width();
     const int imgH    = input.height();
+    Q_UNUSED(imgH);
 
     QPainter painter(&canvas);
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -80,13 +81,14 @@ void HalftoneRenderer::renderRow(const RowJob& job)
     QString cachedSvgPath;
 
     const auto& shapesVec = params.shapes;
-    const auto& fillsVec  = params.fills;
+    const auto& tones     = params.tonal.tones;
+    const bool  imageColors = (params.tonal.mode == ToneMode::ImageColors);
 
     for (int col = 0; col < cols; ++col) {
         int cellX = col * gs;
         int cellY = row * gs;
         int cellW = qMin(gs, imgW - cellX);
-        int cellH = qMin(gs, imgH - cellY);
+        int cellH = qMin(gs, input.height() - cellY);
 
         float cx = cellX + cellW * 0.5f;
         float cy = cellH * 0.5f + padding;
@@ -113,30 +115,14 @@ void HalftoneRenderer::renderRow(const RowJob& job)
             svgPath = shapesVec[idx].svgPath;
         }
 
-        // Fill color selection
+        // Fill color: image colors or tonal mapping
         QColor fillColor;
-        float  fillAlpha;
-
-        if (params.useImageColors) {
+        if (imageColors || tones.empty()) {
             fillColor = sampleAverageColor(inputRGB, cellX, cellY, cellW, cellH);
-            fillAlpha = fillsVec.empty() ? 1.0f : fillsVec[0].opacity;
-        } else if (fillsVec.empty()) {
-            fillColor = QColor(0xD9, 0xD9, 0xD9);
-            fillAlpha = 1.0f;
         } else {
-            fillColor = fillsVec[0].color;
-            fillAlpha = fillsVec[0].opacity;
-            if (fillsVec.size() > 1) {
-                int lumInt = static_cast<int>(lum * 255.f);
-                int n      = static_cast<int>(fillsVec.size());
-                int bias   = params.multiThreshold - 128;
-                int adj    = qBound(0, lumInt + bias, 255);
-                int idx    = qBound(0, adj * n / 256, n - 1);
-                fillColor  = fillsVec[idx].color;
-                fillAlpha  = fillsVec[idx].opacity;
-            }
+            fillColor = tones[pickToneIndex(tones, lum)].color;
         }
-        fillColor.setAlphaF(fillAlpha * params.opacity);
+        fillColor.setAlphaF(fillColor.alphaF() * params.opacity);
 
         // Jitter
         float rotationDeg = 0.0f;
@@ -186,15 +172,7 @@ void HalftoneRenderer::renderRow(const RowJob& job)
             t.rotate(rotationDeg);
             QPainterPath transformed = t.map(path);
 
-            if (params.strokeEnabled) {
-                QPen pen(params.strokeColor, params.strokeWidth);
-                pen.setJoinStyle(Qt::RoundJoin);
-                pen.setCapStyle(Qt::RoundCap);
-                painter.setPen(pen);
-            } else {
-                painter.setPen(Qt::NoPen);
-            }
-
+            painter.setPen(Qt::NoPen);
             painter.setBrush(fillColor);
             painter.drawPath(transformed);
         }
