@@ -10,6 +10,5 @@
         <file alias="icons/corner_radius.svg">../assets/icons/corner_radius.svg</file>
         <file alias="icons/arrow.svg">../assets/icons/arrow.svg</file>
         <file alias="icons/pick_color.svg">../assets/icons/pick_color.svg</file>
-        <file alias="fonts/FunnelDisplay.ttf">../assets/fonts/FunnelDisplay-VariableFont_wght.ttf</file>
-    </qresource>
+</qresource>
 </RCC>
