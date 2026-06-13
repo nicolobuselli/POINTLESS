@@ -470,11 +470,21 @@ public:
 
             m_pixelSize = new SliderRow("Pixel size", 1, 16, 2);
             m_strength  = new SliderRow("Strength",   0, 100, 100);
-            m_levels    = new SliderRow("Levels (image colors)", 2, 8, 2);
-            for (SliderRow* r : { m_pixelSize, m_strength, m_levels }) {
+            for (SliderRow* r : { m_pixelSize, m_strength }) {
                 r->onValueChanged = [this](int) { fire(); };
                 pl->addWidget(r);
             }
+
+            auto* row = new QHBoxLayout;
+            row->setContentsMargins(0, 0, 0, 0);
+            row->setSpacing(6);
+            m_opacity      = new DragSpinBox(":/icons/opacity.svg",       0, 100, 100, "%");
+            m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0,  50,   0, "");
+            m_opacity->onValueChanged      = [this](int) { fire(); };
+            m_cornerRadius->onValueChanged = [this](int) { fire(); };
+            row->addWidget(m_opacity, 1);
+            row->addWidget(m_cornerRadius, 1);
+            pl->addLayout(row);
         }
         vl->addWidget(new CollapsibleSection("Parameters", paramsContent));
 
@@ -493,11 +503,12 @@ public:
         DitherSettings s;
         s.algorithm = currentAlgorithm();
         static const int sizes[] = { 2, 4, 8, 16 };
-        s.bayerSize = sizes[qBound(0, m_matrix->currentIndex(), 3)];
-        s.pixelSize = m_pixelSize->value();
-        s.strength  = m_strength->value();
-        s.levels    = m_levels->value();
-        s.tonal     = m_tonal->settings();
+        s.bayerSize    = sizes[qBound(0, m_matrix->currentIndex(), 3)];
+        s.pixelSize    = m_pixelSize->value();
+        s.strength     = m_strength->value();
+        s.opacity      = m_opacity->value() / 100.0f;
+        s.cornerRadius = float(m_cornerRadius->value());
+        s.tonal        = m_tonal->settings();
         return s;
     }
 
@@ -533,7 +544,8 @@ public:
 
         m_pixelSize->setValue(s.pixelSize);
         m_strength->setValue(s.strength);
-        m_levels->setValue(s.levels);
+        m_opacity->setValue(qRound(s.opacity * 100));
+        m_cornerRadius->setValue(qRound(s.cornerRadius));
         m_tonal->setSettings(s.tonal);
         m_updating = false;
     }
@@ -567,7 +579,8 @@ private:
     NoWheelComboBox* m_matrix     = nullptr;
     SliderRow*       m_pixelSize  = nullptr;
     SliderRow*       m_strength   = nullptr;
-    SliderRow*       m_levels     = nullptr;
+    DragSpinBox*     m_opacity      = nullptr;
+    DragSpinBox*     m_cornerRadius = nullptr;
     TonalControlsWidget* m_tonal  = nullptr;
     bool m_updating = false;
 };
@@ -740,9 +753,9 @@ ModePanel::ModePanel(QWidget* parent)
         m_tabAscii->setProperty("tabPos", "last");
         m_tabHalftone->setChecked(true);
 
-        connect(m_tabHalftone, &QPushButton::clicked, this, [this]() { setMode(RenderMode::Halftone, true); });
-        connect(m_tabDither,   &QPushButton::clicked, this, [this]() { setMode(RenderMode::Dither,   true); });
-        connect(m_tabAscii,    &QPushButton::clicked, this, [this]() { setMode(RenderMode::Ascii,    true); });
+        connect(m_tabHalftone, &QPushButton::clicked, this, [this]() { emit modeSelected(RenderMode::Halftone); });
+        connect(m_tabDither,   &QPushButton::clicked, this, [this]() { emit modeSelected(RenderMode::Dither); });
+        connect(m_tabAscii,    &QPushButton::clicked, this, [this]() { emit modeSelected(RenderMode::Ascii); });
 
         outer->addWidget(tabRow);
     }
@@ -818,7 +831,7 @@ AsciiSettings    ModePanel::asciiSettings()    const { return m_asciiPage->setti
 QColor           ModePanel::background()        const { return m_bgSwatch->color(); }
 float            ModePanel::backgroundOpacity() const { return m_bgSwatch->opacity(); }
 
-void ModePanel::setMode(RenderMode m, bool notify)
+void ModePanel::setMode(RenderMode m)
 {
     m_mode = m;
     m_halftonePage->setVisible(m == RenderMode::Halftone);
@@ -827,17 +840,26 @@ void ModePanel::setMode(RenderMode m, bool notify)
     m_tabHalftone->setChecked(m == RenderMode::Halftone);
     m_tabDither->setChecked(m == RenderMode::Dither);
     m_tabAscii->setChecked(m == RenderMode::Ascii);
-    if (notify && !m_updating) emit paramsChanged();
 }
 
-void ModePanel::setAll(const SessionParams& p)
+void ModePanel::setFromLayer(const Layer& layer, QColor bg, float bgOpacity)
 {
     m_updating = true;
-    m_halftonePage->setSettings(p.halftone);
-    m_ditherPage->setSettings(p.dither);
-    m_asciiPage->setSettings(p.ascii);
-    m_bgSwatch->setColor(p.background);
-    m_bgSwatch->setOpacity(p.backgroundOpacity);
-    setMode(p.mode, false);
+    m_halftonePage->setSettings(layer.halftone);
+    m_ditherPage->setSettings(layer.dither);
+    m_asciiPage->setSettings(layer.ascii);
+    m_bgSwatch->setColor(bg);
+    m_bgSwatch->setOpacity(bgOpacity);
+
+    if (layer.kind != LayerKind::Original)
+        setMode(modeForLayerKind(layer.kind));
+
+    // The Original layer has no mode settings: only the left
+    // adjustments apply to it.
+    const bool editable = (layer.kind != LayerKind::Original);
+    m_halftonePage->setEnabled(editable);
+    m_ditherPage->setEnabled(editable);
+    m_asciiPage->setEnabled(editable);
+
     m_updating = false;
 }

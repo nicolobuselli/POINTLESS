@@ -14,6 +14,11 @@ class AsciiPage;
  * Tab row (Halftone / Dither / Ascii) on top, the active page's
  * settings in a scroll area, and the shared Background color
  * pinned at the bottom.
+ *
+ * The pages edit the active layer's settings. Clicking a tab emits
+ * modeSelected() so MainWindow can select (or create) a layer of
+ * that kind. When the Original layer is active the pages are
+ * disabled — only the left adjustments apply to it.
  */
 class ModePanel : public QWidget
 {
@@ -29,13 +34,14 @@ public:
     QColor           background()        const;
     float            backgroundOpacity() const;
 
-    void setAll(const SessionParams& p);   // silent
+    void setFromLayer(const Layer& layer, QColor bg, float bgOpacity);   // silent
 
 signals:
     void paramsChanged();
+    void modeSelected(RenderMode m);   // user clicked a tab
 
 private:
-    void setMode(RenderMode m, bool notify);
+    void setMode(RenderMode m);   // silent: updates tabs + visible page
 
     QPushButton* m_tabHalftone = nullptr;
     QPushButton* m_tabDither   = nullptr;

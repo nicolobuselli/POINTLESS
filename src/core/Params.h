@@ -15,6 +15,56 @@ enum class RenderMode {
 };
 
 // ============================================================
+//  Layer kinds and blend modes
+// ============================================================
+
+enum class LayerKind {
+    Original = 0,
+    Halftone = 1,
+    Dither   = 2,
+    Ascii    = 3
+};
+
+// Classic Photoshop blend modes, in Photoshop menu order.
+enum class BlendMode {
+    Normal = 0, Dissolve,
+    Darken, Multiply, ColorBurn, LinearBurn, DarkerColor,
+    Lighten, Screen, ColorDodge, LinearDodge, LighterColor,
+    Overlay, SoftLight, HardLight, VividLight, LinearLight, PinLight, HardMix,
+    Difference, Exclusion, Subtract, Divide,
+    Hue, Saturation, Color, Luminosity
+};
+
+inline LayerKind layerKindForMode(RenderMode m)
+{
+    switch (m) {
+        case RenderMode::Dither: return LayerKind::Dither;
+        case RenderMode::Ascii:  return LayerKind::Ascii;
+        default:                 return LayerKind::Halftone;
+    }
+}
+
+inline RenderMode modeForLayerKind(LayerKind k)
+{
+    switch (k) {
+        case LayerKind::Dither: return RenderMode::Dither;
+        case LayerKind::Ascii:  return RenderMode::Ascii;
+        default:                return RenderMode::Halftone;
+    }
+}
+
+inline QString layerKindName(LayerKind k)
+{
+    switch (k) {
+        case LayerKind::Original: return QStringLiteral("Original");
+        case LayerKind::Halftone: return QStringLiteral("Halftone");
+        case LayerKind::Dither:   return QStringLiteral("Dither");
+        case LayerKind::Ascii:    return QStringLiteral("Ascii");
+    }
+    return {};
+}
+
+// ============================================================
 //  Global image adjustments (left panel)
 // ============================================================
 
@@ -238,7 +288,8 @@ struct DitherSettings {
     int             bayerSize = 8;    // 2, 4, 8, 16
     int             pixelSize = 2;    // 1..16 — chunky pixels
     int             strength  = 100;  // 0..100
-    int             levels    = 2;    // 2..8 per channel (image colors mode)
+    float           opacity      = 1.0f;
+    float           cornerRadius = 0.0f;
 
     TonalSettings tonal { ToneMode::FixedTones, defaultAccentTones(1) };
 };
@@ -246,7 +297,8 @@ struct DitherSettings {
 inline bool operator==(const DitherSettings& a, const DitherSettings& b) {
     return a.algorithm == b.algorithm && a.bayerSize == b.bayerSize
         && a.pixelSize == b.pixelSize && a.strength == b.strength
-        && a.levels == b.levels && a.tonal == b.tonal;
+        && a.opacity == b.opacity && a.cornerRadius == b.cornerRadius
+        && a.tonal == b.tonal;
 }
 
 // ============================================================
@@ -296,23 +348,79 @@ inline bool operator==(const AsciiSettings& a, const AsciiSettings& b) {
 }
 
 // ============================================================
+//  Layer — one entry of the per-image layer stack
+//
+//  Each layer owns its full parameter set: its own image
+//  adjustments (the layer's embedded "reference image" is
+//  source + adjustments) plus the render settings of its kind.
+//  Multiple layers of the same kind can coexist; layers are
+//  identified by a per-session unique id.
+// ============================================================
+
+struct Layer {
+    int       id      = -1;
+    LayerKind kind    = LayerKind::Original;
+    QString   name;
+    bool      visible = true;
+    bool      pinned  = false;   // turned on by hand → survives mode switches
+    BlendMode blend   = BlendMode::Normal;
+
+    Adjustments      adjustments;   // per-layer reference image
+    HalftoneSettings halftone;      // only the struct matching `kind` is used
+    DitherSettings   dither;
+    AsciiSettings    ascii;
+};
+
+inline bool operator==(const Layer& a, const Layer& b) {
+    return a.id == b.id && a.kind == b.kind && a.name == b.name
+        && a.visible == b.visible && a.pinned == b.pinned && a.blend == b.blend
+        && a.adjustments == b.adjustments && a.halftone == b.halftone
+        && a.dither == b.dither && a.ascii == b.ascii;
+}
+inline bool operator!=(const Layer& a, const Layer& b) { return !(a == b); }
+
+inline int findLayerById(const std::vector<Layer>& layers, int id)
+{
+    for (int i = 0; i < int(layers.size()); ++i)
+        if (layers[i].id == id) return i;
+    return -1;
+}
+
+// Session default: active Halftone layer over the hidden Original.
+inline std::vector<Layer> defaultLayers()
+{
+    Layer halftone;
+    halftone.id      = 2;
+    halftone.kind    = LayerKind::Halftone;
+    halftone.name    = layerKindName(LayerKind::Halftone);
+    halftone.visible = true;
+
+    Layer original;
+    original.id      = 1;
+    original.kind    = LayerKind::Original;
+    original.name    = layerKindName(LayerKind::Original);
+    original.visible = false;
+
+    return { halftone, original };
+}
+
+// ============================================================
 //  Whole document state (used for rendering and undo/redo)
 // ============================================================
 
 struct SessionParams {
-    Adjustments      adjustments;
-    RenderMode       mode = RenderMode::Halftone;
-    HalftoneSettings halftone;
-    DitherSettings   dither;
-    AsciiSettings    ascii;
+    std::vector<Layer> layers = defaultLayers();   // UI order: 0 = top
+    int                activeLayerId = 2;          // layer edited by the panels
+    int                nextLayerId   = 3;          // id counter for new layers
 
     QColor background        = QColor(0x0A, 0x0A, 0x0A);
     float  backgroundOpacity = 1.0f;
 };
 
+// activeLayerId is deliberately ignored: selection alone is not an
+// undoable change.
 inline bool operator==(const SessionParams& a, const SessionParams& b) {
-    return a.adjustments == b.adjustments && a.mode == b.mode
-        && a.halftone == b.halftone && a.dither == b.dither && a.ascii == b.ascii
+    return a.layers == b.layers && a.nextLayerId == b.nextLayerId
         && a.background == b.background && a.backgroundOpacity == b.backgroundOpacity;
 }
 inline bool operator!=(const SessionParams& a, const SessionParams& b) { return !(a == b); }

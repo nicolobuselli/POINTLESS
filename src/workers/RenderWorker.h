@@ -35,12 +35,15 @@ public:
     static constexpr int FULL_DELAY_MS = 350;   // ms idle before full render
 
     // Shared pipeline ------------------------------------------------------
-    // Full raster pipeline: adjustments + background + mode renderer.
+    // Full raster pipeline: background + visible layers (each with its own
+    // adjustments) composited with their blend modes.
     static QImage renderDocument(const QImage& source, const SessionParams& params);
-    // Mode renderer only, into an open painter (used for SVG export).
-    // `adjusted` must already have the adjustments applied.
-    static void   renderModeInto(QPainter& painter, const QImage& adjusted,
-                                 const SessionParams& params);
+    // One layer's renderer, into an open painter (used for SVG export).
+    // `adjusted` must already have the layer's adjustments applied.
+    static void   renderLayerInto(QPainter& painter, const QImage& adjusted,
+                                  const Layer& layer);
+    // One layer rendered on a transparent canvas (layer's own adjusted size).
+    static QImage renderLayer(const QImage& source, const Layer& layer);
 
 signals:
     void renderComplete(QImage result, bool isPreview);

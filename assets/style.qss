@@ -292,6 +292,87 @@ QScrollBar::handle:vertical:hover {
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical { height: 0; }
 
+/* ── Layers panel (floating over preview) ────────────────────── */
+#layersPanel {
+    background-color: #1E1E1E;
+    border: 1px solid #3B3B3B;
+    border-radius: 10px;
+}
+
+QPushButton#layersToggleBtn {
+    background-color: #1E1E1E;
+    border: 1px solid #3B3B3B;
+    border-radius: 8px;
+}
+QPushButton#layersToggleBtn:hover {
+    background-color: #272727;
+    border-color: #5D5D5D;
+}
+QPushButton#layersToggleBtn:pressed {
+    background-color: #161616;
+}
+
+#layerRow {
+    background-color: #313131;
+    border: none;
+    border-radius: 6px;
+}
+#layerRow:hover {
+    background-color: #3B3B3B;
+}
+#layerRow[selected="true"] {
+    background-color: #FD5A1F;
+}
+#layerRow[selected="true"]:hover {
+    background-color: #FD6B35;
+}
+
+#layerName {
+    background: transparent;
+    color: #E3E3E3;
+    font-size: 9pt;
+}
+#layerRow[selected="true"] #layerName {
+    color: #FFFFFF;
+    font-weight: 600;
+}
+
+QPushButton#eyeBtn {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+}
+QPushButton#eyeBtn:hover {
+    background-color: rgba(255, 255, 255, 28);
+}
+
+QPushButton#trashBtn {
+    background-color: #313131;
+    border: 1px solid #5D5D5D;
+    border-radius: 6px;
+}
+QPushButton#trashBtn:hover {
+    background-color: #4A2A22;
+    border-color: #FD5A1F;
+}
+QPushButton#trashBtn:pressed {
+    background-color: #3B1F19;
+}
+QPushButton#trashBtn:disabled {
+    background-color: #272727;
+    border-color: #3B3B3B;
+}
+QPushButton#trashBtn[dropHover="true"] {
+    background-color: #4A2A22;
+    border-color: #FD5A1F;
+}
+
+QComboBox#blendCombo {
+    min-height: 30px;
+    background-color: #313131;
+    font-size: 9pt;
+}
+
 /* ── Splitter ────────────────────────────────────────────────── */
 QSplitter::handle {
     background-color: #3B3B3B;

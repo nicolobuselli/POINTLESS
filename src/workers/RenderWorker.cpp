@@ -3,6 +3,7 @@
 #include "../core/HalftoneRenderer.h"
 #include "../core/DitherRenderer.h"
 #include "../core/AsciiRenderer.h"
+#include "../core/BlendCompositor.h"
 
 #include <QPainter>
 #include <QtConcurrent/QtConcurrent>
@@ -10,16 +11,17 @@
 
 namespace {
 
-float symbolSupersampleFactor(const SessionParams& params, const QSize& size)
+float symbolSupersampleFactor(const Layer& layer, const QSize& size)
 {
-    if (params.mode == RenderMode::Dither) return 1.0f;
+    if (layer.kind == LayerKind::Dither || layer.kind == LayerKind::Original)
+        return 1.0f;
 
     float target = 1.0f;
-    if (params.mode == RenderMode::Halftone) {
-        const int dpi = qBound(18, params.halftone.inputDpi, 300);
+    if (layer.kind == LayerKind::Halftone) {
+        const int dpi = qBound(18, layer.halftone.inputDpi, 300);
         target = qBound(1.0f, 72.0f / float(dpi), 2.0f);
-    } else if (params.mode == RenderMode::Ascii) {
-        const int cell = qBound(4, params.ascii.cellSize, 128);
+    } else if (layer.kind == LayerKind::Ascii) {
+        const int cell = qBound(4, layer.ascii.cellSize, 128);
         target = qBound(1.0f, 20.0f / float(cell), 1.6f);
     }
 
@@ -38,12 +40,16 @@ float symbolSupersampleFactor(const SessionParams& params, const QSize& size)
 // Shared pipeline (runs on thread pool, also used by export)
 // ---------------------------------------------------------------------------
 
-void RenderWorker::renderModeInto(QPainter& painter, const QImage& adjusted,
-                                  const SessionParams& params)
+void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
+                                   const Layer& layer)
 {
-    switch (params.mode) {
-        case RenderMode::Halftone: {
-            const HalftoneSettings& hs = params.halftone;
+    switch (layer.kind) {
+        case LayerKind::Original: {
+            painter.drawImage(0, 0, adjusted);
+            break;
+        }
+        case LayerKind::Halftone: {
+            const HalftoneSettings& hs = layer.halftone;
             float scale = qBound(18, hs.inputDpi, 300) / 72.0f;
 
             // Clamp the working resolution to something sane.
@@ -68,55 +74,82 @@ void RenderWorker::renderModeInto(QPainter& painter, const QImage& adjusted,
             }
             break;
         }
-        case RenderMode::Dither: {
-            QImage d = DitherRenderer::render(adjusted, params.dither);
+        case LayerKind::Dither: {
+            QImage d = DitherRenderer::render(adjusted, layer.dither);
             painter.save();
             painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
             painter.drawImage(QRect(0, 0, adjusted.width(), adjusted.height()), d);
             painter.restore();
             break;
         }
-        case RenderMode::Ascii: {
-            AsciiRenderer::render(adjusted, painter, params.ascii);
+        case LayerKind::Ascii: {
+            AsciiRenderer::render(adjusted, painter, layer.ascii);
             break;
         }
     }
 }
 
-QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& params)
+QImage RenderWorker::renderLayer(const QImage& source, const Layer& layer)
 {
-    if (source.isNull()) return {};
+    // Every layer renders from its own embedded reference image.
+    const QImage adjusted = ImageAdjuster::apply(source, layer.adjustments);
 
-    const QImage adjusted = ImageAdjuster::apply(source, params.adjustments);
+    if (layer.kind == LayerKind::Original)
+        return adjusted.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+
     const QSize outSize = adjusted.size();
-    const float ss = symbolSupersampleFactor(params, outSize);
-
-    QColor bg = params.background;
-    bg.setAlphaF(params.backgroundOpacity);
+    const float ss = symbolSupersampleFactor(layer, outSize);
 
     if (ss > 1.01f) {
         const int hiW = qMax(1, qRound(outSize.width() * ss));
         const int hiH = qMax(1, qRound(outSize.height() * ss));
 
         QImage hi(hiW, hiH, QImage::Format_ARGB32_Premultiplied);
-        hi.fill(bg);
+        hi.fill(Qt::transparent);
 
         QPainter hp(&hi);
         hp.setRenderHint(QPainter::Antialiasing, true);
         hp.setRenderHint(QPainter::TextAntialiasing, true);
         hp.scale(qreal(hiW) / outSize.width(), qreal(hiH) / outSize.height());
-        renderModeInto(hp, adjusted, params);
+        renderLayerInto(hp, adjusted, layer);
         hp.end();
 
         return hi.scaled(outSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
 
+    QImage img(outSize, QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::transparent);
+
+    QPainter painter(&img);
+    renderLayerInto(painter, adjusted, layer);
+    painter.end();
+
+    return img;
+}
+
+QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& params)
+{
+    if (source.isNull()) return {};
+
+    // Canvas size is the source size; layers whose Size% adjustment
+    // resamples the reference are fitted back onto the canvas.
+    const QSize outSize = source.size();
+
+    QColor bg = params.background;
+    bg.setAlphaF(params.backgroundOpacity);
+
     QImage canvas(outSize, QImage::Format_ARGB32_Premultiplied);
     canvas.fill(bg);
 
-    QPainter painter(&canvas);
-    renderModeInto(painter, adjusted, params);
-    painter.end();
+    // Layer stack is stored top→bottom (UI order); composite bottom→top.
+    for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
+        if (!it->visible) continue;
+        QImage layerImg = renderLayer(source, *it);
+        if (layerImg.size() != outSize)
+            layerImg = layerImg.scaled(outSize, Qt::IgnoreAspectRatio,
+                                       Qt::SmoothTransformation);
+        BlendCompositor::compositeOver(canvas, layerImg, it->blend);
+    }
 
     return canvas;
 }
@@ -156,9 +189,11 @@ void RenderWorker::requestRender(const QImage& source, const SessionParams& para
 SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float scale)
 {
     SessionParams p = params;
-    p.ascii.cellSize    = qMax(3, int(params.ascii.cellSize * scale));
-    p.dither.pixelSize  = qMax(1, qRound(params.dither.pixelSize * scale));
-    p.adjustments.sharpenRadius = qMax(1, qRound(params.adjustments.sharpenRadius * scale));
+    for (Layer& l : p.layers) {
+        l.ascii.cellSize   = qMax(3, int(l.ascii.cellSize * scale));
+        l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize * scale));
+        l.adjustments.sharpenRadius = qMax(1, qRound(l.adjustments.sharpenRadius * scale));
+    }
     return p;
 }
 
@@ -177,13 +212,14 @@ void RenderWorker::launchFast()
         const float downscale = float(FAST_MAX_PX) / float(maxDim);
         previewParams = scaledForPreview(m_latestParams, downscale);
 
-        if (previewParams.mode == RenderMode::Halftone) {
-            // Keep preview and full render at the same effective halftone scale.
-            const float requestedScale = qBound(18, previewParams.halftone.inputDpi, 300) / 72.0f;
+        // Keep preview and full render at the same effective halftone scale.
+        for (Layer& l : previewParams.layers) {
+            if (l.kind != LayerKind::Halftone) continue;
+            const float requestedScale = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
             const float fullScaleMaxBySize = 6000.0f / float(maxDim);
             const float fullScaleMinBySize = 16.0f / float(maxDim);
             const float effectiveFullScale = qBound(fullScaleMinBySize, requestedScale, fullScaleMaxBySize);
-            previewParams.halftone.inputDpi = qBound(18, qRound(effectiveFullScale * 72.0f), 300);
+            l.halftone.inputDpi = qBound(18, qRound(effectiveFullScale * 72.0f), 300);
         }
     }
 

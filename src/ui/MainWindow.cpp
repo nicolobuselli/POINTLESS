@@ -3,6 +3,7 @@
 #include "AdjustmentsPanel.h"
 #include "ModePanel.h"
 #include "FilmstripWidget.h"
+#include "LayersPanel.h"
 #include "Widgets.h"
 #include "../workers/RenderWorker.h"
 #include "../core/ImageAdjuster.h"
@@ -59,6 +60,8 @@ MainWindow::MainWindow(QWidget* parent)
     cv->addWidget(m_preview, 1);
     cv->addWidget(m_filmstrip);
 
+    m_layersPanel = new LayersPanel(m_preview);
+
     m_right = new ModePanel;
 
     hl->addWidget(m_left);
@@ -76,20 +79,30 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_left,  &AdjustmentsPanel::exportRequested,    this, &MainWindow::onExport);
     connect(m_left,  &AdjustmentsPanel::resetRequested,     this, [this]() {
         if (m_current < 0) return;
-        SessionParams p = m_images[m_current].state;
-        p.adjustments = Adjustments{};
-        m_images[m_current].state = p;
-        applyParams(p);
-        scheduleRender();
-        m_undoTimer.start();
+        if (Layer* l = activeLayer()) {
+            l->adjustments = Adjustments{};
+            applyParams(m_images[m_current].state);
+            syncLayersPanel();
+            scheduleRender();
+            m_undoTimer.start();
+        }
     });
     connect(m_right, &ModePanel::paramsChanged,             this, &MainWindow::onParamsChanged);
+    connect(m_right, &ModePanel::modeSelected,              this, &MainWindow::onModeSelected);
 
     connect(m_preview,   &PreviewWidget::filesDropped,           this, &MainWindow::onFilesDropped);
     connect(m_filmstrip, &FilmstripWidget::filesDropped,         this, &MainWindow::onFilesDropped);
     connect(m_filmstrip, &FilmstripWidget::addRequested,         this, &MainWindow::onAddRequested);
     connect(m_filmstrip, &FilmstripWidget::thumbSelected,        this, &MainWindow::onThumbSelected);
     connect(m_filmstrip, &FilmstripWidget::thumbCloseRequested,  this, &MainWindow::onThumbCloseRequested);
+
+    connect(m_layersPanel, &LayersPanel::visibilityToggled, this, &MainWindow::onLayerVisibilityToggled);
+    connect(m_layersPanel, &LayersPanel::layerSelected,     this, &MainWindow::onLayerSelected);
+    connect(m_layersPanel, &LayersPanel::layerRenamed,      this, &MainWindow::onLayerRenamed);
+    connect(m_layersPanel, &LayersPanel::deleteRequested,   this, &MainWindow::onLayerDeleteRequested);
+    connect(m_layersPanel, &LayersPanel::blendModeChanged,  this, &MainWindow::onLayerBlendChanged);
+    connect(m_layersPanel, &LayersPanel::addLayerRequested, this, &MainWindow::onAddLayerRequested);
+    connect(m_layersPanel, &LayersPanel::reorderRequested,  this, &MainWindow::onLayerReordered);
 
     connect(m_worker, &RenderWorker::renderComplete, this, &MainWindow::onRenderComplete);
     connect(m_worker, &RenderWorker::renderStarted, this, [this](bool isPreview) {
@@ -124,7 +137,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     if (!editableFocus) {
         if (event->type() == QEvent::ShortcutOverride) {
             auto* keyEvent = static_cast<QKeyEvent*>(event);
-            if (keyEvent->key() == Qt::Key_Space || keyEvent->key() == Qt::Key_Shift) {
+            if (keyEvent->key() == Qt::Key_Space || keyEvent->key() == Qt::Key_CapsLock) {
                 event->accept();
                 return true;
             }
@@ -140,9 +153,9 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
                 event->accept();
                 return true;
             }
-            if (keyEvent->key() == Qt::Key_Shift) {
+            if (keyEvent->key() == Qt::Key_CapsLock) {
                 if (!keyEvent->isAutoRepeat()) {
-                    m_shiftDown = true;
+                    m_capsLockActive = !m_capsLockActive;
                     updatePreviewInteractionState();
                 }
                 event->accept();
@@ -153,12 +166,6 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             if (!keyEvent->isAutoRepeat()) {
                 if (keyEvent->key() == Qt::Key_Space) {
                     m_spaceDown = false;
-                    updatePreviewInteractionState();
-                    event->accept();
-                    return true;
-                }
-                if (keyEvent->key() == Qt::Key_Shift) {
-                    m_shiftDown = false;
                     updatePreviewInteractionState();
                     event->accept();
                     return true;
@@ -177,10 +184,11 @@ void MainWindow::updateDisplayedPreview()
         return;
     }
 
-    if (m_showOriginalWhileSpace) {
+    if (m_capsLockActive) {
+        const Layer* l = activeLayer();
         const QImage adjustedOnly = ImageAdjuster::apply(
             m_images[m_current].source,
-            m_images[m_current].state.adjustments);
+            l ? l->adjustments : Adjustments{});
         m_preview->setOriginalImage(adjustedOnly);
         m_preview->setShowOriginal(true);
         m_preview->setImage(adjustedOnly);
@@ -201,20 +209,21 @@ void MainWindow::updateDisplayedPreview()
 
 void MainWindow::updatePreviewInteractionState()
 {
-    m_showOriginalWhileSpace = m_shiftDown;
+    const bool capsLockActive = m_capsLockActive;
 
     if (m_current >= 0) {
+        const Layer* l = activeLayer();
         const QImage adjustedOnly = ImageAdjuster::apply(
             m_images[m_current].source,
-            m_images[m_current].state.adjustments);
+            l ? l->adjustments : Adjustments{});
         m_preview->setOriginalImage(adjustedOnly);
     }
 
-    m_preview->setPanMode(m_spaceDown && !m_shiftDown);
+    m_preview->setPanMode(m_spaceDown && !capsLockActive);
     updateDisplayedPreview();
 
-    if (m_shiftDown) {
-        m_preview->setStatus("Original + adjustments (hold Shift)");
+    if (capsLockActive) {
+        m_preview->setStatus("Original + adjustments (Caps Lock active)");
     } else if (m_spaceDown) {
         m_preview->setStatus("Pan (hold Space and drag)");
     } else if (!m_lastRender.isNull()) {
@@ -238,29 +247,265 @@ void MainWindow::keyReleaseEvent(QKeyEvent* event)
 // Params <-> panels
 // ---------------------------------------------------------------------------
 
+Layer* MainWindow::activeLayer()
+{
+    if (m_current < 0) return nullptr;
+    auto& st = m_images[m_current].state;
+    const int idx = findLayerById(st.layers, st.activeLayerId);
+    return (idx >= 0) ? &st.layers[idx] : nullptr;
+}
+
+const Layer* MainWindow::activeLayer() const
+{
+    if (m_current < 0) return nullptr;
+    const auto& st = m_images[m_current].state;
+    const int idx = findLayerById(st.layers, st.activeLayerId);
+    return (idx >= 0) ? &st.layers[idx] : nullptr;
+}
+
+// Panels → state: writes the panel values into the active layer.
 SessionParams MainWindow::collectParams() const
 {
-    SessionParams p;
-    p.adjustments       = m_left->adjustments();
-    p.mode              = m_right->mode();
-    p.halftone          = m_right->halftoneSettings();
-    p.dither            = m_right->ditherSettings();
-    p.ascii             = m_right->asciiSettings();
+    SessionParams p = (m_current >= 0) ? m_images[m_current].state : SessionParams{};
+
+    const int idx = findLayerById(p.layers, p.activeLayerId);
+    if (idx >= 0) {
+        Layer& l = p.layers[idx];
+        l.adjustments = m_left->adjustments();
+        switch (l.kind) {
+            case LayerKind::Halftone: l.halftone = m_right->halftoneSettings(); break;
+            case LayerKind::Dither:   l.dither   = m_right->ditherSettings();   break;
+            case LayerKind::Ascii:    l.ascii    = m_right->asciiSettings();    break;
+            case LayerKind::Original: break;   // only adjustments apply
+        }
+    }
+
     p.background        = m_right->background();
     p.backgroundOpacity = m_right->backgroundOpacity();
     return p;
 }
 
+// State → panels: shows the active layer's values.
 void MainWindow::applyParams(const SessionParams& p)
 {
-    m_left->setAdjustments(p.adjustments);
-    m_right->setAll(p);
+    int idx = findLayerById(p.layers, p.activeLayerId);
+    if (idx < 0 && !p.layers.empty()) idx = 0;
+    if (idx < 0) return;
+
+    const Layer& l = p.layers[idx];
+    m_left->setAdjustments(l.adjustments);
+    m_right->setFromLayer(l, p.background, p.backgroundOpacity);
+}
+
+void MainWindow::syncLayersPanel()
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+    if (findLayerById(st.layers, st.activeLayerId) < 0 && !st.layers.empty())
+        st.activeLayerId = st.layers[0].id;
+    m_layersPanel->setBackground(st.background, st.backgroundOpacity);
+    m_layersPanel->setLayers(st.layers, st.activeLayerId);
 }
 
 void MainWindow::onParamsChanged()
 {
     if (m_current < 0) return;
     m_images[m_current].state = collectParams();
+    syncLayersPanel();   // row thumbs follow the layer's adjustments
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+// ---------------------------------------------------------------------------
+// Layers
+// ---------------------------------------------------------------------------
+
+// Selects a layer; if it is a mode layer, it becomes visible and every
+// other layer the user did not pin (turn on by hand) is turned off.
+void MainWindow::selectLayerInternal(int layerId, bool makeVisible)
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+    const int idx = findLayerById(st.layers, layerId);
+    if (idx < 0) return;
+
+    st.activeLayerId = layerId;
+
+    if (makeVisible && st.layers[idx].kind != LayerKind::Original) {
+        for (Layer& l : st.layers) {
+            if (l.id == layerId)  l.visible = true;
+            else if (!l.pinned)   l.visible = false;
+        }
+    }
+
+    applyParams(st);
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+QString MainWindow::uniqueLayerName(const SessionParams& p, LayerKind kind) const
+{
+    const QString base = layerKindName(kind);
+    int count = 0;
+    for (const Layer& l : p.layers)
+        if (l.kind == kind) ++count;
+    if (count == 0) return base;
+
+    int n = count + 1;
+    auto exists = [&p](const QString& name) {
+        for (const Layer& l : p.layers)
+            if (l.name == name) return true;
+        return false;
+    };
+    QString candidate = base + " " + QString::number(n);
+    while (exists(candidate))
+        candidate = base + " " + QString::number(++n);
+    return candidate;
+}
+
+void MainWindow::onModeSelected(RenderMode m)
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+    const LayerKind kind = layerKindForMode(m);
+
+    const Layer* act = activeLayer();
+    if (act && act->kind == kind) {
+        applyParams(st);   // restore tab checked state
+        return;
+    }
+
+    // Topmost existing layer of that kind, or a brand new one.
+    int idx = -1;
+    for (int i = 0; i < int(st.layers.size()); ++i)
+        if (st.layers[i].kind == kind) { idx = i; break; }
+
+    if (idx < 0) {
+        Layer nl;
+        nl.kind = kind;
+        nl.id   = st.nextLayerId++;
+        nl.name = uniqueLayerName(st, kind);
+        st.layers.insert(st.layers.begin(), nl);
+        idx = 0;
+    }
+
+    selectLayerInternal(st.layers[idx].id, true);
+}
+
+void MainWindow::onLayerVisibilityToggled(int layerId, bool visible)
+{
+    if (m_current < 0) return;
+    auto& layers = m_images[m_current].state.layers;
+    const int idx = findLayerById(layers, layerId);
+    if (idx < 0) return;
+
+    layers[idx].visible = visible;
+    layers[idx].pinned  = visible;   // hand-toggled layers survive switches
+
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+void MainWindow::onLayerSelected(int layerId)
+{
+    if (m_current < 0) return;
+    if (m_images[m_current].state.activeLayerId == layerId) return;
+    selectLayerInternal(layerId, true);
+}
+
+void MainWindow::onLayerRenamed(int layerId, const QString& name)
+{
+    if (m_current < 0) return;
+    auto& layers = m_images[m_current].state.layers;
+    const int idx = findLayerById(layers, layerId);
+    if (idx < 0) return;
+    layers[idx].name = name;
+    syncLayersPanel();
+    m_undoTimer.start();
+}
+
+void MainWindow::onLayerDeleteRequested(int layerId)
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+
+    const int idx = findLayerById(st.layers, layerId);
+    if (idx < 0 || st.layers[idx].kind == LayerKind::Original) return;
+
+    const bool wasActive = (st.activeLayerId == layerId);
+    st.layers.erase(st.layers.begin() + idx);
+
+    if (wasActive && !st.layers.empty()) {
+        // Follow the topmost remaining mode layer; fall back to the top.
+        int ni = 0;
+        for (int i = 0; i < int(st.layers.size()); ++i)
+            if (st.layers[i].kind != LayerKind::Original) { ni = i; break; }
+        selectLayerInternal(st.layers[ni].id, true);
+        return;
+    }
+
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+void MainWindow::onLayerBlendChanged(int layerId, BlendMode mode)
+{
+    if (m_current < 0) return;
+    auto& layers = m_images[m_current].state.layers;
+    const int idx = findLayerById(layers, layerId);
+    if (idx < 0) return;
+
+    layers[idx].blend = mode;
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+void MainWindow::onAddLayerRequested()
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+
+    const Layer* act = activeLayer();
+    Layer nl;
+    int insertAt = 0;
+    if (act && act->kind != LayerKind::Original) {
+        nl = *act;   // duplicate the selected layer, settings included
+        insertAt = findLayerById(st.layers, act->id);
+    } else {
+        nl.kind = layerKindForMode(m_right->mode());
+    }
+    nl.id      = st.nextLayerId++;
+    nl.name    = uniqueLayerName(st, nl.kind);
+    nl.visible = true;
+    nl.pinned  = false;
+
+    st.layers.insert(st.layers.begin() + qMax(0, insertAt), nl);
+    st.activeLayerId = nl.id;
+
+    applyParams(st);
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+void MainWindow::onLayerReordered(int layerId, int insertIndex)
+{
+    if (m_current < 0) return;
+    auto& layers = m_images[m_current].state.layers;
+
+    const int from = findLayerById(layers, layerId);
+    if (from < 0) return;
+
+    const Layer moved = layers[from];
+    layers.erase(layers.begin() + from);
+    if (insertIndex > from) --insertIndex;
+    insertIndex = qBound(0, insertIndex, int(layers.size()));
+    layers.insert(layers.begin() + insertIndex, moved);
+
+    syncLayersPanel();
     scheduleRender();
     m_undoTimer.start();
 }
@@ -279,9 +524,10 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
         m_lastRender = result;
     }
     if (m_current >= 0) {
+        const Layer* l = activeLayer();
         m_preview->setOriginalImage(ImageAdjuster::apply(
             m_images[m_current].source,
-            m_images[m_current].state.adjustments));
+            l ? l->adjustments : Adjustments{}));
     }
     updateDisplayedPreview();
     m_preview->setStatus(isPreview ? "Preview (full render pending…)" : "Done");
@@ -325,6 +571,7 @@ void MainWindow::undo()
     --img.undoIndex;
     img.state = img.undoStack[img.undoIndex];
     applyParams(img.state);
+    syncLayersPanel();
     scheduleRender();
 }
 
@@ -342,6 +589,7 @@ void MainWindow::redo()
     ++img.undoIndex;
     img.state = img.undoStack[img.undoIndex];
     applyParams(img.state);
+    syncLayersPanel();
     scheduleRender();
 }
 
@@ -391,9 +639,8 @@ void MainWindow::switchToImage(int index)
         m_current = -1;
         m_lastRender = {};
         m_lastPreviewFrame = {};
-        m_showOriginalWhileSpace = false;
+        m_capsLockActive = false;
         m_spaceDown = false;
-        m_shiftDown = false;
         m_preview->setPanMode(false);
         m_preview->setShowOriginal(false);
         m_preview->resetZoom();
@@ -401,17 +648,20 @@ void MainWindow::switchToImage(int index)
         m_preview->setStatus("Drop images here or use the orange button below");
         m_filmstrip->setActive(-1);
         m_left->setSourceImage({});
+        m_layersPanel->setVisible(false);
         return;
     }
     m_current = index;
     m_left->setSourceImage(m_images[index].source);
     applyParams(m_images[index].state);
     m_filmstrip->setActive(index);
+    m_layersPanel->setVisible(true);
+    m_layersPanel->setSourceImage(m_images[index].source);
+    syncLayersPanel();
     m_lastRender = {};
     m_lastPreviewFrame = {};
     m_spaceDown = false;
-    m_shiftDown = false;
-    m_showOriginalWhileSpace = false;
+    m_capsLockActive = false;
     m_preview->setPanMode(false);
     m_preview->setShowOriginal(false);
     m_preview->resetZoom();
@@ -490,21 +740,34 @@ void MainWindow::onExport()
     if (savePath.isEmpty()) return;
 
     if (format == "svg") {
-        const QImage adjusted = ImageAdjuster::apply(source, params.adjustments);
+        const QSize outSize = source.size();
 
         QSvgGenerator gen;
         gen.setFileName(savePath);
-        gen.setSize(adjusted.size());
-        gen.setViewBox(QRect(QPoint(0, 0), adjusted.size()));
+        gen.setSize(outSize);
+        gen.setViewBox(QRect(QPoint(0, 0), outSize));
         gen.setTitle("ULTRA_Ditherer export");
 
         QPainter painter(&gen);
         if (params.backgroundOpacity > 0.001f) {
             QColor bg = params.background;
             bg.setAlphaF(params.backgroundOpacity);
-            painter.fillRect(QRect(QPoint(0, 0), adjusted.size()), bg);
+            painter.fillRect(QRect(QPoint(0, 0), outSize), bg);
         }
-        RenderWorker::renderModeInto(painter, adjusted, params);
+        // Visible layers bottom→top, each from its own reference image.
+        // SVG cannot carry the raster blend modes, so layers are painted
+        // with normal compositing here.
+        for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
+            if (!it->visible) continue;
+            const QImage adjusted = ImageAdjuster::apply(source, it->adjustments);
+            painter.save();
+            if (adjusted.size() != outSize && !adjusted.isNull()) {
+                painter.scale(qreal(outSize.width())  / adjusted.width(),
+                              qreal(outSize.height()) / adjusted.height());
+            }
+            RenderWorker::renderLayerInto(painter, adjusted, *it);
+            painter.restore();
+        }
         painter.end();
     } else {
         QImage canvas = RenderWorker::renderDocument(source, params);

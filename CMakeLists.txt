@@ -28,6 +28,8 @@ set(SOURCES
     src/core/DitherRenderer.h
     src/core/AsciiRenderer.cpp
     src/core/AsciiRenderer.h
+    src/core/BlendCompositor.cpp
+    src/core/BlendCompositor.h
 
     # Workers
     src/workers/RenderWorker.cpp
@@ -48,6 +50,8 @@ set(SOURCES
     src/ui/ModePanel.h
     src/ui/FilmstripWidget.cpp
     src/ui/FilmstripWidget.h
+    src/ui/LayersPanel.cpp
+    src/ui/LayersPanel.h
 
     # Resources
     src/resources.qrc

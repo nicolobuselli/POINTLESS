@@ -12,6 +12,7 @@ class PreviewWidget;
 class AdjustmentsPanel;
 class ModePanel;
 class FilmstripWidget;
+class LayersPanel;
 class RenderWorker;
 
 /**
@@ -39,6 +40,14 @@ private slots:
     void onFilesDropped(const QStringList& paths);
     void onThumbSelected(int index);
     void onThumbCloseRequested(int index);
+    void onModeSelected(RenderMode m);
+    void onLayerVisibilityToggled(int layerId, bool visible);
+    void onLayerSelected(int layerId);
+    void onLayerRenamed(int layerId, const QString& name);
+    void onLayerDeleteRequested(int layerId);
+    void onLayerBlendChanged(int layerId, BlendMode mode);
+    void onAddLayerRequested();
+    void onLayerReordered(int layerId, int insertIndex);
     void undo();
     void redo();
     void copyToClipboard();
@@ -54,6 +63,11 @@ private:
 
     SessionParams collectParams() const;
     void applyParams(const SessionParams& p);
+    Layer* activeLayer();
+    const Layer* activeLayer() const;
+    void selectLayerInternal(int layerId, bool makeVisible);
+    QString uniqueLayerName(const SessionParams& p, LayerKind kind) const;
+    void syncLayersPanel();
     void scheduleRender();
     void pushUndoSnapshot();
     void addImages(const QStringList& paths);
@@ -67,19 +81,19 @@ protected:
     void keyReleaseEvent(QKeyEvent* event) override;
 
 private:
-    AdjustmentsPanel* m_left      = nullptr;
-    ModePanel*        m_right     = nullptr;
-    PreviewWidget*    m_preview   = nullptr;
-    FilmstripWidget*  m_filmstrip = nullptr;
-    RenderWorker*     m_worker    = nullptr;
+    AdjustmentsPanel* m_left        = nullptr;
+    ModePanel*        m_right       = nullptr;
+    PreviewWidget*    m_preview     = nullptr;
+    FilmstripWidget*  m_filmstrip   = nullptr;
+    LayersPanel*      m_layersPanel = nullptr;
+    RenderWorker*     m_worker      = nullptr;
 
     QVector<SessionImage> m_images;
     int                   m_current = -1;
 
     QImage m_lastRender;
     QImage m_lastPreviewFrame;
-    bool   m_showOriginalWhileSpace = false;
+    bool   m_capsLockActive = false;
     bool   m_spaceDown = false;
-    bool   m_shiftDown = false;
     QTimer m_undoTimer;
 };

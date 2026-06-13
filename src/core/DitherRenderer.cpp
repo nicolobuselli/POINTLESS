@@ -1,5 +1,7 @@
 #include "DitherRenderer.h"
 
+#include <QPainter>
+#include <QPainterPath>
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
@@ -301,8 +303,119 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
     else if (isHybrid (s.algorithm)) renderDotDiffusion(work, out, s);
     else                             renderDiffusion    (work, out, s);
 
-    if (ps > 1)
-        out = out.scaled(input.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    if (ps > 1) {
+        if (s.cornerRadius > 0.0f) {
+            const int ow = out.width();
+            const int oh = out.height();
+
+            // Identify highlight color: the fixed tone with the lowest level (darkest).
+            // Image-colors mode has no single ink color — skip connected rounding.
+            const bool imageColors = (s.tonal.mode == ToneMode::ImageColors);
+            quint32 inkRgb = 0;
+            bool hasInk = false;
+            if (!imageColors && !s.tonal.tones.empty()) {
+                const ToneEntry* darkest = &s.tonal.tones[0];
+                for (const auto& t : s.tonal.tones)
+                    if (t.level < darkest->level) darkest = &t;
+                inkRgb = quint32(darkest->color.rgb()) & 0x00FFFFFFu;
+                hasInk = true;
+            }
+
+            auto cellRgb = [&](int col, int row) -> quint32 {
+                if (col < 0 || col >= ow || row < 0 || row >= oh) return 0u;
+                const QRgb px = reinterpret_cast<const QRgb*>(out.constScanLine(row))[col];
+                return (qAlpha(px) > 0) ? (quint32(px) & 0x00FFFFFFu) : 0u;
+            };
+
+            auto isInkCell = [&](int col, int row) -> bool {
+                return hasInk && cellRgb(col, row) == inkRgb;
+            };
+
+            QImage finalOut(input.size(), QImage::Format_ARGB32);
+            finalOut.fill(Qt::transparent);
+            QPainter painter(&finalOut);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setPen(Qt::NoPen);
+            const float cr = qMin(s.cornerRadius, float(ps) * 0.5f);
+
+            for (int row = 0; row < oh; ++row) {
+                const QRgb* line = reinterpret_cast<const QRgb*>(out.constScanLine(row));
+                for (int col = 0; col < ow; ++col) {
+                    const QRgb px = line[col];
+                    if (qAlpha(px) == 0) continue;
+
+                    painter.setBrush(QColor(px));
+                    const float x0 = float(col * ps);
+                    const float y0 = float(row * ps);
+                    const float x1 = x0 + ps;
+                    const float y1 = y0 + ps;
+
+                    if (isInkCell(col, row)) {
+                        // Round only convex (outer) corners of the merged ink shape.
+                        const bool left  = isInkCell(col - 1, row);
+                        const bool right = isInkCell(col + 1, row);
+                        const bool up    = isInkCell(col,     row - 1);
+                        const bool down  = isInkCell(col,     row + 1);
+
+                        const bool roundTL = !left && !up;
+                        const bool roundTR = !right && !up;
+                        const bool roundBR = !right && !down;
+                        const bool roundBL = !left  && !down;
+
+                        QPainterPath path;
+                        path.moveTo(roundTL ? x0 + cr : x0, y0);
+
+                        if (roundTR) {
+                            path.lineTo(x1 - cr, y0);
+                            path.arcTo(x1 - 2*cr, y0, 2*cr, 2*cr, 90, -90);
+                        } else {
+                            path.lineTo(x1, y0);
+                        }
+                        if (roundBR) {
+                            path.lineTo(x1, y1 - cr);
+                            path.arcTo(x1 - 2*cr, y1 - 2*cr, 2*cr, 2*cr, 0, -90);
+                        } else {
+                            path.lineTo(x1, y1);
+                        }
+                        if (roundBL) {
+                            path.lineTo(x0 + cr, y1);
+                            path.arcTo(x0, y1 - 2*cr, 2*cr, 2*cr, 270, -90);
+                        } else {
+                            path.lineTo(x0, y1);
+                        }
+                        if (roundTL) {
+                            path.lineTo(x0, y0 + cr);
+                            path.arcTo(x0, y0, 2*cr, 2*cr, 180, -90);
+                        } else {
+                            path.lineTo(x0, y0);
+                        }
+                        path.closeSubpath();
+                        painter.drawPath(path);
+                    } else {
+                        // Non-ink colors: plain square, no rounding.
+                        painter.drawRect(QRectF(x0, y0, float(ps), float(ps)));
+                    }
+                }
+            }
+            out = finalOut;
+        } else {
+            out = out.scaled(input.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
+        }
+    }
+
+    // Apply opacity after compositing to avoid seams on shared edges.
+    if (s.opacity < 1.0f) {
+        const float op = qBound(0.0f, s.opacity, 1.0f);
+        for (int y = 0; y < out.height(); ++y) {
+            QRgb* line = reinterpret_cast<QRgb*>(out.scanLine(y));
+            for (int x = 0; x < out.width(); ++x) {
+                const QRgb px = line[x];
+                if (qAlpha(px) == 0) continue;
+                line[x] = qRgba(qRed(px), qGreen(px), qBlue(px),
+                                qRound(qAlpha(px) * op));
+            }
+        }
+    }
 
     return out;
 }
@@ -337,7 +450,7 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
     const auto  tones       = sortedTones(s.tonal.tones);
     const int   nTones      = int(tones.size());
-    const int   L           = qBound(2, s.levels, 8);
+    const int   L           = 2;
     const float step        = 255.0f / float(L - 1);
 
     float inkLum = 0.0f;
@@ -406,7 +519,7 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
     const auto  tones       = sortedTones(s.tonal.tones);
     const int   nTones      = int(tones.size());
-    const int   L           = qBound(2, s.levels, 8);
+    const int   L           = 2;
 
     // --- Prepare the threshold lookup for this algorithm --------
     // Returns a threshold in [0,1] for pixel (x,y).
@@ -524,7 +637,7 @@ void DitherRenderer::renderDotDiffusion(const QImage& work, QImage& out,
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
     const auto  tones       = sortedTones(s.tonal.tones);
     const int   nTones      = int(tones.size());
-    const int   L           = qBound(2, s.levels, 8);
+    const int   L           = 2;
     const float step        = 255.0f / float(L - 1);
 
     float inkLum = 0.0f;

@@ -25,7 +25,7 @@
  *    dithering with the tonal accuracy of error diffusion.
  *
  * Color output follows the tonal settings:
- *   ImageColors → per-channel quantization to `levels` steps.
+ *   ImageColors → per-channel quantization to 2 steps.
  *   1 tone      → binary ink-on-transparent (background visible).
  *   2+ tones    → nearest-colour mapping onto the tone palette.
  */
