@@ -9,6 +9,7 @@
 #include <QScreen>
 #include <QIcon>
 #include <QEvent>
+#include <QGuiApplication>
 #include <QPainterPath>
 #include <QStyle>
 #include <cmath>
@@ -129,6 +130,32 @@ void DragSpinBox::mouseDoubleClickEvent(QMouseEvent* e)
 void DragSpinBox::updateDisplay()
 {
     if (m_valueLbl && !m_editingValue) m_valueLbl->setText(QString::number(m_value) + m_suffix);
+}
+
+bool ColorPickerDialog::eventFilter(QObject* obj, QEvent* ev)
+{
+    if (!m_pickMode) return QDialog::eventFilter(obj, ev);
+    if (ev->type() == QEvent::MouseButtonPress) {
+        auto* mev = static_cast<QMouseEvent*>(ev);
+        const QPoint gp = mev->globalPosition().toPoint();
+        QScreen* s = QGuiApplication::screenAt(gp);
+        if (s) {
+            QPixmap pm = s->grabWindow(0, gp.x(), gp.y(), 1, 1);
+            if (!pm.isNull()) {
+                QColor c = pm.toImage().pixelColor(0, 0);
+                c.getHsvF(&m_h, &m_s, &m_v);
+                if (m_h < 0) m_h = 0.f;
+                // keep existing m_a (do not sample alpha)
+                updateAllFromHSV();
+                if (onColorChanged) onColorChanged(selectedColor(), m_a);
+            }
+        }
+        m_pickMode = false;
+        qApp->restoreOverrideCursor();
+        qApp->removeEventFilter(this);
+        return true;
+    }
+    return QDialog::eventFilter(obj, ev);
 }
 
 // ============================================================
@@ -683,37 +710,10 @@ void FillSwatch::paintEvent(QPaintEvent*)
     }
 }
 
-void FillSwatch::mousePressEvent(QMouseEvent* e)
-{
-    if (e->button() == Qt::LeftButton) {
-        m_pressPos    = e->pos();
-        m_dragging    = false;
-        m_dragStartOp = m_opacity;
-    }
-}
-
-void FillSwatch::mouseMoveEvent(QMouseEvent* e)
-{
-    if (!(e->buttons() & Qt::LeftButton) || !m_showOpacity) return;
-    int dx = e->pos().x() - m_pressPos.x();
-    if (qAbs(dx) > 4) {
-        m_dragging = true;
-        if (m_pressPos.x() > dividerX()) {
-            float nop = qBound(0.f, m_dragStartOp + dx / 200.f, 1.f);
-            if (!qFuzzyCompare(nop, m_opacity)) {
-                m_opacity = nop;
-                update();
-                if (onOpacityDragged) onOpacityDragged(m_opacity);
-            }
-        }
-    }
-}
-
 void FillSwatch::mouseReleaseEvent(QMouseEvent* e)
 {
-    if (e->button() == Qt::LeftButton && !m_dragging)
-        if (onClicked) onClicked();
-    m_dragging = false;
+    // Opacity is edited only from the color picker; the chip just opens it.
+    if (e->button() == Qt::LeftButton && onClicked) onClicked();
 }
 
 // ============================================================
@@ -761,18 +761,23 @@ private:
 class HueBarWidget : public QWidget {
 public:
     std::function<void(float h)> onChanged;
-    explicit HueBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(14); setCursor(Qt::SizeHorCursor); }
+    explicit HueBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(16); setCursor(Qt::SizeHorCursor); }
     void setHue(float h) { m_hue = h; update(); }
 protected:
     void paintEvent(QPaintEvent*) override {
-        QPainter p(this); p.setRenderHint(QPainter::Antialiasing, false);
+        QPainter p(this); p.setRenderHint(QPainter::Antialiasing, true);
+        const int H = height();
         QLinearGradient g(0, 0, width(), 0);
         for (int i = 0; i <= 12; i++) { QColor c; c.setHsvF(i / 12.0, 1, 1); g.setColorAt(i / 12.0, c); }
-        p.setBrush(g); p.setPen(Qt::NoPen); p.drawRoundedRect(rect(), 3, 3);
-        int x = qBound(3, int(m_hue * width()), width() - 4);
-        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setBrush(g); p.setPen(Qt::NoPen); p.drawRoundedRect(rect(), H / 2.0, H / 2.0);
+        const int r = H / 2;
+        int x = qBound(r, int(m_hue * width()), width() - r);
+        QColor hc; hc.setHsvF(qBound(0.0, (double)m_hue, 1.0), 1, 1);
+        QPointF c(x, H / 2.0);
+        p.setPen(QPen(QColor(0, 0, 0, 90), 1)); p.setBrush(hc);
+        p.drawEllipse(c, r - 1.0, r - 1.0);
         p.setPen(QPen(Qt::white, 2)); p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(x - 4, 1, 8, height() - 2, 2, 2);
+        p.drawEllipse(c, r - 2.0, r - 2.0);
     }
     void mousePressEvent(QMouseEvent* e) override { if (e->button() == Qt::LeftButton) pick(e->pos()); }
     void mouseMoveEvent(QMouseEvent* e)  override { if (e->buttons() & Qt::LeftButton)  pick(e->pos()); }
@@ -784,12 +789,15 @@ private:
 class OpacityBarWidget : public QWidget {
 public:
     std::function<void(float a)> onChanged;
-    explicit OpacityBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(14); setCursor(Qt::SizeHorCursor); }
+    explicit OpacityBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(16); setCursor(Qt::SizeHorCursor); }
     void setColor(QColor c) { m_color = c; update(); }
     void setAlpha(float a)  { m_alpha = a; update(); }
 protected:
     void paintEvent(QPaintEvent*) override {
-        QPainter p(this); p.setRenderHint(QPainter::Antialiasing, false);
+        QPainter p(this); p.setRenderHint(QPainter::Antialiasing, true);
+        const int H = height();
+        QPainterPath clip; clip.addRoundedRect(rect(), H / 2.0, H / 2.0);
+        p.setClipPath(clip);
         int cs = 4;
         for (int x = 0; x < width(); x += cs)
             for (int y = 0; y < height(); y += cs)
@@ -798,11 +806,16 @@ protected:
         QLinearGradient g(0, 0, width(), 0);
         g.setColorAt(0, QColor(op.red(), op.green(), op.blue(), 0));
         g.setColorAt(1, op);
-        p.setBrush(g); p.setPen(Qt::NoPen); p.drawRoundedRect(rect(), 3, 3);
-        int x = qBound(3, int(m_alpha * width()), width() - 4);
-        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setBrush(g); p.setPen(Qt::NoPen); p.drawRoundedRect(rect(), H / 2.0, H / 2.0);
+        p.setClipping(false);
+        const int r = H / 2;
+        int x = qBound(r, int(m_alpha * width()), width() - r);
+        QColor knob = m_color; knob.setAlphaF(qBound(0.f, m_alpha, 1.f));
+        QPointF c(x, H / 2.0);
+        p.setPen(QPen(QColor(0, 0, 0, 90), 1)); p.setBrush(knob);
+        p.drawEllipse(c, r - 1.0, r - 1.0);
         p.setPen(QPen(Qt::white, 2)); p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(x - 4, 1, 8, height() - 2, 2, 2);
+        p.drawEllipse(c, r - 2.0, r - 2.0);
     }
     void mousePressEvent(QMouseEvent* e) override { if (e->button() == Qt::LeftButton) pick(e->pos()); }
     void mouseMoveEvent(QMouseEvent* e)  override { if (e->buttons() & Qt::LeftButton)  pick(e->pos()); }
@@ -822,7 +835,7 @@ ColorPickerDialog::ColorPickerDialog(QColor initial, float initialOpacity,
 {
     setAttribute(Qt::WA_TranslucentBackground);
     setModal(false);
-    setFixedSize(300, showOpacity ? 315 : 275);
+    setFixedSize(300, showOpacity ? 350 : 300);
 
     initial.getHsvF(&m_h, &m_s, &m_v);
     if (m_h < 0) m_h = 0.f;
@@ -875,43 +888,77 @@ void ColorPickerDialog::mouseReleaseEvent(QMouseEvent* e)
 
 void ColorPickerDialog::buildUI(bool showOpacity)
 {
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(16, 14, 16, 14);
-    root->setSpacing(8);
+    const QString kInputQss =
+        "QLineEdit{background:#272727;border:1px solid #5D5D5D;border-radius:6px;"
+        "color:#E3E3E3;font-size:9pt;padding:0 8px;min-height:34px;}"
+        "QLineEdit:focus{border-color:#828282;}";
 
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(16, 16, 16, 16);
+    root->setSpacing(12);
+
+    // Saturation / value field
     m_field = new ColorFieldWidget;
     m_field->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     root->addWidget(m_field, 1);
 
+    // Eyedropper (left) + hue / opacity bars (right)
     {
-        auto* l = new QLabel("Hue");
-        l->setStyleSheet("color:#B2B2B2;font-size:8pt;background:transparent;");
-        root->addWidget(l);
-    }
-    m_hueBar = new HueBarWidget;
-    root->addWidget(m_hueBar);
+        auto* row = new QHBoxLayout;
+        row->setSpacing(12);
 
-    if (showOpacity) {
-        auto* l = new QLabel("Opacity");
-        l->setStyleSheet("color:#B2B2B2;font-size:8pt;background:transparent;");
-        root->addWidget(l);
-        m_opBar = new OpacityBarWidget;
-        root->addWidget(m_opBar);
+        auto* eyeBtn = new QPushButton;
+        eyeBtn->setObjectName("eyeDropBtn");
+        eyeBtn->setCursor(Qt::PointingHandCursor);
+        eyeBtn->setFixedSize(30, 30);
+        eyeBtn->setIconSize(QSize(18, 18));
+        eyeBtn->setIcon(QIcon(":/icons/color_picker.svg"));
+        eyeBtn->setToolTip("Pick color from screen");
+        eyeBtn->setStyleSheet(
+            "QPushButton#eyeDropBtn{background:transparent;border:none;border-radius:6px;}"
+            "QPushButton#eyeDropBtn:hover{background:#2E2E2E;}");
+        row->addWidget(eyeBtn, 0, Qt::AlignVCenter);
+
+        auto* bars = new QVBoxLayout;
+        bars->setSpacing(10);
+        m_hueBar = new HueBarWidget;
+        bars->addWidget(m_hueBar);
+        if (showOpacity) {
+            m_opBar = new OpacityBarWidget;
+            bars->addWidget(m_opBar);
+        }
+        row->addLayout(bars, 1);
+        root->addLayout(row);
+
+        connect(eyeBtn, &QPushButton::clicked, this, [this]() {
+            m_pickMode = true;
+            qApp->setOverrideCursor(Qt::CrossCursor);
+            qApp->installEventFilter(this);
+        });
     }
 
+    // Hex value + opacity %
     {
-        auto* row = new QHBoxLayout; row->setSpacing(8);
-        m_preview = new QLabel;
-        m_preview->setFixedSize(36, 36);
+        auto* row = new QHBoxLayout;
+        row->setSpacing(8);
+
         m_hexInput = new QLineEdit;
-        m_hexInput->setStyleSheet(
-            "QLineEdit{background:#272727;border:1px solid #5D5D5D;border-radius:6px;"
-            "color:#E3E3E3;font-size:9pt;padding:0 8px;min-height:34px;}"
-            "QLineEdit:focus{border-color:#828282;}");
-        row->addWidget(m_preview); row->addWidget(m_hexInput, 1);
+        m_hexInput->setStyleSheet(kInputQss);
+        row->addWidget(m_hexInput, 1);
+
+        if (showOpacity) {
+            m_opacityInput = new QLineEdit;
+            m_opacityInput->setAlignment(Qt::AlignCenter);
+            m_opacityInput->setFixedWidth(52);
+            m_opacityInput->setStyleSheet(kInputQss);
+            row->addWidget(m_opacityInput);
+
+            auto* pct = new QLabel("%");
+            pct->setStyleSheet("color:#B2B2B2;font-size:9pt;background:transparent;");
+            row->addWidget(pct);
+        }
         root->addLayout(row);
     }
-
 
     m_field->onChanged = [this](float s, float v) {
         m_s = s; m_v = v;
@@ -944,6 +991,18 @@ void ColorPickerDialog::buildUI(bool showOpacity)
             }
         }
     });
+    if (m_opacityInput) {
+        connect(m_opacityInput, &QLineEdit::editingFinished, m_opacityInput, [this]() {
+            bool ok; int v = m_opacityInput->text().remove('%').trimmed().toInt(&ok);
+            if (ok) {
+                m_a = qBound(0.f, v / 100.0f, 1.f);
+                updateAllFromHSV();
+                if (onColorChanged) onColorChanged(selectedColor(), m_a);
+            } else {
+                m_opacityInput->setText(QString::number(qRound(m_a * 100.0f)));
+            }
+        });
+    }
 }
 
 void ColorPickerDialog::updateAllFromHSV()
@@ -957,9 +1016,10 @@ void ColorPickerDialog::updateAllFromHSV()
 void ColorPickerDialog::updatePreviewAndHex()
 {
     QColor c = selectedColor();
-    m_preview->setStyleSheet(QString(
-        "background:%1;border:1px solid #5D5D5D;border-radius:6px;").arg(c.name()));
-    if (m_hexInput) m_hexInput->setText(c.name().mid(1).toUpper());
+    if (m_hexInput && !m_hexInput->hasFocus())
+        m_hexInput->setText(c.name().mid(1).toUpper());
+    if (m_opacityInput && !m_opacityInput->hasFocus())
+        m_opacityInput->setText(QString::number(qRound(m_a * 100.0f)));
 }
 
 // ============================================================

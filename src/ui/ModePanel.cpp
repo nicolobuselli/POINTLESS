@@ -1,5 +1,4 @@
 #include "ModePanel.h"
-#include "TonalControlsWidget.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -88,14 +87,50 @@ public:
             pl->setContentsMargins(0, 0, 0, 0);
             pl->setSpacing(8);
 
-            m_grid   = new SliderRow("Grid",    2, 100,  20);
-            m_gamma  = new SliderRow("Gamma",  10, 500, 100);
-            m_size   = new SliderRow("Size",   10, 300, 100);
-            m_jitter = new SliderRow("Jitter",  0, 100,   0);
-            for (SliderRow* r : { m_grid, m_gamma, m_size, m_jitter }) {
+            // Grid system
+            pl->addWidget(makeParamLabel("Grid type"));
+            m_gridType = new NoWheelComboBox;
+            m_gridType->addItems({ "Square", "Hexagonal", "Radial", "Line", "Circles" });
+            pl->addWidget(m_gridType);
+
+            m_spacing = new SliderRow("Spacing", 2, 200, 20);
+            pl->addWidget(m_spacing);
+
+            // Point spacing — only meaningful for Radial / Line / Circles.
+            m_pointSpacingRow = new QWidget;
+            {
+                auto* psl = new QVBoxLayout(m_pointSpacingRow);
+                psl->setContentsMargins(0, 0, 0, 0);
+                psl->setSpacing(0);
+                m_pointSpacing = new SliderRow("Point spacing", 2, 200, 20);
+                psl->addWidget(m_pointSpacing);
+            }
+            m_pointSpacingRow->setVisible(false);
+            pl->addWidget(m_pointSpacingRow);
+
+            m_rotation     = new SliderRow("Rotation",      0, 360,   0);
+            m_gamma        = new SliderRow("Gamma",        10, 500, 100);
+            m_diameter     = new SliderRow("Diameter",     10, 300, 100);
+            m_stretch      = new SliderRow("Stretch",      10, 400, 100);
+            m_stretchAngle = new SliderRow("Stretch angle", 0, 360,   0);
+            m_jitter       = new SliderRow("Jitter",        0, 100,   0);
+            for (SliderRow* r : { m_rotation, m_gamma, m_diameter,
+                                  m_stretch, m_stretchAngle, m_jitter }) {
                 r->onValueChanged = [this](int) { fire(); };
                 pl->addWidget(r);
             }
+            m_spacing->onValueChanged      = [this](int) { fire(); };
+            m_pointSpacing->onValueChanged = [this](int) { fire(); };
+
+            m_followGrid = new QPushButton("Follow grid rotation");
+            m_followGrid->setCheckable(true);
+            m_followGrid->setFixedHeight(26);
+            m_followGrid->setStyleSheet(
+                "QPushButton{background:#3B3B3B;border:1px solid #5D5D5D;border-radius:4px;"
+                "color:#B2B2B2;font-size:8pt;padding:0 10px;}"
+                "QPushButton:checked{background:#484848;border-color:#828282;color:#E3E3E3;}"
+                "QPushButton:hover{border-color:#828282;}");
+            pl->addWidget(m_followGrid);
 
             auto* row = new QHBoxLayout;
             row->setContentsMargins(0, 0, 0, 0);
@@ -107,19 +142,15 @@ public:
             row->addWidget(m_opacity, 1);
             row->addWidget(m_cornerRadius, 1);
             pl->addLayout(row);
+
+            connect(m_gridType, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [this](int) { refreshGridControls(); fire(); });
+            connect(m_followGrid, &QPushButton::toggled, this, [this](bool) { fire(); });
         }
         vl->addWidget(new CollapsibleSection("Parameters", paramsContent));
 
-        vl->addSpacing(16);
-        vl->addWidget(makeSeparatorLine());
-        vl->addSpacing(16);
-
-        // ── Tonal controls ──────────────────────────────────
-        m_tonal = new TonalControlsWidget(TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
-        m_tonal->onChanged = [this]() { fire(); };
-        vl->addWidget(new CollapsibleSection("Tonal controls", m_tonal));
-
         addShapeSlot(HalftoneShape::Circle, QString(), true);
+        refreshGridControls();
     }
 
     HalftoneSettings settings() const
@@ -134,13 +165,20 @@ public:
             s.shapes.push_back(e);
         }
         s.multiThreshold = m_sldThreshold->value();
-        s.gridSize       = m_grid->value();
+
+        s.grid.type              = static_cast<GridType>(m_gridType->currentIndex());
+        s.grid.spacing           = float(m_spacing->value());
+        s.grid.pointSpacing      = float(m_pointSpacing->value());
+        s.grid.rotation          = float(m_rotation->value());
+        s.grid.diameter          = m_diameter->value() / 100.0f;
+        s.grid.stretchFactor     = m_stretch->value()  / 100.0f;
+        s.grid.stretchAngle      = float(m_stretchAngle->value());
+        s.grid.followGridRotation = m_followGrid->isChecked();
+
         s.gamma          = m_gamma->value()  / 100.0f;
-        s.symbolSize     = m_size->value()   / 100.0f;
         s.jitter         = m_jitter->value() / 100.0f;
         s.opacity        = m_opacity->value() / 100.0f;
         s.cornerRadius   = float(m_cornerRadius->value());
-        s.tonal          = m_tonal->settings();
         return s;
     }
 
@@ -161,13 +199,24 @@ public:
         m_sldThreshold->setValue(s.multiThreshold);
         m_sldThreshold->blockSignals(false);
 
-        m_grid->setValue(s.gridSize);
+        m_gridType->blockSignals(true);
+        m_gridType->setCurrentIndex(int(s.grid.type));
+        m_gridType->blockSignals(false);
+        m_spacing->setValue(qRound(s.grid.spacing));
+        m_pointSpacing->setValue(qRound(s.grid.pointSpacing));
+        m_rotation->setValue(qRound(s.grid.rotation));
+        m_diameter->setValue(qRound(s.grid.diameter * 100));
+        m_stretch->setValue(qRound(s.grid.stretchFactor * 100));
+        m_stretchAngle->setValue(qRound(s.grid.stretchAngle));
+        m_followGrid->blockSignals(true);
+        m_followGrid->setChecked(s.grid.followGridRotation);
+        m_followGrid->blockSignals(false);
+
         m_gamma->setValue(qRound(s.gamma * 100));
-        m_size->setValue(qRound(s.symbolSize * 100));
         m_jitter->setValue(qRound(s.jitter * 100));
         m_opacity->setValue(qRound(s.opacity * 100));
         m_cornerRadius->setValue(qRound(s.cornerRadius));
-        m_tonal->setSettings(s.tonal);
+        refreshGridControls();
         m_updating = false;
     }
 
@@ -304,6 +353,12 @@ private:
         refreshMinusButtons();
     }
 
+    void refreshGridControls()
+    {
+        const GridType t = static_cast<GridType>(m_gridType->currentIndex());
+        m_pointSpacingRow->setVisible(gridUsesPointSpacing(t));
+    }
+
     SliderRow*           m_dpi             = nullptr;
     QPushButton*         m_shapePlus       = nullptr;
     QWidget*             m_shapesContainer = nullptr;
@@ -312,14 +367,20 @@ private:
     NoWheelSlider*       m_sldThreshold    = nullptr;
     QVector<ShapeSlot>   m_shapeSlots;
 
-    SliderRow*   m_grid   = nullptr;
-    SliderRow*   m_gamma  = nullptr;
-    SliderRow*   m_size   = nullptr;
-    SliderRow*   m_jitter = nullptr;
-    DragSpinBox* m_opacity      = nullptr;
-    DragSpinBox* m_cornerRadius = nullptr;
+    NoWheelComboBox* m_gridType        = nullptr;
+    SliderRow*       m_spacing         = nullptr;
+    QWidget*         m_pointSpacingRow = nullptr;
+    SliderRow*       m_pointSpacing    = nullptr;
+    SliderRow*       m_rotation        = nullptr;
+    SliderRow*       m_gamma           = nullptr;
+    SliderRow*       m_diameter        = nullptr;
+    SliderRow*       m_stretch         = nullptr;
+    SliderRow*       m_stretchAngle    = nullptr;
+    SliderRow*       m_jitter          = nullptr;
+    QPushButton*     m_followGrid      = nullptr;
+    DragSpinBox*     m_opacity         = nullptr;
+    DragSpinBox*     m_cornerRadius    = nullptr;
 
-    TonalControlsWidget* m_tonal = nullptr;
     bool m_updating = false;
 };
 
@@ -367,6 +428,9 @@ const AlgoEntry kAlgoEntries[] = {
     { DitherAlgorithm::DotDiffusion,        nullptr,               "Hybrid"           }, // header
     { DitherAlgorithm::DotDiffusion,        "Dot Diffusion",
         "Knuth (1987) class-matrix scan with error propagation. Clustered dot structure meets tonal accuracy." },
+    { DitherAlgorithm::Threshold,           nullptr,               "Tone"             }, // header
+    { DitherAlgorithm::Threshold,           "Threshold",
+        "Hard black/white cut by a level (no dithering). Pair with Pixel size and Corner radius for smooth poster shapes." },
 };
 
 } // namespace
@@ -446,7 +510,10 @@ public:
                 const DitherAlgorithm a = currentAlgorithm();
                 const bool showMatrix =
                     (a == DitherAlgorithm::Bayer || a == DitherAlgorithm::ClusteredDot);
+                const bool isThr = (a == DitherAlgorithm::Threshold);
                 m_matrixRow->setVisible(showMatrix);
+                m_threshold->setVisible(isThr);
+                m_strength->setVisible(!isThr);
                 updateDescription();
                 fire();
             });
@@ -469,11 +536,13 @@ public:
             pl->setSpacing(8);
 
             m_pixelSize = new SliderRow("Pixel size", 1, 16, 2);
-            m_strength  = new SliderRow("Strength",   0, 100, 100);
-            for (SliderRow* r : { m_pixelSize, m_strength }) {
+            m_strength  = new SliderRow("Strength",   0, 100, 50);
+            m_threshold = new SliderRow("Threshold",  0, 100, 50);
+            for (SliderRow* r : { m_pixelSize, m_strength, m_threshold }) {
                 r->onValueChanged = [this](int) { fire(); };
                 pl->addWidget(r);
             }
+            m_threshold->setVisible(false);   // shown only for the Threshold algorithm
 
             auto* row = new QHBoxLayout;
             row->setContentsMargins(0, 0, 0, 0);
@@ -487,15 +556,6 @@ public:
             pl->addLayout(row);
         }
         vl->addWidget(new CollapsibleSection("Parameters", paramsContent));
-
-        vl->addSpacing(16);
-        vl->addWidget(makeSeparatorLine());
-        vl->addSpacing(16);
-
-        // ── Tonal controls ──────────────────────────────────
-        m_tonal = new TonalControlsWidget(TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
-        m_tonal->onChanged = [this]() { fire(); };
-        vl->addWidget(new CollapsibleSection("Tonal controls", m_tonal));
     }
 
     DitherSettings settings() const
@@ -506,9 +566,9 @@ public:
         s.bayerSize    = sizes[qBound(0, m_matrix->currentIndex(), 3)];
         s.pixelSize    = m_pixelSize->value();
         s.strength     = m_strength->value();
+        s.threshold    = m_threshold->value();
         s.opacity      = m_opacity->value() / 100.0f;
         s.cornerRadius = float(m_cornerRadius->value());
-        s.tonal        = m_tonal->settings();
         return s;
     }
 
@@ -530,7 +590,10 @@ public:
 
         const bool showMatrix = (s.algorithm == DitherAlgorithm::Bayer
                                || s.algorithm == DitherAlgorithm::ClusteredDot);
+        const bool isThr = (s.algorithm == DitherAlgorithm::Threshold);
         m_matrixRow->setVisible(showMatrix);
+        m_threshold->setVisible(isThr);
+        m_strength->setVisible(!isThr);
         updateDescription();
 
         int mi = 2;
@@ -544,9 +607,9 @@ public:
 
         m_pixelSize->setValue(s.pixelSize);
         m_strength->setValue(s.strength);
+        m_threshold->setValue(s.threshold);
         m_opacity->setValue(qRound(s.opacity * 100));
         m_cornerRadius->setValue(qRound(s.cornerRadius));
-        m_tonal->setSettings(s.tonal);
         m_updating = false;
     }
 
@@ -579,9 +642,9 @@ private:
     NoWheelComboBox* m_matrix     = nullptr;
     SliderRow*       m_pixelSize  = nullptr;
     SliderRow*       m_strength   = nullptr;
+    SliderRow*       m_threshold  = nullptr;
     DragSpinBox*     m_opacity      = nullptr;
     DragSpinBox*     m_cornerRadius = nullptr;
-    TonalControlsWidget* m_tonal  = nullptr;
     bool m_updating = false;
 };
 
@@ -659,16 +722,6 @@ public:
             }
         }
         vl->addWidget(new CollapsibleSection("Parameters", paramsContent));
-
-        vl->addSpacing(16);
-        vl->addWidget(makeSeparatorLine());
-        vl->addSpacing(16);
-
-        // ── Tonal controls ──────────────────────────────────
-        m_tonal = new TonalControlsWidget(TonalSettings{
-            ToneMode::FixedTones, { ToneEntry{ QColor(0xC0, 0xC0, 0xC0), 0 } } });
-        m_tonal->onChanged = [this]() { fire(); };
-        vl->addWidget(new CollapsibleSection("Tonal controls", m_tonal));
     }
 
     AsciiSettings settings() const
@@ -679,7 +732,6 @@ public:
         s.cellSize      = m_cellSize->value();
         s.gamma         = m_gamma->value() / 100.0f;
         s.invert        = m_invert->isChecked();
-        s.tonal         = m_tonal->settings();
         return s;
     }
 
@@ -698,7 +750,6 @@ public:
         m_invert->blockSignals(true);
         m_invert->setChecked(s.invert);
         m_invert->blockSignals(false);
-        m_tonal->setSettings(s.tonal);
         m_updating = false;
     }
 
@@ -710,7 +761,6 @@ private:
     QPushButton*     m_invert     = nullptr;
     SliderRow*       m_cellSize   = nullptr;
     SliderRow*       m_gamma      = nullptr;
-    TonalControlsWidget* m_tonal  = nullptr;
     bool m_updating = false;
 };
 
@@ -722,7 +772,8 @@ ModePanel::ModePanel(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName("sidePanel");
-    setFixedWidth(340);
+    setMinimumWidth(300);
+    setMaximumWidth(560);
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -790,46 +841,51 @@ ModePanel::ModePanel(QWidget* parent)
     scroll->setWidget(content);
     outer->addWidget(scroll, 1);
 
-    // ── Background (pinned bottom) ───────────────────────────
-    outer->addWidget(makeSeparatorLine());
+    // ── Export (pinned bottom) ───────────────────────────────
     {
-        auto* bgBox = new QWidget;
-        bgBox->setObjectName("exportBox");
-        auto* bl = new QVBoxLayout(bgBox);
-        bl->setContentsMargins(16, 12, 16, 14);
-        bl->setSpacing(8);
-        bl->addWidget(makeSectionTitle("Background"));
+        auto* exportBox = new QWidget;
+        exportBox->setObjectName("exportBox");
+        auto* ev = new QVBoxLayout(exportBox);
+        ev->setContentsMargins(16, 12, 16, 14);
+        ev->setSpacing(2);
 
-        m_bgSwatch = new FillSwatch(QColor(0x0A, 0x0A, 0x0A), 1.0f, /*showOpacity*/ true);
-        m_bgSwatch->onOpacityDragged = [this](float) { if (!m_updating) emit paramsChanged(); };
-        m_bgSwatch->onColorEdited    = [this](QColor) { if (!m_updating) emit paramsChanged(); };
-        m_bgSwatch->onClicked = [this]() {
-            auto* dlg = new ColorPickerDialog(m_bgSwatch->color(),
-                                              m_bgSwatch->opacity(),
-                                              /*showOpacity*/ true,
-                                              this);
-            dlg->setAttribute(Qt::WA_DeleteOnClose);
-            dlg->moveNextTo(m_bgSwatch);
-            dlg->onColorChanged = [this](QColor c, float a) {
-                m_bgSwatch->setColor(c);
-                m_bgSwatch->setOpacity(a);
-                if (!m_updating) emit paramsChanged();
-            };
-            dlg->show();
-            dlg->raise();
-            dlg->activateWindow();
-        };
-        bl->addWidget(m_bgSwatch);
+        ev->addWidget(makeSectionTitle("Export"));
+        ev->addSpacing(6);
 
-        outer->addWidget(bgBox);
+        auto* labelsRow = new QHBoxLayout;
+        labelsRow->setContentsMargins(0, 0, 0, 0);
+        labelsRow->setSpacing(8);
+        labelsRow->addWidget(makeParamLabel("Output name"), 2);
+        labelsRow->addWidget(makeParamLabel("Type of file"), 1);
+        ev->addLayout(labelsRow);
+
+        auto* fieldsRow = new QHBoxLayout;
+        fieldsRow->setContentsMargins(0, 0, 0, 0);
+        fieldsRow->setSpacing(8);
+        m_outputName = new QLineEdit("output");
+        m_format     = new NoWheelComboBox;
+        m_format->addItems({ "SVG", "PNG", "JPG", "PNG Sequence" });
+        fieldsRow->addWidget(m_outputName, 2);
+        fieldsRow->addWidget(m_format, 1);
+        ev->addLayout(fieldsRow);
+        ev->addSpacing(8);
+
+        auto* btnExport = new QPushButton("Export");
+        btnExport->setObjectName("exportBtn");
+        btnExport->setFixedHeight(40);
+        connect(btnExport, &QPushButton::clicked, this, &ModePanel::exportRequested);
+        ev->addWidget(btnExport);
+
+        outer->addWidget(exportBox);
     }
 }
 
 HalftoneSettings ModePanel::halftoneSettings() const { return m_halftonePage->settings(); }
 DitherSettings   ModePanel::ditherSettings()   const { return m_ditherPage->settings(); }
 AsciiSettings    ModePanel::asciiSettings()    const { return m_asciiPage->settings(); }
-QColor           ModePanel::background()        const { return m_bgSwatch->color(); }
-float            ModePanel::backgroundOpacity() const { return m_bgSwatch->opacity(); }
+
+QString ModePanel::outputFileName() const { return m_outputName->text(); }
+QString ModePanel::outputFormat()   const { return m_format->currentText(); }
 
 void ModePanel::setMode(RenderMode m)
 {
@@ -842,14 +898,12 @@ void ModePanel::setMode(RenderMode m)
     m_tabAscii->setChecked(m == RenderMode::Ascii);
 }
 
-void ModePanel::setFromLayer(const Layer& layer, QColor bg, float bgOpacity)
+void ModePanel::setFromLayer(const Layer& layer)
 {
     m_updating = true;
     m_halftonePage->setSettings(layer.halftone);
     m_ditherPage->setSettings(layer.dither);
     m_asciiPage->setSettings(layer.ascii);
-    m_bgSwatch->setColor(bg);
-    m_bgSwatch->setOpacity(bgOpacity);
 
     if (layer.kind != LayerKind::Original)
         setMode(modeForLayerKind(layer.kind));

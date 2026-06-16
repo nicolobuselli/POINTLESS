@@ -4,14 +4,17 @@
 #include <QImage>
 #include <QString>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QVector>
 #include <QKeyEvent>
 #include "../core/Params.h"
+#include "../core/Animation.h"
 
 class PreviewWidget;
-class AdjustmentsPanel;
+class ControlsPanel;
 class ModePanel;
 class FilmstripWidget;
+class TimelineWidget;
 class LayersPanel;
 class RenderWorker;
 
@@ -53,12 +56,15 @@ private slots:
     void copyToClipboard();
 
 private:
+    struct UndoState { SessionParams params; Animation anim; };
     struct SessionImage {
-        QString                name;
-        QImage                 source;
-        SessionParams          state;
-        QVector<SessionParams> undoStack;
-        int                    undoIndex = -1;
+        QString             name;
+        QImage              source;       // still image (or first frame of a clip)
+        QVector<QImage>     frames;        // non-empty → image sequence / clip
+        SessionParams       state;         // un-animated baseline parameters
+        Animation           anim;          // keyframe animation over the parameters
+        QVector<UndoState>  undoStack;
+        int                 undoIndex = -1;
     };
 
     SessionParams collectParams() const;
@@ -68,10 +74,20 @@ private:
     void selectLayerInternal(int layerId, bool makeVisible);
     QString uniqueLayerName(const SessionParams& p, LayerKind kind) const;
     void syncLayersPanel();
-    void scheduleRender();
+    void scheduleRender(bool previewOnly = false);
     void pushUndoSnapshot();
     void addImages(const QStringList& paths);
+    void importSequence(const QStringList& paths);
     void switchToImage(int index);
+
+    // Animation / timeline
+    void setPlayhead(int frame);          // scrub: apply interpolated params + render
+    void syncTimeline();                  // push current image's anim → timeline widget
+    void onTimelineEdited();              // timeline → state (keyframes moved/changed)
+    void onPlayToggled(bool playing);
+    void playStep();                      // render current frame's preview during playback
+    void autoKeyChanged(const SessionParams& before, const SessionParams& after);
+    void exportSequence(const QString& baseName);
     void updateDisplayedPreview();
     void updatePreviewInteractionState();
 
@@ -81,10 +97,11 @@ protected:
     void keyReleaseEvent(QKeyEvent* event) override;
 
 private:
-    AdjustmentsPanel* m_left        = nullptr;
+    ControlsPanel*    m_left        = nullptr;
     ModePanel*        m_right       = nullptr;
     PreviewWidget*    m_preview     = nullptr;
     FilmstripWidget*  m_filmstrip   = nullptr;
+    TimelineWidget*   m_timeline    = nullptr;
     LayersPanel*      m_layersPanel = nullptr;
     RenderWorker*     m_worker      = nullptr;
 
@@ -96,4 +113,9 @@ private:
     bool   m_capsLockActive = false;
     bool   m_spaceDown = false;
     QTimer m_undoTimer;
+
+    QTimer        m_playTimer;
+    QElapsedTimer m_playClock;
+    bool          m_autoKey = false;
+    bool          m_playing = false;
 };

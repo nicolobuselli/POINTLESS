@@ -29,7 +29,10 @@ public:
     explicit RenderWorker(QObject* parent = nullptr);
     ~RenderWorker() override;
 
-    void requestRender(const QImage& source, const SessionParams& params);
+    // fullPass=false renders only the fast preview (used during playback so
+    // the full-resolution pass never floods the thread).
+    void requestRender(const QImage& source, const SessionParams& params,
+                       bool fullPass = true);
 
     static constexpr int FAST_MAX_PX   = 600;   // max dimension for preview
     static constexpr int FULL_DELAY_MS = 350;   // ms idle before full render

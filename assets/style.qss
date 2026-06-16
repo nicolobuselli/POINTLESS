@@ -155,6 +155,89 @@ QPushButton#exportBtn:pressed {
     background-color: #2E2E2E;
 }
 
+/* ── Accent button (Confirm / Generate / destructive confirm) ──── */
+QPushButton#accentBtn {
+    background-color: #FD5A1F;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 6px;
+    padding: 0 14px;
+    min-height: 40px;
+    font-size: 10pt;
+    font-weight: 600;
+}
+QPushButton#accentBtn:hover {
+    background-color: #FD6B35;
+}
+QPushButton#accentBtn:pressed {
+    background-color: #E04E16;
+}
+
+/* ── Palette selector (custom expandable dropdown) ────────────── */
+QPushButton#paletteHeader {
+    background-color: #3B3B3B;
+    border: 1px solid #5D5D5D;
+    border-radius: 6px;
+    text-align: left;
+}
+QPushButton#paletteHeader:hover {
+    border-color: #828282;
+}
+
+QPushButton#paletteItem {
+    background-color: #313131;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    text-align: left;
+}
+QPushButton#paletteItem:hover {
+    background-color: #3B3B3B;
+    border-color: #5D5D5D;
+}
+
+#saveEditBox {
+    background-color: #313131;
+    border: 1px solid #5D5D5D;
+    border-radius: 8px;
+}
+
+/* Palette dropdown (floating popup over the controls) */
+#palettePopup {
+    background-color: #272727;
+    border: 1px solid #5D5D5D;
+    border-radius: 6px;
+}
+
+/* Inline delete confirmation inside the palette popup */
+#paletteConfirm {
+    background-color: #3A2422;
+    border: 1px solid #FD231F;
+    border-radius: 6px;
+}
+QPushButton#ghostMini {
+    background-color: #3B3B3B;
+    border: 1px solid #5D5D5D;
+    border-radius: 4px;
+    color: #E3E3E3;
+    font-size: 8pt;
+    padding: 0 10px;
+}
+QPushButton#ghostMini:hover {
+    border-color: #828282;
+}
+QPushButton#dangerMini {
+    background-color: #FD231F;
+    border: none;
+    border-radius: 4px;
+    color: #FFFFFF;
+    font-size: 8pt;
+    font-weight: 600;
+    padding: 0 10px;
+}
+QPushButton#dangerMini:hover {
+    background-color: #FF3A36;
+}
+
 /* ── Icon-only buttons (+/−) ─────────────────────────────────── */
 QPushButton#iconBtn {
     background-color: transparent;
@@ -352,8 +435,8 @@ QPushButton#trashBtn {
     border-radius: 6px;
 }
 QPushButton#trashBtn:hover {
-    background-color: #4A2A22;
-    border-color: #FD5A1F;
+    background-color: #4A2422;
+    border-color: #FD231F;
 }
 QPushButton#trashBtn:pressed {
     background-color: #3B1F19;
@@ -363,8 +446,8 @@ QPushButton#trashBtn:disabled {
     border-color: #3B3B3B;
 }
 QPushButton#trashBtn[dropHover="true"] {
-    background-color: #4A2A22;
-    border-color: #FD5A1F;
+    background-color: #4A2422;
+    border-color: #FD231F;
 }
 
 QComboBox#blendCombo {

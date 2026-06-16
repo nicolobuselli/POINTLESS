@@ -27,7 +27,8 @@
  * Color output follows the tonal settings:
  *   ImageColors → per-channel quantization to 2 steps.
  *   1 tone      → binary ink-on-transparent (background visible).
- *   2+ tones    → nearest-colour mapping onto the tone palette.
+ *   2+ tones    → luminosity mapped onto the tone palette via each
+ *                 tone's level anchor (see pickToneIndex).
  */
 class DitherRenderer
 {
@@ -37,8 +38,10 @@ public:
 private:
     static bool isOrdered  (DitherAlgorithm a);
     static bool isHybrid   (DitherAlgorithm a);
+    static bool isThreshold(DitherAlgorithm a);
 
     static void renderDiffusion   (const QImage& work, QImage& out, const DitherSettings& s);
     static void renderOrdered     (const QImage& work, QImage& out, const DitherSettings& s);
     static void renderDotDiffusion(const QImage& work, QImage& out, const DitherSettings& s);
+    static void renderThreshold   (const QImage& work, QImage& out, const DitherSettings& s);
 };

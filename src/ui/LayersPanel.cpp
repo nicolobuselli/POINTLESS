@@ -414,7 +414,10 @@ LayersPanel::LayersPanel(QWidget* parent)
         vl->setContentsMargins(12, 10, 12, 12);
         vl->setSpacing(10);
 
-        auto* header = new QHBoxLayout;
+        m_headerWidget = new QWidget;
+        m_headerWidget->setObjectName("layersHeader");
+        m_headerWidget->setCursor(Qt::OpenHandCursor);
+        auto* header = new QHBoxLayout(m_headerWidget);
         header->setContentsMargins(0, 0, 0, 0);
         header->setSpacing(6);
         header->addWidget(makeSectionTitle("Layers"), 1);
@@ -427,7 +430,7 @@ LayersPanel::LayersPanel(QWidget* parent)
         auto* collapseBtn = new ChevronButton(ChevronButton::Right);
         connect(collapseBtn, &QPushButton::clicked, this, [this]() { setExpandedUi(false); });
         header->addWidget(collapseBtn);
-        vl->addLayout(header);
+        vl->addWidget(m_headerWidget);
 
         m_rowsArea = new RowsArea;
         m_rowsArea->onReorder = [this](int id, int idx) { emit reorderRequested(id, idx); };
@@ -475,9 +478,14 @@ LayersPanel::LayersPanel(QWidget* parent)
     connect(m_collapsedBtn, &QPushButton::clicked, this, [this]() { setExpandedUi(true); });
     root->addWidget(m_collapsedBtn);
 
-    m_collapsedBtn->setVisible(false);
+    // Start collapsed — only the small toggle button shows until the user
+    // opens the panel.
+    m_isExpanded = false;
+    m_expandedBox->setVisible(false);
+    m_collapsedBtn->setVisible(true);
 
     if (parent) parent->installEventFilter(this);
+    if (m_headerWidget) m_headerWidget->installEventFilter(this);
 }
 
 void LayersPanel::setExpandedUi(bool expanded)
@@ -485,7 +493,14 @@ void LayersPanel::setExpandedUi(bool expanded)
     m_isExpanded = expanded;
     m_expandedBox->setVisible(expanded);
     m_collapsedBtn->setVisible(!expanded);
-    reposition();
+    if (expanded) {
+        if (m_hasCustomPosition) move(m_customPosition);
+        else reposition();
+    } else {
+        // when collapsed, reset custom position so it returns to anchored spot
+        m_hasCustomPosition = false;
+        reposition();
+    }
 }
 
 void LayersPanel::setLayers(const std::vector<Layer>& layers, int activeId)
@@ -609,9 +624,33 @@ void LayersPanel::reposition()
 
 bool LayersPanel::eventFilter(QObject* obj, QEvent* ev)
 {
+    if (obj == m_headerWidget) {
+        if (ev->type() == QEvent::MouseButtonPress) {
+            auto* mev = static_cast<QMouseEvent*>(ev);
+            if (mev->button() == Qt::LeftButton) {
+                m_dragStart = mev->globalPosition().toPoint() - pos();
+                m_headerWidget->setCursor(Qt::ClosedHandCursor);
+                return true;
+            }
+        } else if (ev->type() == QEvent::MouseMove) {
+            auto* mev = static_cast<QMouseEvent*>(ev);
+            if (mev->buttons() & Qt::LeftButton) {
+                QPoint newPos = mev->globalPosition().toPoint() - m_dragStart;
+                move(newPos);
+                m_hasCustomPosition = true;
+                m_customPosition = newPos;
+                return true;
+            }
+        } else if (ev->type() == QEvent::MouseButtonRelease) {
+            m_headerWidget->setCursor(Qt::OpenHandCursor);
+            return true;
+        }
+    }
+
     if (obj == parentWidget()
         && (ev->type() == QEvent::Resize || ev->type() == QEvent::Show)) {
-        reposition();
+        if (!m_hasCustomPosition) reposition();
+        else raise();
     }
     return QWidget::eventFilter(obj, ev);
 }

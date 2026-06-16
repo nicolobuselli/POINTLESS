@@ -12,7 +12,6 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName("sidePanel");
-    setFixedWidth(300);
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -98,44 +97,6 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
 
     scroll->setWidget(content);
     outer->addWidget(scroll, 1);
-
-    // ── Export (pinned bottom) ───────────────────────────────
-    auto* exportBox = new QWidget;
-    exportBox->setObjectName("exportBox");
-    auto* ev = new QVBoxLayout(exportBox);
-    ev->setContentsMargins(16, 12, 16, 14);
-    ev->setSpacing(2);
-
-    ev->addWidget(makeSectionTitle("Export"));
-    ev->addSpacing(6);
-
-    {
-        auto* labelsRow = new QHBoxLayout;
-        labelsRow->setContentsMargins(0, 0, 0, 0);
-        labelsRow->setSpacing(8);
-        labelsRow->addWidget(makeParamLabel("Output name"), 2);
-        labelsRow->addWidget(makeParamLabel("Type of file"), 1);
-        ev->addLayout(labelsRow);
-
-        auto* fieldsRow = new QHBoxLayout;
-        fieldsRow->setContentsMargins(0, 0, 0, 0);
-        fieldsRow->setSpacing(8);
-        m_edtOutputName = new QLineEdit("output");
-        m_cmbFormat     = new NoWheelComboBox;
-        m_cmbFormat->addItems({ "SVG", "PNG", "JPG" });
-        fieldsRow->addWidget(m_edtOutputName, 2);
-        fieldsRow->addWidget(m_cmbFormat, 1);
-        ev->addLayout(fieldsRow);
-        ev->addSpacing(8);
-
-        auto* btnExport = new QPushButton("Export");
-        btnExport->setObjectName("exportBtn");
-        btnExport->setFixedHeight(40);
-        connect(btnExport, &QPushButton::clicked, this, &AdjustmentsPanel::exportRequested);
-        ev->addWidget(btnExport);
-    }
-
-    outer->addWidget(exportBox);
 }
 
 Adjustments AdjustmentsPanel::adjustments() const
@@ -175,9 +136,6 @@ void AdjustmentsPanel::setAdjustments(const Adjustments& a)
     m_posterize->setValue(a.posterize);
     m_threshold->setValue(a.threshold);
 }
-
-QString AdjustmentsPanel::outputFileName() const { return m_edtOutputName->text(); }
-QString AdjustmentsPanel::outputFormat()   const { return m_cmbFormat->currentText(); }
 
 void AdjustmentsPanel::setSourceImage(const QImage& img)
 {

@@ -20,16 +20,25 @@ set(SOURCES
 
     # Core (pure logic)
     src/core/Params.h
+    src/core/ColorMath.h
+    src/core/AnimParams.cpp
+    src/core/AnimParams.h
+    src/core/Animation.cpp
+    src/core/Animation.h
     src/core/ImageAdjuster.cpp
     src/core/ImageAdjuster.h
     src/core/HalftoneRenderer.cpp
     src/core/HalftoneRenderer.h
+    src/core/GridGenerator.cpp
+    src/core/GridGenerator.h
     src/core/DitherRenderer.cpp
     src/core/DitherRenderer.h
     src/core/AsciiRenderer.cpp
     src/core/AsciiRenderer.h
     src/core/BlendCompositor.cpp
     src/core/BlendCompositor.h
+    src/core/PaletteStore.cpp
+    src/core/PaletteStore.h
 
     # Workers
     src/workers/RenderWorker.cpp
@@ -44,12 +53,16 @@ set(SOURCES
     src/ui/Widgets.h
     src/ui/TonalControlsWidget.cpp
     src/ui/TonalControlsWidget.h
+    src/ui/ControlsPanel.cpp
+    src/ui/ControlsPanel.h
     src/ui/AdjustmentsPanel.cpp
     src/ui/AdjustmentsPanel.h
     src/ui/ModePanel.cpp
     src/ui/ModePanel.h
     src/ui/FilmstripWidget.cpp
     src/ui/FilmstripWidget.h
+    src/ui/TimelineWidget.cpp
+    src/ui/TimelineWidget.h
     src/ui/LayersPanel.cpp
     src/ui/LayersPanel.h
 

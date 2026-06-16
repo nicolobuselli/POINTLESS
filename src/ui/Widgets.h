@@ -183,7 +183,6 @@ private:
 class FillSwatch : public QWidget {
 public:
     std::function<void()>       onClicked;
-    std::function<void(float)>  onOpacityDragged;
     std::function<void(QColor)> onColorEdited;   // hex typed/pasted by hand
 
     FillSwatch(QColor color, float opacity, bool showOpacity = true,
@@ -197,8 +196,6 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override;
     void resizeEvent(QResizeEvent*) override;
-    void mousePressEvent(QMouseEvent* e) override;
-    void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
 
 private:
@@ -209,9 +206,6 @@ private:
     QColor     m_color;
     float      m_opacity;
     bool       m_showOpacity = true;
-    bool       m_dragging    = false;
-    QPoint     m_pressPos;
-    float      m_dragStartOp = 1.f;
     QLineEdit* m_hexEdit     = nullptr;
 };
 
@@ -245,13 +239,15 @@ private:
     void updateAllFromHSV();
     void updatePreviewAndHex();
 
-    ColorFieldWidget*  m_field    = nullptr;
-    HueBarWidget*      m_hueBar   = nullptr;
-    OpacityBarWidget*  m_opBar    = nullptr;
-    QLabel*            m_preview  = nullptr;
-    QLineEdit*         m_hexInput = nullptr;
+    ColorFieldWidget*  m_field        = nullptr;
+    HueBarWidget*      m_hueBar       = nullptr;
+    OpacityBarWidget*  m_opBar        = nullptr;
+    QLineEdit*         m_hexInput     = nullptr;
+    QLineEdit*         m_opacityInput = nullptr;
     float m_h = 0.f, m_s = 1.f, m_v = 1.f, m_a = 1.f;
     QPoint m_dragOffset;
+    bool m_pickMode = false;
+    bool eventFilter(QObject* obj, QEvent* ev) override;
 };
 
 // ── Small helpers ────────────────────────────────────────────

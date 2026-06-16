@@ -27,12 +27,8 @@ public:
     // Compute luminance histogram from source image and push to Levels widget.
     void setSourceImage(const QImage& img);
 
-    QString outputFileName() const;
-    QString outputFormat()   const;
-
 signals:
     void adjustmentsChanged();
-    void exportRequested();
     void resetRequested();
 
 private:
@@ -56,7 +52,4 @@ private:
     // Creative
     SliderRow* m_posterize = nullptr;
     SliderRow* m_threshold = nullptr;
-
-    QLineEdit*       m_edtOutputName = nullptr;
-    NoWheelComboBox* m_cmbFormat     = nullptr;
 };

@@ -1,8 +1,9 @@
 #include "MainWindow.h"
 #include "PreviewWidget.h"
-#include "AdjustmentsPanel.h"
+#include "ControlsPanel.h"
 #include "ModePanel.h"
 #include "FilmstripWidget.h"
+#include "TimelineWidget.h"
 #include "LayersPanel.h"
 #include "Widgets.h"
 #include "../workers/RenderWorker.h"
@@ -18,21 +19,16 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPainter>
+#include <QProgressDialog>
+#include <QPushButton>
 #include <QShortcut>
+#include <QSplitter>
+#include <QStackedWidget>
 #include <QSvgGenerator>
 
 namespace {
 constexpr int kMaxUndoSteps   = 100;
 constexpr int kUndoDebounceMs = 400;
-
-QFrame* makeVSeparator()
-{
-    auto* f = new QFrame;
-    f->setObjectName("vseparator");
-    f->setFrameShape(QFrame::NoFrame);
-    f->setFixedWidth(1);
-    return f;
-}
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -49,35 +45,86 @@ MainWindow::MainWindow(QWidget* parent)
     hl->setContentsMargins(0, 0, 0, 0);
     hl->setSpacing(0);
 
-    m_left = new AdjustmentsPanel;
+    m_left = new ControlsPanel;
 
-    auto* centerWidget = new QWidget;
-    auto* cv = new QVBoxLayout(centerWidget);
-    cv->setContentsMargins(0, 0, 0, 0);
-    cv->setSpacing(0);
     m_preview   = new PreviewWidget;
     m_filmstrip = new FilmstripWidget;
-    cv->addWidget(m_preview, 1);
-    cv->addWidget(m_filmstrip);
+    m_timeline  = new TimelineWidget;
+    m_preview->setMinimumHeight(160);   // keep panes from collapsing to nothing
+
+    // Bottom panel: "Images | Timeline" tabs over a stacked area.
+    auto* bottomPanel = new QWidget;
+    bottomPanel->setMinimumHeight(130);   // never collapses away
+    auto* bp = new QVBoxLayout(bottomPanel);
+    bp->setContentsMargins(0, 0, 0, 0);
+    bp->setSpacing(0);
+
+    auto* tabRow = new QWidget;
+    tabRow->setObjectName("tabRow");
+    auto* trl = new QHBoxLayout(tabRow);
+    trl->setContentsMargins(8, 4, 0, 0);
+    trl->setSpacing(4);
+    auto* tabImages   = new QPushButton("Images");
+    auto* tabTimeline = new QPushButton("Timeline");
+    for (QPushButton* b : { tabImages, tabTimeline }) {
+        b->setObjectName("tabBtn");
+        b->setCheckable(true);
+        b->setAutoExclusive(true);
+        b->setFixedHeight(30);
+        b->setMinimumWidth(96);
+        b->setCursor(Qt::PointingHandCursor);
+    }
+    tabImages->setChecked(true);
+    trl->addWidget(tabImages);
+    trl->addWidget(tabTimeline);
+    trl->addStretch(1);
+
+    auto* bottomStack = new QStackedWidget;
+    bottomStack->addWidget(m_filmstrip);   // page 0
+    bottomStack->addWidget(m_timeline);    // page 1
+    connect(tabImages,   &QPushButton::clicked, this, [bottomStack] { bottomStack->setCurrentIndex(0); });
+    connect(tabTimeline, &QPushButton::clicked, this, [bottomStack] { bottomStack->setCurrentIndex(1); });
+    bottomStack->setCurrentIndex(0);   // default to Images
+
+    bp->addWidget(tabRow);
+    bp->addWidget(bottomStack, 1);
+
+    // Center column: preview over the bottom panel, vertically resizable.
+    auto* centerSplit = new QSplitter(Qt::Vertical);
+    centerSplit->setChildrenCollapsible(false);
+    centerSplit->setHandleWidth(5);
+    centerSplit->addWidget(m_preview);
+    centerSplit->addWidget(bottomPanel);
+    centerSplit->setStretchFactor(0, 1);
+    centerSplit->setStretchFactor(1, 0);
+    centerSplit->setSizes({ 600, 220 });
 
     m_layersPanel = new LayersPanel(m_preview);
-
     m_right = new ModePanel;
 
-    hl->addWidget(m_left);
-    hl->addWidget(makeVSeparator());
-    hl->addWidget(centerWidget, 1);
-    hl->addWidget(makeVSeparator());
-    hl->addWidget(m_right);
+    // Main columns: left | center | right, horizontally resizable.
+    auto* mainSplit = new QSplitter(Qt::Horizontal);
+    mainSplit->setChildrenCollapsible(false);
+    mainSplit->setHandleWidth(5);
+    mainSplit->addWidget(m_left);
+    mainSplit->addWidget(centerSplit);
+    mainSplit->addWidget(m_right);
+    mainSplit->setStretchFactor(0, 0);
+    mainSplit->setStretchFactor(1, 1);
+    mainSplit->setStretchFactor(2, 0);
+    mainSplit->setSizes({ 340, 800, 340 });
+
+    hl->addWidget(mainSplit);
 
     setCentralWidget(central);
 
     qApp->installEventFilter(this);
 
     // ── Signals ──────────────────────────────────────────────
-    connect(m_left,  &AdjustmentsPanel::adjustmentsChanged, this, &MainWindow::onParamsChanged);
-    connect(m_left,  &AdjustmentsPanel::exportRequested,    this, &MainWindow::onExport);
-    connect(m_left,  &AdjustmentsPanel::resetRequested,     this, [this]() {
+    connect(m_left,  &ControlsPanel::adjustmentsChanged, this, &MainWindow::onParamsChanged);
+    connect(m_left,  &ControlsPanel::tonalChanged,       this, &MainWindow::onParamsChanged);
+    connect(m_left,  &ControlsPanel::backgroundChanged,  this, &MainWindow::onParamsChanged);
+    connect(m_left,  &ControlsPanel::resetRequested,     this, [this]() {
         if (m_current < 0) return;
         if (Layer* l = activeLayer()) {
             l->adjustments = Adjustments{};
@@ -89,12 +136,38 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(m_right, &ModePanel::paramsChanged,             this, &MainWindow::onParamsChanged);
     connect(m_right, &ModePanel::modeSelected,              this, &MainWindow::onModeSelected);
+    connect(m_right, &ModePanel::exportRequested,           this, &MainWindow::onExport);
 
     connect(m_preview,   &PreviewWidget::filesDropped,           this, &MainWindow::onFilesDropped);
     connect(m_filmstrip, &FilmstripWidget::filesDropped,         this, &MainWindow::onFilesDropped);
     connect(m_filmstrip, &FilmstripWidget::addRequested,         this, &MainWindow::onAddRequested);
     connect(m_filmstrip, &FilmstripWidget::thumbSelected,        this, &MainWindow::onThumbSelected);
     connect(m_filmstrip, &FilmstripWidget::thumbCloseRequested,  this, &MainWindow::onThumbCloseRequested);
+
+    // ── Timeline / animation ─────────────────────────────────
+    m_timeline->onPlayheadChanged = [this](int f) { setPlayhead(f); };
+    m_timeline->onAnimEdited      = [this]() { onTimelineEdited(); };
+    m_timeline->onPlayToggled     = [this](bool p) { onPlayToggled(p); };
+    m_timeline->onAutoKeyToggled  = [this](bool on) { m_autoKey = on; };
+    m_timeline->onImportSequence  = [this]() {
+        const QStringList paths = QFileDialog::getOpenFileNames(
+            this, "Import sequence", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff);;All Files (*)");
+        if (!paths.isEmpty()) importSequence(paths);
+    };
+    // Playback advances ONLY after each preview render completes (gated in
+    // onRenderComplete) so it never floods the thread and can always be stopped.
+    m_playTimer.setSingleShot(true);
+    m_playTimer.setTimerType(Qt::PreciseTimer);
+    connect(&m_playTimer, &QTimer::timeout, this, [this]() {
+        if (!m_playing || m_current < 0) return;
+        Animation& a = m_images[m_current].anim;
+        int next = a.playhead + 1;
+        if (next > a.frameEnd) next = a.frameStart;   // loop
+        a.playhead = next;
+        m_timeline->setPlayheadSilent(next);
+        playStep();
+    });
 
     connect(m_layersPanel, &LayersPanel::visibilityToggled, this, &MainWindow::onLayerVisibilityToggled);
     connect(m_layersPanel, &LayersPanel::layerSelected,     this, &MainWindow::onLayerSelected);
@@ -123,6 +196,11 @@ MainWindow::MainWindow(QWidget* parent)
     addShortcut(QKeySequence("Ctrl+Shift+Z"), &MainWindow::redo);
     addShortcut(QKeySequence("Ctrl+Y"),       &MainWindow::redo);
     addShortcut(QKeySequence("Ctrl+C"),       &MainWindow::copyToClipboard);
+    addShortcut(QKeySequence("Ctrl+V"), [this]() {
+        QWidget* fw = QApplication::focusWidget();
+        if (m_timeline && fw && (fw == m_timeline || m_timeline->isAncestorOf(fw)))
+            m_timeline->pasteKeys();
+    });
 
     // ── Demo image ───────────────────────────────────────────
     addImages({ ":/example.jpg" });
@@ -146,6 +224,13 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         if (event->type() == QEvent::KeyPress) {
             auto* keyEvent = static_cast<QKeyEvent*>(event);
             if (keyEvent->key() == Qt::Key_Space) {
+                // On the timeline, Space toggles playback instead of panning.
+                QWidget* fw = QApplication::focusWidget();
+                if (m_timeline && fw && (fw == m_timeline || m_timeline->isAncestorOf(fw))) {
+                    if (!keyEvent->isAutoRepeat()) m_timeline->togglePlay();
+                    event->accept();
+                    return true;
+                }
                 if (!keyEvent->isAutoRepeat()) {
                     m_spaceDown = true;
                     updatePreviewInteractionState();
@@ -196,6 +281,13 @@ void MainWindow::updateDisplayedPreview()
     }
 
     m_preview->setShowOriginal(false);
+
+    // During playback only preview frames are produced; always show the latest
+    // one so the animation is visible (the full render is stale while playing).
+    if (m_playing && !m_lastPreviewFrame.isNull()) {
+        m_preview->setImage(m_lastPreviewFrame);
+        return;
+    }
 
     if (!m_lastRender.isNull()) {
         m_preview->setImage(m_lastRender);
@@ -272,16 +364,19 @@ SessionParams MainWindow::collectParams() const
     if (idx >= 0) {
         Layer& l = p.layers[idx];
         l.adjustments = m_left->adjustments();
+        // Colors live in the left Colors tab now; inject them into the
+        // render struct of the active layer's kind.
+        const TonalSettings tonal = m_left->tonalSettings();
         switch (l.kind) {
-            case LayerKind::Halftone: l.halftone = m_right->halftoneSettings(); break;
-            case LayerKind::Dither:   l.dither   = m_right->ditherSettings();   break;
-            case LayerKind::Ascii:    l.ascii    = m_right->asciiSettings();    break;
+            case LayerKind::Halftone: l.halftone = m_right->halftoneSettings(); l.halftone.tonal = tonal; break;
+            case LayerKind::Dither:   l.dither   = m_right->ditherSettings();   l.dither.tonal   = tonal; break;
+            case LayerKind::Ascii:    l.ascii    = m_right->asciiSettings();    l.ascii.tonal    = tonal; break;
             case LayerKind::Original: break;   // only adjustments apply
         }
     }
 
-    p.background        = m_right->background();
-    p.backgroundOpacity = m_right->backgroundOpacity();
+    p.background        = m_left->background();
+    p.backgroundOpacity = m_left->backgroundOpacity();
     return p;
 }
 
@@ -294,7 +389,19 @@ void MainWindow::applyParams(const SessionParams& p)
 
     const Layer& l = p.layers[idx];
     m_left->setAdjustments(l.adjustments);
-    m_right->setFromLayer(l, p.background, p.backgroundOpacity);
+
+    // Mirror the active layer's tonal settings into the Colors tab
+    // (Original has no render settings — disable the tab).
+    switch (l.kind) {
+        case LayerKind::Halftone: m_left->setTonalSettings(l.halftone.tonal); break;
+        case LayerKind::Dither:   m_left->setTonalSettings(l.dither.tonal);   break;
+        case LayerKind::Ascii:    m_left->setTonalSettings(l.ascii.tonal);    break;
+        case LayerKind::Original: break;
+    }
+    m_left->setColorsEnabled(l.kind != LayerKind::Original);
+    m_left->setBackground(p.background, p.backgroundOpacity);
+
+    m_right->setFromLayer(l);
 }
 
 void MainWindow::syncLayersPanel()
@@ -310,10 +417,95 @@ void MainWindow::syncLayersPanel()
 void MainWindow::onParamsChanged()
 {
     if (m_current < 0) return;
-    m_images[m_current].state = collectParams();
+    SessionImage& img = m_images[m_current];
+
+    // Baseline currently shown (interpolated frame, or the static state).
+    const SessionParams before = img.anim.hasAnimation()
+        ? paramsAtFrame(img.state, img.anim, img.anim.playhead)
+        : img.state;
+    const SessionParams after = collectParams();
+    img.state = after;
+
+    if (m_autoKey) {
+        autoKeyChanged(before, after);
+        syncTimeline();   // tracks may have appeared/changed
+    }
+
     syncLayersPanel();   // row thumbs follow the layer's adjustments
     scheduleRender();
     m_undoTimer.start();
+}
+
+// Auto-key: write a keyframe at the playhead for every numeric parameter
+// whose value changed between the shown baseline and the new panel values.
+void MainWindow::autoKeyChanged(const SessionParams& before, const SessionParams& after)
+{
+    if (m_current < 0) return;
+    Animation& anim = m_images[m_current].anim;
+    const int frame = anim.playhead;
+
+    const double bgB = getDocParam(before, ParamId::BackgroundOpacity);
+    const double bgA = getDocParam(after,  ParamId::BackgroundOpacity);
+    if (bgB != bgA) upsertKey(anim, -1, ParamId::BackgroundOpacity, frame, bgA);
+
+    for (const Layer& la : after.layers) {
+        const int bi = findLayerById(before.layers, la.id);
+        if (bi < 0) continue;
+        const Layer& lb = before.layers[size_t(bi)];
+        for (ParamId id : animatableParams(la)) {
+            if (getParam(lb, id) != getParam(la, id))
+                upsertKey(anim, la.id, id, frame, getParam(la, id));
+        }
+    }
+}
+
+void MainWindow::setPlayhead(int frame)
+{
+    if (m_current < 0) return;
+    SessionImage& img = m_images[m_current];
+    frame = qBound(img.anim.frameStart, frame, img.anim.frameEnd);
+    img.anim.playhead = frame;
+
+    // Reflect the frame's interpolated parameters in the panels (silent).
+    if (img.anim.hasAnimation()) {
+        applyParams(paramsAtFrame(img.state, img.anim, frame));
+        syncLayersPanel();
+    }
+    m_timeline->setPlayheadSilent(frame);
+    scheduleRender();
+}
+
+void MainWindow::syncTimeline()
+{
+    m_timeline->setAnimation(m_current >= 0 ? m_images[m_current].anim : Animation{});
+}
+
+void MainWindow::onTimelineEdited()
+{
+    if (m_current < 0) return;
+    m_images[m_current].anim = m_timeline->animation();
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+void MainWindow::onPlayToggled(bool playing)
+{
+    if (m_current < 0) { m_playing = false; return; }
+    m_playing = playing;
+    if (playing) {
+        m_lastRender = {};      // drop the stale full render so previews show through
+        playStep();             // render current frame; chain continues on completion
+    } else {
+        m_playTimer.stop();
+        scheduleRender();       // full-resolution render of the frame we stopped on
+    }
+}
+
+void MainWindow::playStep()
+{
+    if (!m_playing || m_current < 0) return;
+    m_playClock.restart();
+    scheduleRender(/*previewOnly=*/true);
 }
 
 // ---------------------------------------------------------------------------
@@ -510,10 +702,25 @@ void MainWindow::onLayerReordered(int layerId, int insertIndex)
     m_undoTimer.start();
 }
 
-void MainWindow::scheduleRender()
+void MainWindow::scheduleRender(bool previewOnly)
 {
     if (m_current < 0) return;
-    m_worker->requestRender(m_images[m_current].source, m_images[m_current].state);
+    const SessionImage& img = m_images[m_current];
+
+    // Source: a clip uses the playhead's frame; a still uses its image.
+    QImage source = img.source;
+    if (!img.frames.isEmpty()) {
+        const int fi = qBound(0, img.anim.playhead - img.anim.frameStart,
+                              img.frames.size() - 1);
+        source = img.frames[fi];
+    }
+
+    // Parameters: bake the animation at the current playhead.
+    const SessionParams params = img.anim.hasAnimation()
+        ? paramsAtFrame(img.state, img.anim, img.anim.playhead)
+        : img.state;
+
+    m_worker->requestRender(source, params, /*fullPass=*/!previewOnly);
 }
 
 void MainWindow::onRenderComplete(QImage result, bool isPreview)
@@ -523,14 +730,25 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
     } else {
         m_lastRender = result;
     }
-    if (m_current >= 0) {
+    // The "hold to compare original" image is not needed while playing back.
+    if (m_current >= 0 && !m_playing) {
         const Layer* l = activeLayer();
         m_preview->setOriginalImage(ImageAdjuster::apply(
             m_images[m_current].source,
             l ? l->adjustments : Adjustments{}));
     }
     updateDisplayedPreview();
-    m_preview->setStatus(isPreview ? "Preview (full render pending…)" : "Done");
+
+    if (m_playing && isPreview && m_current >= 0) {
+        // Pace the next frame so playback approaches real time when renders are
+        // fast and gracefully slows (never floods) when they are slow.
+        const int fps  = qMax(1, m_images[m_current].anim.fps);
+        const int wait = qMax(1, 1000 / fps - int(m_playClock.elapsed()));
+        m_playTimer.start(wait);
+        m_preview->setStatus(QString("Playing · frame %1").arg(m_images[m_current].anim.playhead));
+    } else {
+        m_preview->setStatus(isPreview ? "Preview (full render pending…)" : "Done");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -543,14 +761,15 @@ void MainWindow::pushUndoSnapshot()
     SessionImage& img = m_images[m_current];
 
     if (img.undoIndex >= 0 && img.undoIndex < img.undoStack.size()
-        && img.undoStack[img.undoIndex] == img.state)
+        && img.undoStack[img.undoIndex].params == img.state
+        && img.undoStack[img.undoIndex].anim == img.anim)
         return;   // nothing actually changed
 
     // Drop redo branch
     while (img.undoStack.size() > img.undoIndex + 1)
         img.undoStack.removeLast();
 
-    img.undoStack.append(img.state);
+    img.undoStack.append({ img.state, img.anim });
     if (img.undoStack.size() > kMaxUndoSteps)
         img.undoStack.removeFirst();
     img.undoIndex = img.undoStack.size() - 1;
@@ -569,10 +788,12 @@ void MainWindow::undo()
     SessionImage& img = m_images[m_current];
     if (img.undoIndex <= 0) return;
     --img.undoIndex;
-    img.state = img.undoStack[img.undoIndex];
+    img.state = img.undoStack[img.undoIndex].params;
+    img.anim  = img.undoStack[img.undoIndex].anim;
     applyParams(img.state);
     syncLayersPanel();
-    scheduleRender();
+    syncTimeline();
+    setPlayhead(img.anim.playhead);
 }
 
 void MainWindow::redo()
@@ -587,14 +808,22 @@ void MainWindow::redo()
     SessionImage& img = m_images[m_current];
     if (img.undoIndex >= img.undoStack.size() - 1) return;
     ++img.undoIndex;
-    img.state = img.undoStack[img.undoIndex];
+    img.state = img.undoStack[img.undoIndex].params;
+    img.anim  = img.undoStack[img.undoIndex].anim;
     applyParams(img.state);
     syncLayersPanel();
-    scheduleRender();
+    syncTimeline();
+    setPlayhead(img.anim.playhead);
 }
 
 void MainWindow::copyToClipboard()
 {
+    QWidget* fw = QApplication::focusWidget();
+    if (m_timeline && fw && (fw == m_timeline || m_timeline->isAncestorOf(fw))) {
+        m_timeline->copyKeys();
+        m_preview->setStatus("Keyframes copied");
+        return;
+    }
     if (auto* le = qobject_cast<QLineEdit*>(QApplication::focusWidget())) {
         le->copy();
         return;
@@ -623,7 +852,7 @@ void MainWindow::addImages(const QStringList& paths)
         si.name   = path.startsWith(":/") ? "example" : QFileInfo(path).fileName();
         si.source = img;
         si.state  = (m_current >= 0) ? collectParams() : SessionParams{};
-        si.undoStack.append(si.state);
+        si.undoStack.append({ si.state, si.anim });
         si.undoIndex = 0;
 
         m_images.append(si);
@@ -631,6 +860,37 @@ void MainWindow::addImages(const QStringList& paths)
         lastAdded = m_images.size() - 1;
     }
     if (lastAdded >= 0) switchToImage(lastAdded);
+}
+
+void MainWindow::importSequence(const QStringList& paths)
+{
+    QStringList sorted = paths;
+    sorted.sort();   // order frames by filename
+
+    QVector<QImage> frames;
+    for (const QString& p : sorted) {
+        QImage im(p);
+        if (!im.isNull()) frames.append(im);
+    }
+    if (frames.isEmpty()) {
+        QMessageBox::warning(this, "Import sequence", "No valid images in the selection.");
+        return;
+    }
+
+    SessionImage si;
+    si.name   = QString("sequence (%1)").arg(frames.size());
+    si.frames = frames;
+    si.source = frames.first();
+    si.state  = (m_current >= 0) ? collectParams() : SessionParams{};
+    si.anim.frameStart = 1;
+    si.anim.frameEnd   = frames.size();
+    si.anim.playhead   = 1;
+    si.undoStack.append({ si.state, si.anim });
+    si.undoIndex = 0;
+
+    m_images.append(si);
+    m_filmstrip->addThumb(si.source, si.name);
+    switchToImage(m_images.size() - 1);
 }
 
 void MainWindow::switchToImage(int index)
@@ -648,10 +908,15 @@ void MainWindow::switchToImage(int index)
         m_preview->setStatus("Drop images here or use the orange button below");
         m_filmstrip->setActive(-1);
         m_left->setSourceImage({});
+        m_playTimer.stop();
+        m_playing = false;
+        m_timeline->setAnimation(Animation{});
         m_layersPanel->setVisible(false);
         return;
     }
     m_current = index;
+    m_playTimer.stop();
+    m_playing = false;
     m_left->setSourceImage(m_images[index].source);
     applyParams(m_images[index].state);
     m_filmstrip->setActive(index);
@@ -665,7 +930,8 @@ void MainWindow::switchToImage(int index)
     m_preview->setPanMode(false);
     m_preview->setShowOriginal(false);
     m_preview->resetZoom();
-    scheduleRender();
+    syncTimeline();
+    setPlayhead(m_images[index].anim.playhead);   // applies interpolated params + renders
 }
 
 void MainWindow::onAddRequested()
@@ -726,9 +992,14 @@ void MainWindow::onExport()
     const QImage&       source = m_images[m_current].source;
     const SessionParams params = m_images[m_current].state;
 
-    QString format = m_left->outputFormat().toLower();
-    QString name   = m_left->outputFileName();
+    QString format = m_right->outputFormat().toLower();
+    QString name   = m_right->outputFileName();
     if (name.isEmpty()) name = "output";
+
+    if (format == "png sequence") {
+        exportSequence(name);
+        return;
+    }
 
     QString filter;
     if      (format == "png") filter = "PNG Image (*.png)";
@@ -791,4 +1062,47 @@ void MainWindow::onExport()
     }
 
     m_preview->setStatus("Exported: " + savePath);
+}
+
+// Render every frame [frameStart, frameEnd] (clip frame + animated params)
+// to numbered PNG files in a chosen folder.
+void MainWindow::exportSequence(const QString& baseName)
+{
+    if (m_current < 0) return;
+    SessionImage& img = m_images[m_current];
+    const int f0 = img.anim.frameStart;
+    const int f1 = qMax(f0, img.anim.frameEnd);
+    const int count = f1 - f0 + 1;
+
+    const QString dir = QFileDialog::getExistingDirectory(this, "Export PNG sequence");
+    if (dir.isEmpty()) return;
+
+    const int digits = qMax(4, QString::number(f1).size());
+    QProgressDialog progress("Rendering frames…", "Cancel", 0, count, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+
+    int written = 0;
+    for (int i = 0; i < count; ++i) {
+        progress.setValue(i);
+        if (progress.wasCanceled()) break;
+
+        const int frame = f0 + i;
+        QImage src = img.source;
+        if (!img.frames.isEmpty()) {
+            const int fi = qBound(0, frame - f0, img.frames.size() - 1);
+            src = img.frames[fi];
+        }
+        const SessionParams p = img.anim.hasAnimation()
+            ? paramsAtFrame(img.state, img.anim, frame)
+            : img.state;
+
+        const QImage canvas = RenderWorker::renderDocument(src, p);
+        const QString fn = QString("%1/%2_%3.png")
+            .arg(dir, baseName, QString::number(frame).rightJustified(digits, '0'));
+        if (canvas.save(fn, "PNG")) ++written;
+    }
+    progress.setValue(count);
+
+    m_preview->setStatus(QString("Exported %1 frames to %2").arg(written).arg(dir));
 }

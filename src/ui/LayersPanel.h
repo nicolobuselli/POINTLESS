@@ -74,4 +74,8 @@ private:
     TrashButton*     m_trashBtn     = nullptr;
     bool             m_isExpanded   = true;
     bool             m_updating     = false;
+    QPoint           m_dragStart;
+    QPoint           m_customPosition;
+    bool             m_hasCustomPosition = false;
+    QWidget*         m_headerWidget = nullptr;
 };

@@ -112,16 +112,18 @@ inline bool operator!=(const Adjustments& a, const Adjustments& b) { return !(a 
 
 enum class ToneMode {
     ImageColors = 0,
-    FixedTones  = 1
+    FixedTones  = 1,
+    Palette     = 2     // dither each pixel to the nearest tone colour
 };
 
 struct ToneEntry {
     QColor color = QColor(0xD9, 0xD9, 0xD9);
-    int    level = 128;   // 0..255 luminosity anchor
+    int    level = 128;      // 0..255 luminosity anchor
+    float  opacity = 1.0f;   // 0.0..1.0 per-tone opacity
 };
 
 inline bool operator==(const ToneEntry& a, const ToneEntry& b) {
-    return a.color == b.color && a.level == b.level;
+    return a.color == b.color && a.level == b.level && a.opacity == b.opacity;
 }
 
 struct TonalSettings {
@@ -237,14 +239,57 @@ inline bool operator==(const ShapeEntry& a, const ShapeEntry& b) {
     return a.shape == b.shape && a.svgPath == b.svgPath;
 }
 
+// ── Grid system ──────────────────────────────────────────────
+//
+//  Decouples WHERE samples are placed from HOW primitives are drawn.
+//  A generator produces transformed sample positions; the renderer
+//  consumes them (dots for Square/Hexagonal/Radial, variable-width
+//  strokes for Line/Circles).
+//
+//    spacing      — distance between grid elements (px)
+//    pointSpacing — sample spacing within a structure (Line/Radial/Circles)
+//    diameter     — base primitive size multiplier (independent of spacing)
+//    stretch*     — anisotropic scaling of the grid along an axis
+//
+enum class GridType {
+    Square = 0,
+    Hexagonal,
+    Radial,
+    Line,
+    Circles
+};
+
+struct GridSettings {
+    GridType type               = GridType::Square;
+    float    spacing            = 20.0f;  // 2..200
+    float    pointSpacing       = 20.0f;  // 2..200 — Line/Radial/Circles
+    float    rotation           = 0.0f;   // 0..360 deg
+    float    diameter           = 1.0f;   // 0.1..3.0 primitive size multiplier
+    float    stretchFactor      = 1.0f;   // 0.1..4.0 anisotropic scale
+    float    stretchAngle       = 0.0f;   // 0..360 deg
+    bool     followGridRotation = false;
+};
+
+inline bool operator==(const GridSettings& a, const GridSettings& b) {
+    return a.type == b.type && a.spacing == b.spacing
+        && a.pointSpacing == b.pointSpacing && a.rotation == b.rotation
+        && a.diameter == b.diameter && a.stretchFactor == b.stretchFactor
+        && a.stretchAngle == b.stretchAngle
+        && a.followGridRotation == b.followGridRotation;
+}
+
+// Point Spacing only matters for structures sampled along a path.
+inline bool gridUsesPointSpacing(GridType t) {
+    return t == GridType::Radial || t == GridType::Line || t == GridType::Circles;
+}
+
 struct HalftoneSettings {
     int                     inputDpi       = 72;   // 18..300 — render resolution
     std::vector<ShapeEntry> shapes         = { ShapeEntry{} };
     int                     multiThreshold = 128;  // luminosity bias, shapes.size() > 1
 
-    int   gridSize     = 20;
+    GridSettings grid;
     float gamma        = 1.0f;
-    float symbolSize   = 1.0f;
     float jitter       = 0.0f;
     float opacity      = 1.0f;
     float cornerRadius = 0.0f;
@@ -254,8 +299,8 @@ struct HalftoneSettings {
 
 inline bool operator==(const HalftoneSettings& a, const HalftoneSettings& b) {
     return a.inputDpi == b.inputDpi && a.shapes == b.shapes
-        && a.multiThreshold == b.multiThreshold && a.gridSize == b.gridSize
-        && a.gamma == b.gamma && a.symbolSize == b.symbolSize
+        && a.multiThreshold == b.multiThreshold && a.grid == b.grid
+        && a.gamma == b.gamma
         && a.jitter == b.jitter && a.opacity == b.opacity
         && a.cornerRadius == b.cornerRadius && a.tonal == b.tonal;
 }
@@ -280,14 +325,17 @@ enum class DitherAlgorithm {
     BlueNoise           = 10,  // Void-and-cluster mask; natural appearance
     VoidAndCluster      = 11,  // Ulichney optimal mask; minimal repetition
     // ── Hybrid ───────────────────────────────────────────────────
-    DotDiffusion        = 12   // Class-matrix ordered + error diffusion
+    DotDiffusion        = 12,  // Class-matrix ordered + error diffusion
+    // ── Tone ──────────────────────────────────────────────────────
+    Threshold           = 13   // Hard B/W cut by a threshold (no dithering)
 };
 
 struct DitherSettings {
     DitherAlgorithm algorithm = DitherAlgorithm::FloydSteinberg;
     int             bayerSize = 8;    // 2, 4, 8, 16
     int             pixelSize = 2;    // 1..16 — chunky pixels
-    int             strength  = 100;  // 0..100
+    int             strength  = 50;   // 0..100
+    int             threshold = 50;   // 0..100 — only for the Threshold algorithm
     float           opacity      = 1.0f;
     float           cornerRadius = 0.0f;
 
@@ -297,6 +345,7 @@ struct DitherSettings {
 inline bool operator==(const DitherSettings& a, const DitherSettings& b) {
     return a.algorithm == b.algorithm && a.bayerSize == b.bayerSize
         && a.pixelSize == b.pixelSize && a.strength == b.strength
+        && a.threshold == b.threshold
         && a.opacity == b.opacity && a.cornerRadius == b.cornerRadius
         && a.tonal == b.tonal;
 }

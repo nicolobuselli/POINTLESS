@@ -172,7 +172,8 @@ RenderWorker::RenderWorker(QObject* parent)
 
 RenderWorker::~RenderWorker() = default;
 
-void RenderWorker::requestRender(const QImage& source, const SessionParams& params)
+void RenderWorker::requestRender(const QImage& source, const SessionParams& params,
+                                 bool fullPass)
 {
     m_sourceImage  = source;
     m_latestParams = params;
@@ -183,7 +184,8 @@ void RenderWorker::requestRender(const QImage& source, const SessionParams& para
         launchFast();
     }
 
-    m_fullTimer.start();
+    if (fullPass) m_fullTimer.start();
+    else          m_fullTimer.stop();
 }
 
 SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float scale)
