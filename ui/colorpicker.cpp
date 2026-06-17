@@ -3,7 +3,7 @@
 ColorPicker::ColorPicker(QWidget* parent) : QWidget(parent) {
     // Inizializza con arancione di default
     m_color = QColor("#E05530");
-    // TODO: implementazione UI custom stile Figma
+    // TODO: implementazione UI
 }
 
 QColor ColorPicker::color() const {
