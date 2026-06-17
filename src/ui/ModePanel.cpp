@@ -864,7 +864,7 @@ ModePanel::ModePanel(QWidget* parent)
         fieldsRow->setSpacing(8);
         m_outputName = new QLineEdit("output");
         m_format     = new NoWheelComboBox;
-        m_format->addItems({ "SVG", "PNG", "JPG", "PNG Sequence" });
+        m_format->addItems({ "SVG", "PNG", "JPG", "PNG Sequence", "MP4" });
         fieldsRow->addWidget(m_outputName, 2);
         fieldsRow->addWidget(m_format, 1);
         ev->addLayout(fieldsRow);

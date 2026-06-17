@@ -88,6 +88,7 @@ private:
     bool buildPlayCache();                // pre-render all frames for smooth playback
     void autoKeyChanged(const SessionParams& before, const SessionParams& after);
     void exportSequence(const QString& baseName);
+    void exportVideoMp4(const QString& baseName);
     void updateDisplayedPreview();
     void updatePreviewInteractionState();
 

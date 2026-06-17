@@ -38,6 +38,8 @@
 *.exe
 *.out
 *.app
+# ...but the bundled ffmpeg binary IS tracked on purpose
+!tools/ffmpeg.exe
 
 # Build directories
 build/

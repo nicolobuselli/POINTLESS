@@ -39,6 +39,8 @@ set(SOURCES
     src/core/BlendCompositor.h
     src/core/PaletteStore.cpp
     src/core/PaletteStore.h
+    src/core/VideoIO.cpp
+    src/core/VideoIO.h
 
     # Workers
     src/workers/RenderWorker.cpp
@@ -104,6 +106,17 @@ if(WIN32)
                     --no-opengl-sw
                     "$<TARGET_FILE:ULTRA_Ditherer>"
             COMMENT "Running windeployqt..."
+            VERBATIM
+        )
+    endif()
+
+    # Bundle ffmpeg.exe next to the app so video import/export works out of the box.
+    if(EXISTS "${CMAKE_SOURCE_DIR}/tools/ffmpeg.exe")
+        add_custom_command(TARGET ULTRA_Ditherer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CMAKE_SOURCE_DIR}/tools/ffmpeg.exe"
+                    "$<TARGET_FILE_DIR:ULTRA_Ditherer>/ffmpeg.exe"
+            COMMENT "Bundling ffmpeg.exe..."
             VERBATIM
         )
     endif()

@@ -8,6 +8,7 @@
 #include "Widgets.h"
 #include "../workers/RenderWorker.h"
 #include "../core/ImageAdjuster.h"
+#include "../core/VideoIO.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -25,10 +26,18 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QSvgGenerator>
+#include <QTemporaryDir>
 
 namespace {
 constexpr int kMaxUndoSteps   = 100;
 constexpr int kUndoDebounceMs = 400;
+
+bool isVideoFile(const QString& path)
+{
+    static const QStringList vids = { "mp4", "mov", "avi", "mkv", "webm",
+                                      "m4v", "wmv", "mpg", "mpeg" };
+    return vids.contains(QFileInfo(path).suffix().toLower());
+}
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -875,6 +884,36 @@ void MainWindow::addImages(const QStringList& paths)
 {
     int lastAdded = -1;
     for (const QString& path : paths) {
+        if (isVideoFile(path)) {
+            if (!VideoIO::available()) {
+                QMessageBox::warning(this, "Import video",
+                    "ffmpeg.exe was not found.\n\nPlace ffmpeg.exe next to the application "
+                    "to import and export videos.");
+                continue;
+            }
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            QVector<QImage> frames; double fps = 24.0; QString err;
+            const bool ok = VideoIO::decode(path, frames, fps, err);
+            QApplication::restoreOverrideCursor();
+            if (!ok) { QMessageBox::warning(this, "Import video", err); continue; }
+
+            SessionImage si;
+            si.name   = QFileInfo(path).fileName();
+            si.frames = frames;
+            si.source = frames.first();
+            si.state  = (m_current >= 0) ? collectParams() : SessionParams{};
+            si.anim.frameStart = 1;
+            si.anim.frameEnd   = frames.size();
+            si.anim.fps        = qBound(1, qRound(fps), 240);
+            si.anim.playhead   = 1;
+            si.undoStack.append({ si.state, si.anim });
+            si.undoIndex = 0;
+            m_images.append(si);
+            m_filmstrip->addThumb(si.source, si.name);
+            lastAdded = m_images.size() - 1;
+            continue;
+        }
+
         QImage img(path);
         if (img.isNull()) {
             QMessageBox::warning(this, "Error", "Could not load image:\n" + path);
@@ -972,8 +1011,11 @@ void MainWindow::switchToImage(int index)
 void MainWindow::onAddRequested()
 {
     const QStringList paths = QFileDialog::getOpenFileNames(
-        this, "Add Images", "",
-        "Images (*.png *.jpg *.jpeg *.bmp *.webp *.gif *.tif *.tiff);;All Files (*)");
+        this, "Add images or video", "",
+        "Images & video (*.png *.jpg *.jpeg *.bmp *.webp *.gif *.tif *.tiff "
+        "*.mp4 *.mov *.avi *.mkv *.webm *.m4v);;"
+        "Images (*.png *.jpg *.jpeg *.bmp *.webp *.gif *.tif *.tiff);;"
+        "Video (*.mp4 *.mov *.avi *.mkv *.webm *.m4v);;All Files (*)");
     if (!paths.isEmpty()) addImages(paths);
 }
 
@@ -1033,6 +1075,10 @@ void MainWindow::onExport()
 
     if (format == "png sequence") {
         exportSequence(name);
+        return;
+    }
+    if (format == "mp4") {
+        exportVideoMp4(name);
         return;
     }
 
@@ -1140,4 +1186,72 @@ void MainWindow::exportSequence(const QString& baseName)
     progress.setValue(count);
 
     m_preview->setStatus(QString("Exported %1 frames to %2").arg(written).arg(dir));
+}
+
+// Render every frame to a temp PNG sequence, then encode it to an H.264 mp4
+// (video only) with the bundled ffmpeg.
+void MainWindow::exportVideoMp4(const QString& baseName)
+{
+    if (m_current < 0) return;
+    if (!VideoIO::available()) {
+        QMessageBox::warning(this, "Export video",
+            "ffmpeg.exe was not found.\n\nPlace ffmpeg.exe next to the application to export videos.");
+        return;
+    }
+
+    SessionImage& img = m_images[m_current];
+    const int f0 = img.anim.frameStart;
+    const int f1 = qMax(f0, img.anim.frameEnd);
+    const int count = f1 - f0 + 1;
+
+    const QString savePath = QFileDialog::getSaveFileName(
+        this, "Export MP4", baseName + ".mp4", "MP4 Video (*.mp4)");
+    if (savePath.isEmpty()) return;
+
+    QTemporaryDir tmp;
+    if (!tmp.isValid()) {
+        QMessageBox::critical(this, "Export video", "Could not create a temporary folder.");
+        return;
+    }
+
+    QProgressDialog progress("Rendering frames…", "Cancel", 0, count, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    for (int i = 0; i < count; ++i) {
+        progress.setValue(i);
+        if (progress.wasCanceled()) return;
+
+        const int frame = f0 + i;
+        QImage src = img.source;
+        if (!img.frames.isEmpty())
+            src = img.frames[qBound(0, frame - f0, img.frames.size() - 1)];
+        const SessionParams p = img.anim.hasAnimation()
+            ? paramsAtFrame(img.state, img.anim, frame)
+            : img.state;
+
+        QImage canvas = RenderWorker::renderDocument(src, p);
+        // mp4 (yuv420p) has no alpha — flatten on an opaque background.
+        QImage flat(canvas.size(), QImage::Format_RGB32);
+        QColor bg = p.background; bg.setAlpha(255);
+        flat.fill(bg);
+        QPainter fp(&flat);
+        fp.drawImage(0, 0, canvas);
+        fp.end();
+        flat.save(QString("%1/f_%2.png").arg(tmp.path(),
+                  QString::number(i).rightJustified(6, '0')), "PNG");
+    }
+    progress.setValue(count);
+
+    progress.setLabelText("Encoding video…");
+    progress.setRange(0, 0);   // busy indicator
+    QApplication::processEvents();
+
+    QString err;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = VideoIO::encodePngDir(tmp.path(), "f_%06d.png", img.anim.fps, savePath, err);
+    QApplication::restoreOverrideCursor();
+    progress.close();
+
+    if (!ok) { QMessageBox::critical(this, "Export video", err); return; }
+    m_preview->setStatus("Exported video: " + savePath);
 }
