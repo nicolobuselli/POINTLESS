@@ -26,10 +26,10 @@ jobs:
           cache: true
 
       - name: Configure CMake
-        run: |
-          cmake -B build -G "Visual Studio 17 2022" -A x64 `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_PREFIX_PATH="${{ env.Qt6_DIR }}"
+        # Let CMake pick whatever Visual Studio the runner has (pinning a
+        # version breaks when the image updates). QT_ROOT_DIR is set by
+        # install-qt-action and points at the Qt prefix.
+        run: cmake -B build -DCMAKE_PREFIX_PATH="${{ env.QT_ROOT_DIR }}"
 
       - name: Build
         run: cmake --build build --config Release --parallel
