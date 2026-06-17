@@ -41,6 +41,9 @@ public:
     // Full raster pipeline: background + visible layers (each with its own
     // adjustments) composited with their blend modes.
     static QImage renderDocument(const QImage& source, const SessionParams& params);
+    // Render at a downscaled "preview" resolution (matching the fast pass),
+    // for building the playback frame cache cheaply.
+    static QImage renderPreview(const QImage& source, const SessionParams& params, int maxPx);
     // One layer's renderer, into an open painter (used for SVG export).
     // `adjusted` must already have the layer's adjustments applied.
     static void   renderLayerInto(QPainter& painter, const QImage& adjusted,

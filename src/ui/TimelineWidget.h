@@ -27,6 +27,7 @@ public:
     void      setPlayheadSilent(int frame);       // playback/scrub display only
     bool      autoKey() const;
     void      togglePlay();                        // Space shortcut from MainWindow
+    void      setPlayingSilent(bool on);           // sync play button without emitting
     void      copyKeys();                           // Ctrl+C: copy selected keyframes
     void      pasteKeys();                          // Ctrl+V: paste at the playhead
 

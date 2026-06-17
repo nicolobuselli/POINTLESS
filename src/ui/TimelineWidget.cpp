@@ -479,6 +479,15 @@ void TimelineWidget::togglePlay()
     if (m_playBtn) m_playBtn->toggle();
 }
 
+void TimelineWidget::setPlayingSilent(bool on)
+{
+    if (!m_playBtn) return;
+    m_playBtn->blockSignals(true);
+    m_playBtn->setChecked(on);
+    m_playBtn->setText(QString::fromUtf8(on ? "❚❚" : "►"));
+    m_playBtn->blockSignals(false);
+}
+
 void TimelineWidget::copyKeys()  { if (m_canvas) m_canvas->copySelection(); }
 void TimelineWidget::pasteKeys() { if (m_canvas) m_canvas->pasteAtPlayhead(); }
 

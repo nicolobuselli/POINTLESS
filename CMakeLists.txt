@@ -68,6 +68,7 @@ set(SOURCES
 
     # Resources
     src/resources.qrc
+    src/app.rc
 )
 
 # ── Executable ───────────────────────────────────────────────────────────────

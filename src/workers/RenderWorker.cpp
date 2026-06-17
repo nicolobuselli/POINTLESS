@@ -188,6 +188,27 @@ void RenderWorker::requestRender(const QImage& source, const SessionParams& para
     else          m_fullTimer.stop();
 }
 
+QImage RenderWorker::renderPreview(const QImage& source, const SessionParams& params, int maxPx)
+{
+    if (source.isNull()) return {};
+    const int maxDim = qMax(source.width(), source.height());
+    if (maxDim <= maxPx || maxDim <= 0)
+        return renderDocument(source, params);
+
+    const QImage small = source.scaled(maxPx, maxPx, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    SessionParams p = scaledForPreview(params, float(maxPx) / float(maxDim));
+    // Keep halftone dot scale consistent with the full render (mirrors launchFast).
+    for (Layer& l : p.layers) {
+        if (l.kind != LayerKind::Halftone) continue;
+        const float requested = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
+        const float maxBySize = 6000.0f / float(maxDim);
+        const float minBySize = 16.0f   / float(maxDim);
+        const float eff = qBound(minBySize, requested, maxBySize);
+        l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
+    }
+    return renderDocument(small, p);
+}
+
 SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float scale)
 {
     SessionParams p = params;

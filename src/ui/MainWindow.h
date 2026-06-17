@@ -85,7 +85,7 @@ private:
     void syncTimeline();                  // push current image's anim → timeline widget
     void onTimelineEdited();              // timeline → state (keyframes moved/changed)
     void onPlayToggled(bool playing);
-    void playStep();                      // render current frame's preview during playback
+    bool buildPlayCache();                // pre-render all frames for smooth playback
     void autoKeyChanged(const SessionParams& before, const SessionParams& after);
     void exportSequence(const QString& baseName);
     void updateDisplayedPreview();
@@ -114,8 +114,9 @@ private:
     bool   m_spaceDown = false;
     QTimer m_undoTimer;
 
-    QTimer        m_playTimer;
-    QElapsedTimer m_playClock;
-    bool          m_autoKey = false;
-    bool          m_playing = false;
+    QTimer          m_playTimer;
+    bool            m_autoKey = false;
+    bool            m_playing = false;
+    QVector<QImage> m_playCache;             // pre-rendered frames for playback
+    bool            m_playCacheValid = false;
 };

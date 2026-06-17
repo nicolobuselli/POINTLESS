@@ -155,18 +155,18 @@ MainWindow::MainWindow(QWidget* parent)
             "Images (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff);;All Files (*)");
         if (!paths.isEmpty()) importSequence(paths);
     };
-    // Playback advances ONLY after each preview render completes (gated in
-    // onRenderComplete) so it never floods the thread and can always be stopped.
-    m_playTimer.setSingleShot(true);
+    // Playback shows pre-rendered cache frames (built on Play), so it is smooth
+    // and never blocks: each tick just swaps the displayed image.
     m_playTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_playTimer, &QTimer::timeout, this, [this]() {
-        if (!m_playing || m_current < 0) return;
+        if (!m_playing || m_current < 0 || m_playCache.isEmpty()) return;
         Animation& a = m_images[m_current].anim;
         int next = a.playhead + 1;
         if (next > a.frameEnd) next = a.frameStart;   // loop
         a.playhead = next;
         m_timeline->setPlayheadSilent(next);
-        playStep();
+        const int idx = qBound(0, next - a.frameStart, int(m_playCache.size()) - 1);
+        m_preview->setImage(m_playCache[idx]);
     });
 
     connect(m_layersPanel, &LayersPanel::visibilityToggled, this, &MainWindow::onLayerVisibilityToggled);
@@ -281,13 +281,6 @@ void MainWindow::updateDisplayedPreview()
     }
 
     m_preview->setShowOriginal(false);
-
-    // During playback only preview frames are produced; always show the latest
-    // one so the animation is visible (the full render is stale while playing).
-    if (m_playing && !m_lastPreviewFrame.isNull()) {
-        m_preview->setImage(m_lastPreviewFrame);
-        return;
-    }
 
     if (!m_lastRender.isNull()) {
         m_preview->setImage(m_lastRender);
@@ -417,6 +410,7 @@ void MainWindow::syncLayersPanel()
 void MainWindow::onParamsChanged()
 {
     if (m_current < 0) return;
+    m_playCacheValid = false;
     SessionImage& img = m_images[m_current];
 
     // Baseline currently shown (interpolated frame, or the static state).
@@ -448,14 +442,19 @@ void MainWindow::autoKeyChanged(const SessionParams& before, const SessionParams
     const double bgA = getDocParam(after,  ParamId::BackgroundOpacity);
     if (bgB != bgA) upsertKey(anim, -1, ParamId::BackgroundOpacity, frame, bgA);
 
-    for (const Layer& la : after.layers) {
-        const int bi = findLayerById(before.layers, la.id);
-        if (bi < 0) continue;
-        const Layer& lb = before.layers[size_t(bi)];
-        for (ParamId id : animatableParams(la)) {
-            if (getParam(lb, id) != getParam(la, id))
-                upsertKey(anim, la.id, id, frame, getParam(la, id));
-        }
+    // Only the ACTIVE layer can be edited from the panels. collectParams()
+    // leaves the other layers at their base values, so comparing them against
+    // the interpolated baseline would falsely "detect" changes and write spurious
+    // keyframes that flatten the other layers' animation. Key the active layer only.
+    const int aid = after.activeLayerId;
+    const int ia  = findLayerById(after.layers,  aid);
+    const int ib  = findLayerById(before.layers, aid);
+    if (ia < 0 || ib < 0) return;
+    const Layer& la = after.layers[size_t(ia)];
+    const Layer& lb = before.layers[size_t(ib)];
+    for (ParamId id : animatableParams(la)) {
+        if (getParam(lb, id) != getParam(la, id))
+            upsertKey(anim, aid, id, frame, getParam(la, id));
     }
 }
 
@@ -483,6 +482,7 @@ void MainWindow::syncTimeline()
 void MainWindow::onTimelineEdited()
 {
     if (m_current < 0) return;
+    m_playCacheValid = false;
     m_images[m_current].anim = m_timeline->animation();
     scheduleRender();
     m_undoTimer.start();
@@ -491,21 +491,62 @@ void MainWindow::onTimelineEdited()
 void MainWindow::onPlayToggled(bool playing)
 {
     if (m_current < 0) { m_playing = false; return; }
-    m_playing = playing;
+
     if (playing) {
-        m_lastRender = {};      // drop the stale full render so previews show through
-        playStep();             // render current frame; chain continues on completion
+        if (!buildPlayCache()) {            // canceled or nothing to play
+            m_playing = false;
+            m_timeline->setPlayingSilent(false);
+            return;
+        }
+        m_playing = true;
+        Animation& a = m_images[m_current].anim;
+        const int idx = qBound(0, a.playhead - a.frameStart, int(m_playCache.size()) - 1);
+        m_preview->setImage(m_playCache[idx]);   // show current frame immediately
+        m_playTimer.start(1000 / qMax(1, a.fps));
     } else {
+        m_playing = false;
         m_playTimer.stop();
-        scheduleRender();       // full-resolution render of the frame we stopped on
+        scheduleRender();                        // full-resolution render of the current frame
     }
 }
 
-void MainWindow::playStep()
+// Pre-render every frame at preview resolution so playback is smooth. Returns
+// false if there's nothing to play or the user canceled.
+bool MainWindow::buildPlayCache()
 {
-    if (!m_playing || m_current < 0) return;
-    m_playClock.restart();
-    scheduleRender(/*previewOnly=*/true);
+    if (m_current < 0) return false;
+    if (m_playCacheValid && !m_playCache.isEmpty()) return true;
+
+    SessionImage& img = m_images[m_current];
+    const int f0 = img.anim.frameStart;
+    const int f1 = qMax(f0, img.anim.frameEnd);
+    const int count = f1 - f0 + 1;
+    if (count <= 1 && !img.anim.hasAnimation() && img.frames.isEmpty())
+        return false;   // single still, nothing to animate
+
+    m_playCache.clear();
+    m_playCache.reserve(count);
+
+    QProgressDialog progress("Preparing playback…", "Cancel", 0, count, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(300);
+
+    for (int i = 0; i < count; ++i) {
+        progress.setValue(i);
+        if (progress.wasCanceled()) { m_playCache.clear(); return false; }
+
+        const int frame = f0 + i;
+        QImage src = img.source;
+        if (!img.frames.isEmpty())
+            src = img.frames[qBound(0, frame - f0, img.frames.size() - 1)];
+        const SessionParams p = img.anim.hasAnimation()
+            ? paramsAtFrame(img.state, img.anim, frame)
+            : img.state;
+        m_playCache.append(RenderWorker::renderPreview(src, p, RenderWorker::FAST_MAX_PX));
+    }
+    progress.setValue(count);
+    m_playCacheValid = true;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -738,17 +779,7 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
             l ? l->adjustments : Adjustments{}));
     }
     updateDisplayedPreview();
-
-    if (m_playing && isPreview && m_current >= 0) {
-        // Pace the next frame so playback approaches real time when renders are
-        // fast and gracefully slows (never floods) when they are slow.
-        const int fps  = qMax(1, m_images[m_current].anim.fps);
-        const int wait = qMax(1, 1000 / fps - int(m_playClock.elapsed()));
-        m_playTimer.start(wait);
-        m_preview->setStatus(QString("Playing · frame %1").arg(m_images[m_current].anim.playhead));
-    } else {
-        m_preview->setStatus(isPreview ? "Preview (full render pending…)" : "Done");
-    }
+    m_preview->setStatus(isPreview ? "Preview (full render pending…)" : "Done");
 }
 
 // ---------------------------------------------------------------------------
@@ -790,6 +821,7 @@ void MainWindow::undo()
     --img.undoIndex;
     img.state = img.undoStack[img.undoIndex].params;
     img.anim  = img.undoStack[img.undoIndex].anim;
+    m_playCacheValid = false;
     applyParams(img.state);
     syncLayersPanel();
     syncTimeline();
@@ -810,6 +842,7 @@ void MainWindow::redo()
     ++img.undoIndex;
     img.state = img.undoStack[img.undoIndex].params;
     img.anim  = img.undoStack[img.undoIndex].anim;
+    m_playCacheValid = false;
     applyParams(img.state);
     syncLayersPanel();
     syncTimeline();
@@ -895,6 +928,8 @@ void MainWindow::importSequence(const QStringList& paths)
 
 void MainWindow::switchToImage(int index)
 {
+    m_playCacheValid = false;
+    m_playCache.clear();
     if (index < 0 || index >= m_images.size()) {
         m_current = -1;
         m_lastRender = {};
