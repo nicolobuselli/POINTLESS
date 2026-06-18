@@ -129,11 +129,22 @@ QImage RenderWorker::renderLayer(const QImage& source, const Layer& layer)
 
 QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& params)
 {
-    if (source.isNull()) return {};
+    return renderDocument(source, params, {});
+}
 
-    // Canvas size is the source size; layers whose Size% adjustment
-    // resamples the reference are fitted back onto the canvas.
-    const QSize outSize = source.size();
+QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& params,
+                                    const QHash<int, QImage>& layerSrc)
+{
+    // Canvas size: the document base, or (if there's no base) the first
+    // visible layer's own media.
+    QSize outSize = source.isNull() ? QSize() : source.size();
+    if (outSize.isEmpty()) {
+        for (const Layer& l : params.layers) {
+            const QImage s = layerSrc.value(l.id);
+            if (!s.isNull()) { outSize = s.size(); break; }
+        }
+    }
+    if (outSize.isEmpty()) return {};
 
     QColor bg = params.background;
     bg.setAlphaF(params.backgroundOpacity);
@@ -144,7 +155,9 @@ QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& p
     // Layer stack is stored top→bottom (UI order); composite bottom→top.
     for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
         if (!it->visible) continue;
-        QImage layerImg = renderLayer(source, *it);
+        const QImage src = layerSrc.contains(it->id) ? layerSrc.value(it->id) : source;
+        if (src.isNull()) continue;
+        QImage layerImg = renderLayer(src, *it);
         if (layerImg.size() != outSize)
             layerImg = layerImg.scaled(outSize, Qt::IgnoreAspectRatio,
                                        Qt::SmoothTransformation);
@@ -173,10 +186,11 @@ RenderWorker::RenderWorker(QObject* parent)
 RenderWorker::~RenderWorker() = default;
 
 void RenderWorker::requestRender(const QImage& source, const SessionParams& params,
-                                 bool fullPass)
+                                 bool fullPass, const QHash<int, QImage>& layerSrc)
 {
     m_sourceImage  = source;
     m_latestParams = params;
+    m_layerSrc     = layerSrc;
 
     if (m_fastWatcher.isRunning()) {
         m_fastPending = true;
@@ -188,12 +202,12 @@ void RenderWorker::requestRender(const QImage& source, const SessionParams& para
     else          m_fullTimer.stop();
 }
 
-QImage RenderWorker::renderPreview(const QImage& source, const SessionParams& params, int maxPx)
+QImage RenderWorker::renderPreview(const QImage& source, const SessionParams& params, int maxPx,
+                                   const QHash<int, QImage>& layerSrc)
 {
-    if (source.isNull()) return {};
     const int maxDim = qMax(source.width(), source.height());
-    if (maxDim <= maxPx || maxDim <= 0)
-        return renderDocument(source, params);
+    if (source.isNull() || maxDim <= maxPx || maxDim <= 0)
+        return renderDocument(source, params, layerSrc);
 
     const QImage small = source.scaled(maxPx, maxPx, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     SessionParams p = scaledForPreview(params, float(maxPx) / float(maxDim));
@@ -206,7 +220,7 @@ QImage RenderWorker::renderPreview(const QImage& source, const SessionParams& pa
         const float eff = qBound(minBySize, requested, maxBySize);
         l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
     }
-    return renderDocument(small, p);
+    return renderDocument(small, p, layerSrc);
 }
 
 SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float scale)
@@ -251,8 +265,9 @@ void RenderWorker::launchFast()
 
     emit renderStarted(true);
 
-    m_fastWatcher.setFuture(QtConcurrent::run([src, p]() {
-        return renderDocument(src, p);
+    const QHash<int,QImage> ls = m_layerSrc;
+    m_fastWatcher.setFuture(QtConcurrent::run([src, p, ls]() {
+        return renderDocument(src, p, ls);
     }));
 }
 
@@ -262,11 +277,12 @@ void RenderWorker::launchFull()
 
     QImage src = m_sourceImage;
     SessionParams p = m_latestParams;
+    const QHash<int,QImage> ls = m_layerSrc;
 
     emit renderStarted(false);
 
-    m_fullWatcher.setFuture(QtConcurrent::run([src, p]() {
-        return renderDocument(src, p);
+    m_fullWatcher.setFuture(QtConcurrent::run([src, p, ls]() {
+        return renderDocument(src, p, ls);
     }));
 }
 

@@ -406,6 +406,17 @@ inline bool operator==(const AsciiSettings& a, const AsciiSettings& b) {
 //  identified by a per-session unique id.
 // ============================================================
 
+// Per-layer placement on the canvas (centre offset as a fraction of the
+// canvas, plus a scale %). Identity = fills the canvas. Animatable.
+struct LayerTransform {
+    float xPct     = 0.0f;     // -1..1 — horizontal centre offset (fraction of canvas)
+    float yPct     = 0.0f;     // -1..1 — vertical centre offset
+    float scalePct = 100.0f;   // 1..1000 — uniform scale
+};
+inline bool operator==(const LayerTransform& a, const LayerTransform& b) {
+    return a.xPct == b.xPct && a.yPct == b.yPct && a.scalePct == b.scalePct;
+}
+
 struct Layer {
     int       id      = -1;
     LayerKind kind    = LayerKind::Original;
@@ -413,6 +424,9 @@ struct Layer {
     bool      visible = true;
     bool      pinned  = false;   // turned on by hand → survives mode switches
     BlendMode blend   = BlendMode::Normal;
+
+    int            mediaId   = -1;   // which media this layer draws (-1 = document base)
+    LayerTransform transform;        // placement on the canvas
 
     Adjustments      adjustments;   // per-layer reference image
     HalftoneSettings halftone;      // only the struct matching `kind` is used
@@ -423,6 +437,7 @@ struct Layer {
 inline bool operator==(const Layer& a, const Layer& b) {
     return a.id == b.id && a.kind == b.kind && a.name == b.name
         && a.visible == b.visible && a.pinned == b.pinned && a.blend == b.blend
+        && a.mediaId == b.mediaId && a.transform == b.transform
         && a.adjustments == b.adjustments && a.halftone == b.halftone
         && a.dither == b.dither && a.ascii == b.ascii;
 }

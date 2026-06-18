@@ -38,18 +38,40 @@ QScrollArea > QWidget > QWidget {
     background-color: #272727;
 }
 
-/* ── Section titles ──────────────────────────────────────────── */
+/* ── Section titles (Funnel Display Bold 22 · #EEEEEE) ────────── */
 #sectionTitle {
     color: #EEEEEE;
-    font-size: 10pt;
-    font-weight: 600;
+    font-size: s(22)px;
+    font-weight: 700;
     background: transparent;
 }
 
-/* ── Parameter labels ────────────────────────────────────────── */
+/* Editable file name (top-left) — same look as a section title. */
+#fileTitle, #fileTitleEdit {
+    color: #EEEEEE;
+    font-size: s(22)px;
+    font-weight: 700;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+#fileTitleEdit {
+    selection-background-color: #568AD9;
+}
+
+/* ── Parameter labels (Funnel Display Medium 18 · #B2B2B2) ────── */
 #paramLabel {
     color: #B2B2B2;
-    font-size: 9pt;
+    font-size: s(18)px;
+    font-weight: 500;
+    background: transparent;
+}
+
+/* Labels above a horizontal-slider parameter (a touch smaller). */
+#sliderLabel {
+    color: #B2B2B2;
+    font-size: s(16)px;
+    font-weight: 500;
     background: transparent;
 }
 
@@ -71,10 +93,117 @@ QScrollArea > QWidget > QWidget {
     background-color: #272727;
 }
 
+/* Section-title band dividers (left column) */
+#bandLine {
+    background-color: #3B3B3B;
+    min-height: 1px;
+    max-height: 1px;
+}
+
+/* Embedded layers list */
+#layersEmbedded,
+#layersScroll,
+#layersScroll > QWidget > QWidget,
+#layerRowsArea {
+    background-color: #272727;
+}
+
 #exportBox {
     background-color: #272727;
     border-top: 1px solid #3B3B3B;
 }
+
+/* ── Rectangle tabs (Timeline/Library, Halftone/Dither/Ascii) ──── */
+QPushButton#rectTab {
+    background-color: transparent;
+    color: #8E8E8E;
+    border: none;
+    border-radius: s(5)px;
+    padding: s(12)px s(26)px;
+    font-size: s(18)px;
+    font-weight: 500;
+}
+QPushButton#rectTab:hover {
+    color: #C8C8C8;
+}
+QPushButton#rectTab:checked {
+    background-color: #3F3F3F;
+    color: #EEEEEE;
+    font-weight: 700;
+}
+
+/* ── Bottom bar (same colour as the side panels) ──────────────── */
+#bottomBar, #bottomTabRow {
+    background-color: #272727;
+}
+
+/* ── Timeline ────────────────────────────────────────────────── */
+#timelinePanel, #timelineScroll, #timelineScroll > QWidget > QWidget {
+    background-color: #272727;
+}
+
+#tlRangeBox {
+    background-color: #3B3B3B;
+    border: 1px solid #5D5D5D;
+    border-radius: s(10)px;
+}
+#tlRangeBox:hover { border-color: #828282; }
+#tlRangeLbl {
+    color: #8E8E8E;
+    font-size: s(15)px;
+    font-weight: 500;
+    background: transparent;
+}
+QSpinBox#tlInnerSpin {
+    background: transparent;
+    border: none;
+    color: #A6A6A6;
+    font-size: s(16)px;
+    font-weight: 500;
+    padding: 0;
+}
+
+QPushButton#autoKeyBtn {
+    background-color: #3B3B3B;
+    border: 1px solid #5D5D5D;
+    border-radius: s(10)px;
+    color: #B2B2B2;
+    font-size: s(16)px;
+    font-weight: 500;
+    padding: s(8)px s(16)px;
+}
+QPushButton#autoKeyBtn:hover { border-color: #828282; }
+QPushButton#autoKeyBtn:checked {
+    background-color: #FF6A00;
+    border-color: #FF6A00;
+    color: #FFFFFF;
+}
+
+#transportBox {
+    background-color: #3B3B3B;
+    border: 1px solid #5D5D5D;
+    border-radius: s(14)px;
+}
+#tlSep { background-color: #5D5D5D; }
+
+QPushButton#tlBtn {
+    background-color: transparent;
+    border: none;
+}
+QPushButton#tlBtn:hover    { background-color: #484848; }
+QPushButton#tlBtn:pressed  { background-color: #2E2E2E; }
+QPushButton#tlBtn:checked  { background-color: #4A4A4A; }
+
+QSpinBox#tlSpin {
+    background-color: #3B3B3B;
+    border: 1px solid #5D5D5D;
+    border-radius: s(10)px;
+    color: #A6A6A6;
+    font-size: s(16)px;
+    font-weight: 500;
+    padding: 0 s(12)px;
+}
+QSpinBox#tlSpin:hover { border-color: #828282; }
 
 /* ── Mode tabs ───────────────────────────────────────────────── */
 #tabRow {
@@ -141,17 +270,35 @@ QPushButton#exportBtn {
     background-color: #3B3B3B;
     color: #E3E3E3;
     border: 1px solid #5D5D5D;
-    border-radius: 6px;
-    padding: 0 14px;
-    min-height: 40px;
-    font-size: 10pt;
-    font-weight: 600;
+    border-radius: s(8)px;
+    padding: 0 s(14)px;
+    min-height: s(48)px;
+    font-size: s(17)px;
+    font-weight: 500;
 }
 QPushButton#exportBtn:hover {
     background-color: #484848;
     border-color: #828282;
 }
 QPushButton#exportBtn:pressed {
+    background-color: #2E2E2E;
+}
+
+/* ── Reset adjustments button (box text: Funnel Display Medium 16) ── */
+QPushButton#resetBtn {
+    background-color: #3B3B3B;
+    color: #E3E3E3;
+    border: 1px solid #5D5D5D;
+    border-radius: s(8)px;
+    padding: 0 s(14)px;
+    font-size: s(17)px;
+    font-weight: 500;
+}
+QPushButton#resetBtn:hover {
+    background-color: #484848;
+    border-color: #828282;
+}
+QPushButton#resetBtn:pressed {
     background-color: #2E2E2E;
 }
 
@@ -257,14 +404,24 @@ QPushButton#iconBtn:pressed {
     background-color: #2A2A2A;
 }
 
+/* Favourite (save palette) bookmark — sits in the right gutter */
+QPushButton#favBtn {
+    background-color: transparent;
+    border: none;
+    border-radius: s(6)px;
+}
+QPushButton#favBtn:hover   { background-color: #3B3B3B; }
+QPushButton#favBtn:pressed { background-color: #2A2A2A; }
+
 /* ── ComboBox ────────────────────────────────────────────────── */
 QComboBox {
     background-color: #3B3B3B;
     border: 1px solid #5D5D5D;
-    border-radius: 6px;
+    border-radius: s(8)px;
     color: #E3E3E3;
-    padding: 0 10px;
-    min-height: 38px;
+    padding: 0 s(12)px;
+    min-height: s(48)px;
+    font-size: s(17)px;
     selection-background-color: transparent;
 }
 QComboBox:hover   { border-color: #828282; }
@@ -302,21 +459,21 @@ QComboBox QAbstractItemView::item:selected {
 
 /* ── Sliders ─────────────────────────────────────────────────── */
 QSlider::groove:horizontal {
-    height: 3px;
+    height: s(7)px;
     background: #3B3B3B;
     border: 1px solid #5D5D5D;
-    border-radius: 2px;
+    border-radius: s(4)px;
 }
 QSlider::sub-page:horizontal {
     background: #E3E3E3;
-    border-radius: 2px;
+    border-radius: s(4)px;
 }
 QSlider::handle:horizontal {
-    width: 14px;
-    height: 14px;
-    margin: -6px 0;
+    width: s(16)px;
+    height: s(16)px;
+    margin: s(-6)px 0;
     background: #E3E3E3;
-    border-radius: 7px;
+    border-radius: s(8)px;
 }
 QSlider::handle:horizontal:hover {
     background: #FFFFFF;
@@ -326,8 +483,7 @@ QSlider::handle:horizontal:hover {
 #dragSpinBox {
     background-color: #3B3B3B;
     border: 1px solid #5D5D5D;
-    border-radius: 6px;
-    min-height: 34px;
+    border-radius: s(8)px;
 }
 #dragSpinBox:hover {
     border-color: #828282;
@@ -349,31 +505,35 @@ QSlider::handle:horizontal:hover {
 QLineEdit {
     background-color: #3B3B3B;
     border: 1px solid #5D5D5D;
-    border-radius: 6px;
+    border-radius: s(8)px;
     color: #E3E3E3;
-    padding: 0 10px;
-    min-height: 38px;
+    padding: 0 s(12)px;
+    min-height: s(48)px;
+    font-size: s(17)px;
 }
 QLineEdit:focus {
     border-color: #828282;
 }
 
-/* ── Scrollbar ───────────────────────────────────────────────── */
+/* ── Scrollbar (handle #8E8E8E, slim, no arrows) ──────────────── */
 QScrollBar:vertical {
-    width: 5px;
-    background: #272727;
+    width: s(10)px;
+    background: transparent;
     margin: 0;
 }
 QScrollBar::handle:vertical {
-    background: #5D5D5D;
-    border-radius: 3px;
-    min-height: 20px;
+    background: #8E8E8E;
+    border-radius: s(5)px;          /* = width/2 → fully rounded pill */
+    min-height: s(40)px;
 }
 QScrollBar::handle:vertical:hover {
-    background: #828282;
+    background: #A6A6A6;
 }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical { background: transparent; }
+QScrollBar:horizontal { height: 0; }
 
 /* ── Layers panel (floating over preview) ────────────────────── */
 #layersPanel {
@@ -395,29 +555,33 @@ QPushButton#layersToggleBtn:pressed {
     background-color: #161616;
 }
 
-#layerRow {
-    background-color: #313131;
-    border: none;
-    border-radius: 6px;
+#layerRowOuter {
+    background-color: transparent;
 }
-#layerRow:hover {
-    background-color: #3B3B3B;
+#layerRow {
+    background-color: transparent;
+    border: none;
+    border-radius: s(10)px;
+}
+#layerRowOuter:hover #layerRow {
+    background-color: #2E2E2E;
 }
 #layerRow[selected="true"] {
-    background-color: #FD5A1F;
+    background-color: #568AD9;
 }
-#layerRow[selected="true"]:hover {
-    background-color: #FD6B35;
+#layerRowOuter:hover #layerRow[selected="true"] {
+    background-color: #5E92E0;
 }
 
 #layerName {
     background: transparent;
-    color: #E3E3E3;
-    font-size: 9pt;
+    color: #B2B2B2;
+    font-size: s(18)px;
+    font-weight: 500;
 }
 #layerRow[selected="true"] #layerName {
     color: #FFFFFF;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 QPushButton#eyeBtn {

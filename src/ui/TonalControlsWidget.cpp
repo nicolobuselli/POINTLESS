@@ -1,4 +1,5 @@
 #include "TonalControlsWidget.h"
+#include "UiScale.h"
 #include "../core/PaletteStore.h"
 
 #include <QHBoxLayout>
@@ -72,6 +73,7 @@ class PalettePopup : public QFrame
 {
 public:
     std::function<void(const std::vector<QColor>&, const QString&)> onSelect;
+    std::function<void()> onExtract;
     std::function<void()> onClosed;
 
     explicit PalettePopup(QWidget* parent = nullptr)
@@ -115,6 +117,27 @@ private:
     void build()
     {
         clear();
+
+        // Top action: extract a palette from the current image.
+        {
+            auto* row = new QPushButton;
+            row->setObjectName("paletteItem");
+            row->setCursor(Qt::PointingHandCursor);
+            row->setFixedHeight(Ui::px(36));
+            auto* hl = new QHBoxLayout(row);
+            hl->setContentsMargins(Ui::px(12), 0, Ui::px(10), 0);
+            auto* name = new QLabel("Extract from image");
+            name->setAttribute(Qt::WA_TransparentForMouseEvents);
+            name->setStyleSheet(QString("background:transparent; color:#E3E3E3; font-size:%1px; font-weight:500;").arg(Ui::px(15)));
+            hl->addWidget(name);
+            hl->addStretch(1);
+            connect(row, &QPushButton::clicked, this, [this]() {
+                if (onExtract) onExtract();
+                hide();
+            });
+            m_layout->addWidget(row);
+        }
+
         if (m_library.empty()) {
             auto* empty = new QLabel("No saved palettes");
             empty->setStyleSheet("color:#808080; background:transparent;"
@@ -232,28 +255,38 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
 
     auto* vl = new QVBoxLayout(this);
     vl->setContentsMargins(0, 0, 0, 0);
-    vl->setSpacing(10);
+    vl->setSpacing(Ui::px(10));
 
-    // ── Palette selector (header opens a floating popup) ────────
+    // The body extends to the +/− gutter (24px). The favourite sits in that
+    // gutter; every other control stops kGutterComp earlier (the 70px box
+    // gutter), so all box right-edges line up exactly.
+    const int kFavW       = Ui::px(26);
+    const int kGutterComp = Ui::px(46);   // 70 − 24
+
+    // ── Palette selector + colour count + favourite(save) ───────
     m_paletteSection = new QWidget;
     {
         auto* pl = new QVBoxLayout(m_paletteSection);
         pl->setContentsMargins(0, 0, 0, 0);
-        pl->setSpacing(4);
+        pl->setSpacing(Ui::px(6));
         pl->addWidget(makeParamLabel("Palette"));
+
+        auto* row = new QHBoxLayout;
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(0);   // gaps added explicitly so right-edges line up
 
         m_paletteHeader = new QPushButton;
         m_paletteHeader->setObjectName("paletteHeader");
         m_paletteHeader->setCursor(Qt::PointingHandCursor);
-        m_paletteHeader->setFixedHeight(38);
+        m_paletteHeader->setFixedHeight(Ui::px(48));
         {
             auto* hl = new QHBoxLayout(m_paletteHeader);
-            hl->setContentsMargins(12, 0, 8, 0);
-            hl->setSpacing(8);
+            hl->setContentsMargins(Ui::px(12), 0, Ui::px(10), 0);
+            hl->setSpacing(Ui::px(8));
             m_paletteName = new QLabel("Custom");
             m_paletteName->setAttribute(Qt::WA_TransparentForMouseEvents);
-            m_paletteName->setStyleSheet("background:transparent; color:#E3E3E3; font-size:10pt;");
-            m_palettePreview = new SwatchStrip(18);
+            m_paletteName->setStyleSheet(QString("background:transparent; color:#E3E3E3; font-size:%1px; font-weight:500;").arg(Ui::px(17)));
+            m_palettePreview = new SwatchStrip(Ui::px(18));
             m_paletteChevron = new ChevronButton(ChevronButton::Down);
             m_paletteChevron->setAttribute(Qt::WA_TransparentForMouseEvents);
             hl->addWidget(m_paletteName);
@@ -262,7 +295,35 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
             hl->addWidget(m_paletteChevron);
         }
         connect(m_paletteHeader, &QPushButton::clicked, this, [this]() { openPalettePopup(); });
-        pl->addWidget(m_paletteHeader);
+        row->addWidget(m_paletteHeader, 1);
+        row->addSpacing(Ui::px(8));   // gap between palette and count
+
+        m_modeCombo = new NoWheelComboBox;
+        m_modeCombo->addItem("Image colors");
+        for (int n = 1; n <= kMaxTones; ++n)
+            m_modeCombo->addItem(QString::number(n) + (n == 1 ? " color" : " colors"));
+        m_modeCombo->setFixedWidth(Ui::px(150));
+        row->addWidget(m_modeCombo);
+
+        // Gap so the count box stops at the 70px box-gutter while the
+        // favourite sits in the +/− toggle column. kFavNudge shifts only the
+        // favourite a touch left to line up with the section toggles (the box
+        // edges stay put: spacer + fav + trailing = kGutterComp).
+        const int kFavNudge = Ui::px(6);
+        row->addSpacing(kGutterComp - kFavW - kFavNudge);
+
+        auto* fav = new QPushButton;
+        fav->setObjectName("favBtn");
+        fav->setCursor(Qt::PointingHandCursor);
+        fav->setFixedSize(kFavW, Ui::px(48));
+        fav->setIcon(QIcon(":/icons/favorite.svg"));
+        fav->setIconSize(QSize(Ui::px(17), Ui::px(22)));
+        fav->setToolTip("Save palette");
+        connect(fav, &QPushButton::clicked, this, [this]() { beginSavePalette(); });
+        row->addWidget(fav);
+        row->addSpacing(kFavNudge);
+
+        pl->addLayout(row);
     }
     vl->addWidget(m_paletteSection);
 
@@ -273,76 +334,45 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
                      m_settings.mode == ToneMode::Palette ? ToneMode::Palette
                                                           : ToneMode::FixedTones);
     };
+    m_palettePopup->onExtract = [this]() { extractFromImage(); };
     m_palettePopup->onClosed = [this]() {
         m_paletteChevron->setDirection(ChevronButton::Down);
         m_lastPopupClose = QDateTime::currentMSecsSinceEpoch();
     };
 
-    // ── Color count + Generate random (shared row) ──────────────
+    // ── Generate random (full width) ────────────────────────────
+    m_generateBtn = new QPushButton("generate random");
+    m_generateBtn->setObjectName("exportBtn");
+    m_generateBtn->setCursor(Qt::PointingHandCursor);
+    connect(m_generateBtn, &QPushButton::clicked, this, [this]() { generateRandom(); });
     {
-        auto* countRow = new QWidget;
-        auto* cl = new QHBoxLayout(countRow);
-        cl->setContentsMargins(0, 0, 0, 0);
-        cl->setSpacing(8);
-
-        m_modeCombo = new NoWheelComboBox;
-        m_modeCombo->addItem("Image colors");
-        for (int n = 1; n <= kMaxTones; ++n)
-            m_modeCombo->addItem(QString::number(n) + (n == 1 ? " color" : " colors"));
-        cl->addWidget(m_modeCombo, 1);
-
-        m_generateBtn = new QPushButton("Generate\nrandom");
-        m_generateBtn->setObjectName("exportBtn");
-        m_generateBtn->setCursor(Qt::PointingHandCursor);
-        connect(m_generateBtn, &QPushButton::clicked, this, [this]() { generateRandom(); });
-        cl->addWidget(m_generateBtn, 1);
-
-        vl->addWidget(countRow);
+        auto* gw = new QWidget;
+        auto* gl = new QHBoxLayout(gw);
+        gl->setContentsMargins(0, 0, kGutterComp, 0);
+        gl->addWidget(m_generateBtn);
+        vl->addWidget(gw);
     }
-
-    // ── Extract from image (full width; auto-enables palette dither) ──
-    m_extraRow = new QWidget;
-    {
-        auto* xl = new QHBoxLayout(m_extraRow);
-        xl->setContentsMargins(0, 0, 0, 0);
-        xl->setSpacing(0);
-
-        m_extractBtn = new QPushButton("Extract from image");
-        m_extractBtn->setObjectName("exportBtn");
-        m_extractBtn->setCursor(Qt::PointingHandCursor);
-        m_extractBtn->setToolTip("Pull an 8-colour palette from the image and dither to it");
-        connect(m_extractBtn, &QPushButton::clicked, this, [this]() { extractFromImage(); });
-        xl->addWidget(m_extractBtn);
-    }
-    vl->addWidget(m_extraRow);
 
     // ── Tone rows ───────────────────────────────────────────────
     m_rowsContainer = new QWidget;
     m_rowsLayout = new QVBoxLayout(m_rowsContainer);
-    m_rowsLayout->setContentsMargins(0, 0, 0, 0);
-    m_rowsLayout->setSpacing(8);
+    m_rowsLayout->setContentsMargins(0, 0, kGutterComp, 0);
+    m_rowsLayout->setSpacing(Ui::px(8));
     vl->addWidget(m_rowsContainer);
 
-    // ── Save palette ────────────────────────────────────────────
+    // ── Inline save-name editor (shown by the favourite button) ──
     m_saveSection = new QWidget;
     {
         auto* sl = new QVBoxLayout(m_saveSection);
-        sl->setContentsMargins(0, 0, 0, 0);
+        sl->setContentsMargins(0, 0, kGutterComp, 0);
         sl->setSpacing(0);
-
-        m_saveBtn = new QPushButton("Save palette");
-        m_saveBtn->setObjectName("exportBtn");
-        m_saveBtn->setFixedHeight(42);
-        m_saveBtn->setCursor(Qt::PointingHandCursor);
-        connect(m_saveBtn, &QPushButton::clicked, this, [this]() { beginSavePalette(); });
-        sl->addWidget(m_saveBtn);
 
         m_saveEditRow = new QWidget;
         m_saveEditRow->setObjectName("saveEditBox");
         {
             auto* el = new QVBoxLayout(m_saveEditRow);
-            el->setContentsMargins(10, 10, 10, 10);
-            el->setSpacing(8);
+            el->setContentsMargins(Ui::px(10), Ui::px(10), Ui::px(10), Ui::px(10));
+            el->setSpacing(Ui::px(8));
             m_saveNameEdit = new QLineEdit;
             m_saveNameEdit->setPlaceholderText("Save as…");
             el->addWidget(m_saveNameEdit);
@@ -351,7 +381,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
             btnRow->addStretch(1);
             auto* confirm = new QPushButton("Confirm");
             confirm->setObjectName("accentBtn");
-            confirm->setFixedHeight(34);
+            confirm->setFixedHeight(Ui::px(36));
             confirm->setCursor(Qt::PointingHandCursor);
             connect(confirm, &QPushButton::clicked, this, [this]() { commitSavePalette(); });
             connect(m_saveNameEdit, &QLineEdit::returnPressed, this, [this]() { commitSavePalette(); });
@@ -456,17 +486,19 @@ void TonalControlsWidget::rebuildRows()
         auto* rowWidget = new QWidget;
         auto* rvl = new QVBoxLayout(rowWidget);
         rvl->setContentsMargins(0, 0, 0, 0);
-        rvl->setSpacing(4);
-        rvl->addWidget(makeParamLabel(
-            palette ? QString("Color %1").arg(i + 1)
-                    : (i < labels.size() ? labels[i] : QString("Tone %1").arg(i + 1))));
+        rvl->setSpacing(Ui::px(4));
+        // Single fixed tone needs no "Color" caption; multi-tone / palette do.
+        if (palette || n > 1)
+            rvl->addWidget(makeParamLabel(
+                palette ? QString("Color %1").arg(i + 1)
+                        : (i < labels.size() ? labels[i] : QString("Tone %1").arg(i + 1))));
 
         auto* hl = new QHBoxLayout;
         hl->setContentsMargins(0, 0, 0, 0);
-        hl->setSpacing(10);
+        hl->setSpacing(Ui::px(10));
 
         auto* swatch = new FillSwatch(m_settings.tones[i].color, m_settings.tones[i].opacity, /*showOpacity*/ true);
-        swatch->setFixedWidth(160);
+        swatch->setFixedWidth(Ui::px(185));
 
         auto* slider = new NoWheelSlider(Qt::Horizontal);
         slider->setRange(0, 255);
@@ -600,7 +632,7 @@ QString TonalControlsWidget::matchLibraryName() const
 
 void TonalControlsWidget::beginSavePalette()
 {
-    m_saveBtn->setVisible(false);
+    if (m_saveBtn) m_saveBtn->setVisible(false);
     m_saveEditRow->setVisible(true);
     m_saveNameEdit->clear();
     m_saveNameEdit->setFocus();

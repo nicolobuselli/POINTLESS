@@ -50,8 +50,9 @@ private:
 
     QPushButton* m_autoKeyBtn = nullptr;
     QPushButton* m_playBtn    = nullptr;
+    QSpinBox*    m_frameSpin  = nullptr;   // current frame (scrubs)
     QSpinBox*    m_startSpin  = nullptr;
     QSpinBox*    m_endSpin    = nullptr;
-    QSpinBox*    m_fpsSpin    = nullptr;
+    QSpinBox*    m_fpsSpin    = nullptr;   // kept (hidden) for export fps
     TimelineCanvas* m_canvas  = nullptr;
 };

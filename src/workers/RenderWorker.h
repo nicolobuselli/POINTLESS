@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QPainter>
 #include <QTimer>
+#include <QHash>
 #include <QFutureWatcher>
 #include "../core/Params.h"
 
@@ -30,9 +31,10 @@ public:
     ~RenderWorker() override;
 
     // fullPass=false renders only the fast preview (used during playback so
-    // the full-resolution pass never floods the thread).
+    // the full-resolution pass never floods the thread). layerSrc maps a
+    // layerId → the media image that layer draws this frame.
     void requestRender(const QImage& source, const SessionParams& params,
-                       bool fullPass = true);
+                       bool fullPass = true, const QHash<int, QImage>& layerSrc = {});
 
     static constexpr int FAST_MAX_PX   = 600;   // max dimension for preview
     static constexpr int FULL_DELAY_MS = 350;   // ms idle before full render
@@ -41,9 +43,14 @@ public:
     // Full raster pipeline: background + visible layers (each with its own
     // adjustments) composited with their blend modes.
     static QImage renderDocument(const QImage& source, const SessionParams& params);
+    // Per-layer source variant: layerSrc maps layerId → the image that layer
+    // draws this frame (falls back to `source` when a layer is absent).
+    static QImage renderDocument(const QImage& source, const SessionParams& params,
+                                 const QHash<int, QImage>& layerSrc);
     // Render at a downscaled "preview" resolution (matching the fast pass),
     // for building the playback frame cache cheaply.
-    static QImage renderPreview(const QImage& source, const SessionParams& params, int maxPx);
+    static QImage renderPreview(const QImage& source, const SessionParams& params, int maxPx,
+                                const QHash<int, QImage>& layerSrc = {});
     // One layer's renderer, into an open painter (used for SVG export).
     // `adjusted` must already have the layer's adjustments applied.
     static void   renderLayerInto(QPainter& painter, const QImage& adjusted,
@@ -63,9 +70,10 @@ private slots:
 private:
     static SessionParams scaledForPreview(const SessionParams& params, float scale);
 
-    QTimer        m_fullTimer;
-    QImage        m_sourceImage;
-    SessionParams m_latestParams;
+    QTimer            m_fullTimer;
+    QImage            m_sourceImage;
+    SessionParams     m_latestParams;
+    QHash<int,QImage> m_layerSrc;    // per-layer media for the current frame
 
     QFutureWatcher<QImage> m_fastWatcher;
     QFutureWatcher<QImage> m_fullWatcher;

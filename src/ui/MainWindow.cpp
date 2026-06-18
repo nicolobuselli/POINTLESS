@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "PreviewWidget.h"
 #include "ControlsPanel.h"
+#include "UiScale.h"
 #include "ModePanel.h"
 #include "FilmstripWidget.h"
 #include "TimelineWidget.h"
@@ -61,67 +62,78 @@ MainWindow::MainWindow(QWidget* parent)
     m_timeline  = new TimelineWidget;
     m_preview->setMinimumHeight(160);   // keep panes from collapsing to nothing
 
-    // Bottom panel: "Images | Timeline" tabs over a stacked area.
+    // Bottom panel: "Timeline | Library" tabs over a stacked area.
     auto* bottomPanel = new QWidget;
+    bottomPanel->setObjectName("bottomBar");
     bottomPanel->setMinimumHeight(130);   // never collapses away
     auto* bp = new QVBoxLayout(bottomPanel);
     bp->setContentsMargins(0, 0, 0, 0);
     bp->setSpacing(0);
 
+    auto* topLine = new QFrame;
+    topLine->setObjectName("bandLine");
+    topLine->setFixedHeight(1);
+    bp->addWidget(topLine);
+
     auto* tabRow = new QWidget;
-    tabRow->setObjectName("tabRow");
+    tabRow->setObjectName("bottomTabRow");
     auto* trl = new QHBoxLayout(tabRow);
-    trl->setContentsMargins(8, 4, 0, 0);
-    trl->setSpacing(4);
-    auto* tabImages   = new QPushButton("Images");
+    trl->setContentsMargins(Ui::px(20), Ui::px(10), Ui::px(20), Ui::px(6));
+    trl->setSpacing(Ui::px(6));
     auto* tabTimeline = new QPushButton("Timeline");
-    for (QPushButton* b : { tabImages, tabTimeline }) {
-        b->setObjectName("tabBtn");
+    auto* tabLibrary  = new QPushButton("Library");
+    for (QPushButton* b : { tabTimeline, tabLibrary }) {
+        b->setObjectName("rectTab");
         b->setCheckable(true);
         b->setAutoExclusive(true);
-        b->setFixedHeight(30);
-        b->setMinimumWidth(96);
         b->setCursor(Qt::PointingHandCursor);
     }
-    tabImages->setChecked(true);
-    trl->addWidget(tabImages);
+    tabTimeline->setChecked(true);
     trl->addWidget(tabTimeline);
+    trl->addWidget(tabLibrary);
     trl->addStretch(1);
 
     auto* bottomStack = new QStackedWidget;
-    bottomStack->addWidget(m_filmstrip);   // page 0
-    bottomStack->addWidget(m_timeline);    // page 1
-    connect(tabImages,   &QPushButton::clicked, this, [bottomStack] { bottomStack->setCurrentIndex(0); });
-    connect(tabTimeline, &QPushButton::clicked, this, [bottomStack] { bottomStack->setCurrentIndex(1); });
-    bottomStack->setCurrentIndex(0);   // default to Images
+    bottomStack->addWidget(m_timeline);    // page 0 (default)
+    bottomStack->addWidget(m_filmstrip);   // page 1 (Library)
+    connect(tabTimeline, &QPushButton::clicked, this, [bottomStack] { bottomStack->setCurrentIndex(0); });
+    connect(tabLibrary,  &QPushButton::clicked, this, [bottomStack] { bottomStack->setCurrentIndex(1); });
+    bottomStack->setCurrentIndex(0);   // default to Timeline
+
+    auto* underTabs = new QFrame;
+    underTabs->setObjectName("bandLine");
+    underTabs->setFixedHeight(1);
 
     bp->addWidget(tabRow);
+    bp->addWidget(underTabs);
     bp->addWidget(bottomStack, 1);
 
     // Center column: preview over the bottom panel, vertically resizable.
     auto* centerSplit = new QSplitter(Qt::Vertical);
     centerSplit->setChildrenCollapsible(false);
-    centerSplit->setHandleWidth(5);
+    centerSplit->setHandleWidth(1);
     centerSplit->addWidget(m_preview);
     centerSplit->addWidget(bottomPanel);
     centerSplit->setStretchFactor(0, 1);
     centerSplit->setStretchFactor(1, 0);
     centerSplit->setSizes({ 600, 220 });
 
-    m_layersPanel = new LayersPanel(m_preview);
+    // Layers now live embedded at the top of the left column.
+    m_layersPanel = m_left->layers();
     m_right = new ModePanel;
 
     // Main columns: left | center | right, horizontally resizable.
     auto* mainSplit = new QSplitter(Qt::Horizontal);
     mainSplit->setChildrenCollapsible(false);
-    mainSplit->setHandleWidth(5);
+    mainSplit->setHandleWidth(1);
     mainSplit->addWidget(m_left);
     mainSplit->addWidget(centerSplit);
     mainSplit->addWidget(m_right);
     mainSplit->setStretchFactor(0, 0);
     mainSplit->setStretchFactor(1, 1);
     mainSplit->setStretchFactor(2, 0);
-    mainSplit->setSizes({ 340, 800, 340 });
+    // Side columns ≈ 497/2558 of the design width each (Ui scale handles DPI).
+    mainSplit->setSizes({ Ui::px(497), Ui::px(1564), Ui::px(497) });
 
     hl->addWidget(mainSplit);
 
@@ -131,8 +143,6 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── Signals ──────────────────────────────────────────────
     connect(m_left,  &ControlsPanel::adjustmentsChanged, this, &MainWindow::onParamsChanged);
-    connect(m_left,  &ControlsPanel::tonalChanged,       this, &MainWindow::onParamsChanged);
-    connect(m_left,  &ControlsPanel::backgroundChanged,  this, &MainWindow::onParamsChanged);
     connect(m_left,  &ControlsPanel::resetRequested,     this, [this]() {
         if (m_current < 0) return;
         if (Layer* l = activeLayer()) {
@@ -143,7 +153,16 @@ MainWindow::MainWindow(QWidget* parent)
             m_undoTimer.start();
         }
     });
+    connect(m_left, &ControlsPanel::fileRenamed, this, [this](const QString& name) {
+        if (m_current < 0) return;
+        m_images[m_current].name = name;
+    });
     connect(m_right, &ModePanel::paramsChanged,             this, &MainWindow::onParamsChanged);
+    connect(m_right, &ModePanel::tonalChanged,              this, &MainWindow::onParamsChanged);
+    connect(m_right, &ModePanel::backgroundChanged,         this, &MainWindow::onParamsChanged);
+    connect(m_right, &ModePanel::blendChanged, this, [this](BlendMode m) {
+        if (const Layer* l = activeLayer()) onLayerBlendChanged(l->id, m);
+    });
     connect(m_right, &ModePanel::modeSelected,              this, &MainWindow::onModeSelected);
     connect(m_right, &ModePanel::exportRequested,           this, &MainWindow::onExport);
 
@@ -329,6 +348,19 @@ void MainWindow::updatePreviewInteractionState()
 
 void MainWindow::keyPressEvent(QKeyEvent* event)
 {
+    // Backspace / Delete removes the active layer (unless typing in a field).
+    if ((event->key() == Qt::Key_Backspace || event->key() == Qt::Key_Delete)
+        && !qobject_cast<QLineEdit*>(QApplication::focusWidget())) {
+        if (m_current >= 0) {
+            const auto& st = m_images[m_current].state;
+            const Layer* l = activeLayer();
+            if (l && l->kind != LayerKind::Original) {
+                onLayerDeleteRequested(st.activeLayerId);
+                event->accept();
+                return;
+            }
+        }
+    }
     QMainWindow::keyPressEvent(event);
 }
 
@@ -366,9 +398,9 @@ SessionParams MainWindow::collectParams() const
     if (idx >= 0) {
         Layer& l = p.layers[idx];
         l.adjustments = m_left->adjustments();
-        // Colors live in the left Colors tab now; inject them into the
+        // Fill (tonal) lives in the right panel now; inject it into the
         // render struct of the active layer's kind.
-        const TonalSettings tonal = m_left->tonalSettings();
+        const TonalSettings tonal = m_right->tonalSettings();
         switch (l.kind) {
             case LayerKind::Halftone: l.halftone = m_right->halftoneSettings(); l.halftone.tonal = tonal; break;
             case LayerKind::Dither:   l.dither   = m_right->ditherSettings();   l.dither.tonal   = tonal; break;
@@ -377,8 +409,8 @@ SessionParams MainWindow::collectParams() const
         }
     }
 
-    p.background        = m_left->background();
-    p.backgroundOpacity = m_left->backgroundOpacity();
+    p.background        = m_right->background();
+    p.backgroundOpacity = m_right->backgroundOpacity();
     return p;
 }
 
@@ -392,17 +424,9 @@ void MainWindow::applyParams(const SessionParams& p)
     const Layer& l = p.layers[idx];
     m_left->setAdjustments(l.adjustments);
 
-    // Mirror the active layer's tonal settings into the Colors tab
-    // (Original has no render settings — disable the tab).
-    switch (l.kind) {
-        case LayerKind::Halftone: m_left->setTonalSettings(l.halftone.tonal); break;
-        case LayerKind::Dither:   m_left->setTonalSettings(l.dither.tonal);   break;
-        case LayerKind::Ascii:    m_left->setTonalSettings(l.ascii.tonal);    break;
-        case LayerKind::Original: break;
-    }
-    m_left->setColorsEnabled(l.kind != LayerKind::Original);
-    m_left->setBackground(p.background, p.backgroundOpacity);
-
+    // Fill (tonal), Fusion and enabled-state are handled by setFromLayer;
+    // background is shared and set explicitly.
+    m_right->setBackground(p.background, p.backgroundOpacity);
     m_right->setFromLayer(l);
 }
 
@@ -551,7 +575,8 @@ bool MainWindow::buildPlayCache()
         const SessionParams p = img.anim.hasAnimation()
             ? paramsAtFrame(img.state, img.anim, frame)
             : img.state;
-        m_playCache.append(RenderWorker::renderPreview(src, p, RenderWorker::FAST_MAX_PX));
+        m_playCache.append(RenderWorker::renderPreview(src, p, RenderWorker::FAST_MAX_PX,
+                                                       layerSourcesAt(img, frame)));
     }
     progress.setValue(count);
     m_playCacheValid = true;
@@ -770,7 +795,28 @@ void MainWindow::scheduleRender(bool previewOnly)
         ? paramsAtFrame(img.state, img.anim, img.anim.playhead)
         : img.state;
 
-    m_worker->requestRender(source, params, /*fullPass=*/!previewOnly);
+    m_worker->requestRender(source, params, /*fullPass=*/!previewOnly,
+                            layerSourcesAt(img, img.anim.playhead));
+}
+
+// Resolve, for each media layer, the image it draws at `frame` (a clip indexes
+// its frames by the playhead; a still uses its image). Layers without media
+// (mediaId < 0) are absent → they fall back to the document base source.
+QHash<int, QImage> MainWindow::layerSourcesAt(const SessionImage& img, int frame) const
+{
+    QHash<int, QImage> out;
+    for (const Layer& l : img.state.layers) {
+        if (l.mediaId < 0) continue;
+        const auto it = img.media.find(l.mediaId);
+        if (it == img.media.end()) continue;
+        const MediaClip& m = it.value();
+        if (!m.frames.isEmpty())
+            out.insert(l.id, m.frames[qBound(0, frame - img.anim.frameStart,
+                                             int(m.frames.size()) - 1)]);
+        else if (!m.image.isNull())
+            out.insert(l.id, m.image);
+    }
+    return out;
 }
 
 void MainWindow::onRenderComplete(QImage result, bool isPreview)
@@ -882,56 +928,87 @@ void MainWindow::copyToClipboard()
 
 void MainWindow::addImages(const QStringList& paths)
 {
-    int lastAdded = -1;
-    for (const QString& path : paths) {
+    // Load a file into a MediaClip (decoding video via ffmpeg).
+    auto loadClip = [this](const QString& path, MediaClip& clip) -> bool {
+        clip.name = path.startsWith(":/") ? "example" : QFileInfo(path).fileName();
         if (isVideoFile(path)) {
             if (!VideoIO::available()) {
                 QMessageBox::warning(this, "Import video",
                     "ffmpeg.exe was not found.\n\nPlace ffmpeg.exe next to the application "
                     "to import and export videos.");
-                continue;
+                return false;
             }
             QApplication::setOverrideCursor(Qt::WaitCursor);
             QVector<QImage> frames; double fps = 24.0; QString err;
             const bool ok = VideoIO::decode(path, frames, fps, err);
             QApplication::restoreOverrideCursor();
-            if (!ok) { QMessageBox::warning(this, "Import video", err); continue; }
+            if (!ok) { QMessageBox::warning(this, "Import video", err); return false; }
+            clip.frames = frames; clip.image = frames.first(); clip.fps = fps;
+            return true;
+        }
+        QImage im(path);
+        if (im.isNull()) {
+            QMessageBox::warning(this, "Error", "Could not load image:\n" + path);
+            return false;
+        }
+        clip.image = im;
+        return true;
+    };
 
+    bool appended = false;
+    for (const QString& path : paths) {
+        MediaClip clip;
+        if (!loadClip(path, clip)) continue;
+
+        if (m_images.isEmpty()) {
+            // First media defines the board: base source + default treatment layers.
             SessionImage si;
-            si.name   = QFileInfo(path).fileName();
-            si.frames = frames;
-            si.source = frames.first();
-            si.state  = (m_current >= 0) ? collectParams() : SessionParams{};
-            si.anim.frameStart = 1;
-            si.anim.frameEnd   = frames.size();
-            si.anim.fps        = qBound(1, qRound(fps), 240);
-            si.anim.playhead   = 1;
+            si.name   = clip.name;
+            si.source = clip.image;
+            si.frames = clip.frames;
+            si.state  = SessionParams{};
+            if (!clip.frames.isEmpty()) {
+                si.anim.frameStart = 1;
+                si.anim.frameEnd   = clip.frames.size();
+                si.anim.fps        = qBound(1, qRound(clip.fps), 240);
+            }
             si.undoStack.append({ si.state, si.anim });
             si.undoIndex = 0;
             m_images.append(si);
             m_filmstrip->addThumb(si.source, si.name);
-            lastAdded = m_images.size() - 1;
-            continue;
+            switchToImage(0);
+        } else {
+            // Additional media → a new layer on the board (composited on top).
+            SessionImage& board = m_images[0];
+            const int mid = board.nextMediaId++;
+            board.media.insert(mid, clip);
+
+            Layer nl;
+            nl.id      = board.state.nextLayerId++;
+            nl.kind    = LayerKind::Original;
+            nl.name    = clip.name;
+            nl.mediaId = mid;
+            nl.visible = true;
+            board.state.layers.insert(board.state.layers.begin(), nl);
+            board.state.activeLayerId = nl.id;
+
+            if (!clip.frames.isEmpty() && board.anim.frameEnd <= 1) {
+                board.anim.frameStart = 1;
+                board.anim.frameEnd   = clip.frames.size();
+                board.anim.fps        = qBound(1, qRound(clip.fps), 240);
+            }
+            appended = true;
         }
-
-        QImage img(path);
-        if (img.isNull()) {
-            QMessageBox::warning(this, "Error", "Could not load image:\n" + path);
-            continue;
-        }
-
-        SessionImage si;
-        si.name   = path.startsWith(":/") ? "example" : QFileInfo(path).fileName();
-        si.source = img;
-        si.state  = (m_current >= 0) ? collectParams() : SessionParams{};
-        si.undoStack.append({ si.state, si.anim });
-        si.undoIndex = 0;
-
-        m_images.append(si);
-        m_filmstrip->addThumb(img, si.name);
-        lastAdded = m_images.size() - 1;
     }
-    if (lastAdded >= 0) switchToImage(lastAdded);
+
+    if (appended) {
+        m_playCacheValid = false;
+        applyParams(m_images[0].state);
+        syncLayersPanel();
+        syncTimeline();
+        scheduleRender();
+        m_undoTimer.start();
+    }
 }
 
 void MainWindow::importSequence(const QStringList& paths)
@@ -982,6 +1059,8 @@ void MainWindow::switchToImage(int index)
         m_preview->setStatus("Drop images here or use the orange button below");
         m_filmstrip->setActive(-1);
         m_left->setSourceImage({});
+        m_right->setSourceImage({});
+        m_left->setFileName(QString());
         m_playTimer.stop();
         m_playing = false;
         m_timeline->setAnimation(Animation{});
@@ -992,6 +1071,8 @@ void MainWindow::switchToImage(int index)
     m_playTimer.stop();
     m_playing = false;
     m_left->setSourceImage(m_images[index].source);
+    m_right->setSourceImage(m_images[index].source);
+    m_left->setFileName(m_images[index].name);
     applyParams(m_images[index].state);
     m_filmstrip->setActive(index);
     m_layersPanel->setVisible(true);
@@ -1178,7 +1259,7 @@ void MainWindow::exportSequence(const QString& baseName)
             ? paramsAtFrame(img.state, img.anim, frame)
             : img.state;
 
-        const QImage canvas = RenderWorker::renderDocument(src, p);
+        const QImage canvas = RenderWorker::renderDocument(src, p, layerSourcesAt(img, frame));
         const QString fn = QString("%1/%2_%3.png")
             .arg(dir, baseName, QString::number(frame).rightJustified(digits, '0'));
         if (canvas.save(fn, "PNG")) ++written;
@@ -1229,7 +1310,7 @@ void MainWindow::exportVideoMp4(const QString& baseName)
             ? paramsAtFrame(img.state, img.anim, frame)
             : img.state;
 
-        QImage canvas = RenderWorker::renderDocument(src, p);
+        QImage canvas = RenderWorker::renderDocument(src, p, layerSourcesAt(img, frame));
         // mp4 (yuv420p) has no alpha — flatten on an opaque background.
         QImage flat(canvas.size(), QImage::Format_RGB32);
         QColor bg = p.background; bg.setAlpha(255);

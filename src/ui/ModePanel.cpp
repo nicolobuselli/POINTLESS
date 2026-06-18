@@ -1,13 +1,118 @@
 #include "ModePanel.h"
+#include "TonalControlsWidget.h"
+#include "UiScale.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QStackedWidget>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPushButton>
+#include <QFrame>
 #include <QStandardItemModel>
+
+// ============================================================
+//  Shared section helpers
+// ============================================================
+
+namespace {
+
+// Full-width 1px divider used to bracket section titles (matches the rest
+// of the interface).
+QFrame* bandLine()
+{
+    auto* f = new QFrame;
+    f->setObjectName("bandLine");
+    f->setFixedHeight(1);
+    return f;
+}
+
+struct BlendItem { BlendMode mode; const char* name; bool groupStart; };
+const BlendItem kBlend[] = {
+    { BlendMode::Normal, "Normal", false }, { BlendMode::Dissolve, "Dissolve", false },
+    { BlendMode::Darken, "Darken", true }, { BlendMode::Multiply, "Multiply", false },
+    { BlendMode::ColorBurn, "Color Burn", false }, { BlendMode::LinearBurn, "Linear Burn", false },
+    { BlendMode::DarkerColor, "Darker Color", false },
+    { BlendMode::Lighten, "Lighten", true }, { BlendMode::Screen, "Screen", false },
+    { BlendMode::ColorDodge, "Color Dodge", false }, { BlendMode::LinearDodge, "Linear Dodge (Add)", false },
+    { BlendMode::LighterColor, "Lighter Color", false },
+    { BlendMode::Overlay, "Overlay", true }, { BlendMode::SoftLight, "Soft Light", false },
+    { BlendMode::HardLight, "Hard Light", false }, { BlendMode::VividLight, "Vivid Light", false },
+    { BlendMode::LinearLight, "Linear Light", false }, { BlendMode::PinLight, "Pin Light", false },
+    { BlendMode::HardMix, "Hard Mix", false },
+    { BlendMode::Difference, "Difference", true }, { BlendMode::Exclusion, "Exclusion", false },
+    { BlendMode::Subtract, "Subtract", false }, { BlendMode::Divide, "Divide", false },
+    { BlendMode::Hue, "Hue", true }, { BlendMode::Saturation, "Saturation", false },
+    { BlendMode::Color, "Color", false }, { BlendMode::Luminosity, "Luminosity", false },
+};
+
+// A section with a bold title bracketed by lines, an optional +/− collapse
+// toggle in the right gutter, and a content area. Fill the section via body().
+class PanelSection : public QWidget
+{
+public:
+    std::function<void(bool)> onToggled;
+
+    PanelSection(const QString& title, bool collapsible, bool startOpen,
+                 QWidget* parent = nullptr)
+        : QWidget(parent), m_collapsible(collapsible)
+    {
+        auto* root = new QVBoxLayout(this);
+        root->setContentsMargins(0, 0, 0, 0);
+        root->setSpacing(0);
+
+        root->addWidget(bandLine());
+
+        auto* titleRow = new QWidget;
+        auto* tl = new QHBoxLayout(titleRow);
+        tl->setContentsMargins(Ui::px(40), Ui::px(12), Ui::px(24), Ui::px(12));
+        tl->setSpacing(0);
+        tl->addWidget(makeSectionTitle(title), 1);
+
+        if (collapsible) {
+            m_toggle = new QPushButton;
+            m_toggle->setObjectName("iconBtn");
+            m_toggle->setCursor(Qt::PointingHandCursor);
+            m_toggle->setFixedSize(Ui::px(26), Ui::px(26));
+            m_toggle->setIconSize(QSize(Ui::px(16), Ui::px(16)));
+            connect(m_toggle, &QPushButton::clicked, this, [this]() { setOpen(!m_open); });
+            tl->addWidget(m_toggle);
+        }
+        root->addWidget(titleRow);
+
+        m_content = new QWidget;
+        m_body = new QVBoxLayout(m_content);
+        m_body->setContentsMargins(Ui::px(40), Ui::px(2), Ui::px(70), Ui::px(14));
+        m_body->setSpacing(Ui::px(10));
+        root->addWidget(m_content);
+
+        setOpen(startOpen);
+    }
+
+    QVBoxLayout* body() const { return m_body; }
+
+    void setOpen(bool open)
+    {
+        m_open = open;
+        m_content->setVisible(open);
+        if (m_toggle)
+            m_toggle->setIcon(QIcon(open ? ":/icons/minus.svg" : ":/icons/plus.svg"));
+        if (onToggled) onToggled(open);
+    }
+    bool isOpen() const { return m_open; }
+
+private:
+    bool         m_collapsible;
+    bool         m_open = true;
+    QPushButton* m_toggle  = nullptr;
+    QWidget*     m_content = nullptr;
+    QVBoxLayout* m_body    = nullptr;
+};
+
+} // namespace
 
 // ============================================================
 //  HalftonePage
@@ -18,6 +123,8 @@ class HalftonePage : public QWidget
 public:
     std::function<void()> onChanged;
 
+    std::function<void()> onBlendChanged;
+
     HalftonePage(QWidget* parent = nullptr)
         : QWidget(parent)
     {
@@ -25,361 +132,177 @@ public:
         vl->setContentsMargins(0, 0, 0, 0);
         vl->setSpacing(0);
 
-        // ── Settings ────────────────────────────────────────
-        auto* settingsContent = new QWidget;
+        // ── Shape (single dropdown; DPI fixed at high quality) ──
+        auto* shape = new PanelSection("Shape", /*collapsible*/ false, true);
         {
-            auto* sl = new QVBoxLayout(settingsContent);
-            sl->setContentsMargins(0, 0, 0, 0);
-            sl->setSpacing(8);
+            m_shapeCombo = new NoWheelComboBox;
+            m_shapeCombo->addItems({ "Triangle", "Circle", "Square", "Star", "Custom SVG" });
+            m_shapeCombo->setCurrentIndex(int(HalftoneShape::Square));
+            shape->body()->addWidget(m_shapeCombo);
 
-            m_dpi = new SliderRow("Input DPI", 18, 300, 72);
-            m_dpi->onValueChanged = [this](int) { fire(); };
-            sl->addWidget(m_dpi);
+            m_svgBtn = new QPushButton("  Upload SVG");
+            m_svgBtn->setObjectName("uploadBtn");
+            m_svgBtn->setFixedHeight(Ui::px(40));
+            m_svgBtn->setIcon(QIcon(":/icons/upload.svg"));
+            m_svgBtn->setIconSize(QSize(Ui::px(16), Ui::px(16)));
+            m_svgBtn->setVisible(false);
+            shape->body()->addWidget(m_svgBtn);
 
-            // Shape header: label + "+"
-            {
-                auto* hdr = new QWidget;
-                auto* hl = new QHBoxLayout(hdr);
-                hl->setContentsMargins(0, 0, 0, 0);
-                hl->setSpacing(6);
-                hl->addWidget(makeParamLabel("Shape"), 1);
-                m_shapePlus = makeIconButton(":/icons/plus.svg");
-                hl->addWidget(m_shapePlus);
-                sl->addWidget(hdr);
-            }
-
-            m_shapesContainer = new QWidget;
-            m_shapesLayout = new QVBoxLayout(m_shapesContainer);
-            m_shapesLayout->setContentsMargins(0, 0, 0, 0);
-            m_shapesLayout->setSpacing(4);
-            sl->addWidget(m_shapesContainer);
-
-            m_thresholdRow = new QWidget;
-            {
-                auto* tl = new QVBoxLayout(m_thresholdRow);
-                tl->setContentsMargins(0, 4, 0, 0);
-                tl->setSpacing(2);
-                tl->addWidget(makeParamLabel("Threshold"));
-                m_sldThreshold = new NoWheelSlider(Qt::Horizontal);
-                m_sldThreshold->setRange(0, 255);
-                m_sldThreshold->setValue(128);
-                tl->addWidget(m_sldThreshold);
-            }
-            m_thresholdRow->setVisible(false);
-            sl->addWidget(m_thresholdRow);
-
-            connect(m_shapePlus, &QPushButton::clicked, this, [this]() {
-                if (m_shapeSlots.size() < 4)
-                    addShapeSlot(HalftoneShape::Circle, QString(), false);
+            connect(m_shapeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [this](int idx) {
+                m_svgBtn->setVisible(idx == int(HalftoneShape::CustomSVG));
+                fire();
             });
-            connect(m_sldThreshold, &QSlider::valueChanged, this, [this]() { fire(); });
+            connect(m_svgBtn, &QPushButton::clicked, this, [this]() {
+                const QString p = QFileDialog::getOpenFileName(this, "Load SVG", "", "SVG files (*.svg)");
+                if (!p.isEmpty()) { m_svgPath = p; m_svgBtn->setText("  " + QFileInfo(p).baseName()); fire(); }
+            });
         }
-        vl->addWidget(new CollapsibleSection("Settings", settingsContent));
+        vl->addWidget(shape);
 
-        vl->addSpacing(16);
-        vl->addWidget(makeSeparatorLine());
-        vl->addSpacing(16);
-
-        // ── Parameters ──────────────────────────────────────
-        auto* paramsContent = new QWidget;
+        // ── Settings ────────────────────────────────────────
+        auto* settings = new PanelSection("Settings", /*collapsible*/ false, true);
         {
-            auto* pl = new QVBoxLayout(paramsContent);
-            pl->setContentsMargins(0, 0, 0, 0);
-            pl->setSpacing(8);
+            auto* sl = settings->body();
 
-            // Grid system
-            pl->addWidget(makeParamLabel("Grid type"));
+            sl->addWidget(makeParamLabel("Grid"));
             m_gridType = new NoWheelComboBox;
             m_gridType->addItems({ "Square", "Hexagonal", "Radial", "Line", "Circles" });
-            pl->addWidget(m_gridType);
+            sl->addWidget(m_gridType);
 
-            m_spacing = new SliderRow("Spacing", 2, 200, 20);
-            pl->addWidget(m_spacing);
-
-            // Point spacing — only meaningful for Radial / Line / Circles.
-            m_pointSpacingRow = new QWidget;
-            {
-                auto* psl = new QVBoxLayout(m_pointSpacingRow);
-                psl->setContentsMargins(0, 0, 0, 0);
-                psl->setSpacing(0);
-                m_pointSpacing = new SliderRow("Point spacing", 2, 200, 20);
-                psl->addWidget(m_pointSpacing);
-            }
-            m_pointSpacingRow->setVisible(false);
-            pl->addWidget(m_pointSpacingRow);
-
+            m_spacing      = new SliderRow("Spacing",       2, 200,  20);
             m_rotation     = new SliderRow("Rotation",      0, 360,   0);
             m_gamma        = new SliderRow("Gamma",        10, 500, 100);
             m_diameter     = new SliderRow("Diameter",     10, 300, 100);
             m_stretch      = new SliderRow("Stretch",      10, 400, 100);
             m_stretchAngle = new SliderRow("Stretch angle", 0, 360,   0);
             m_jitter       = new SliderRow("Jitter",        0, 100,   0);
-            for (SliderRow* r : { m_rotation, m_gamma, m_diameter,
+            for (SliderRow* r : { m_spacing, m_rotation, m_gamma, m_diameter,
                                   m_stretch, m_stretchAngle, m_jitter }) {
                 r->onValueChanged = [this](int) { fire(); };
-                pl->addWidget(r);
+                sl->addWidget(r);
             }
-            m_spacing->onValueChanged      = [this](int) { fire(); };
-            m_pointSpacing->onValueChanged = [this](int) { fire(); };
 
-            m_followGrid = new QPushButton("Follow grid rotation");
-            m_followGrid->setCheckable(true);
-            m_followGrid->setFixedHeight(26);
-            m_followGrid->setStyleSheet(
-                "QPushButton{background:#3B3B3B;border:1px solid #5D5D5D;border-radius:4px;"
-                "color:#B2B2B2;font-size:8pt;padding:0 10px;}"
-                "QPushButton:checked{background:#484848;border-color:#828282;color:#E3E3E3;}"
-                "QPushButton:hover{border-color:#828282;}");
-            pl->addWidget(m_followGrid);
+            // Fusion (blend mode of the active layer) — moved here.
+            sl->addWidget(makeParamLabel("Fusion"));
+            m_fusion = new NoWheelComboBox;
+            for (const auto& e : kBlend) {
+                if (e.groupStart && m_fusion->count() > 0)
+                    m_fusion->insertSeparator(m_fusion->count());
+                m_fusion->addItem(QString::fromUtf8(e.name), int(e.mode));
+            }
+            sl->addWidget(m_fusion);
+            connect(m_fusion, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [this](int) { if (!m_updating && onBlendChanged) onBlendChanged(); });
+
+            // Opacity + Corner radius (two icon boxes side by side).
+            auto* labels = new QHBoxLayout;
+            labels->setContentsMargins(0, 0, 0, 0);
+            labels->setSpacing(Ui::px(12));
+            labels->addWidget(makeParamLabel("Opacity"), 1);
+            labels->addWidget(makeParamLabel("Corner radius"), 1);
+            sl->addLayout(labels);
 
             auto* row = new QHBoxLayout;
             row->setContentsMargins(0, 0, 0, 0);
-            row->setSpacing(6);
+            row->setSpacing(Ui::px(12));
             m_opacity      = new DragSpinBox(":/icons/opacity.svg",       0, 100, 100, "%");
             m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0,  50,   0, "");
             m_opacity->onValueChanged      = [this](int) { fire(); };
             m_cornerRadius->onValueChanged = [this](int) { fire(); };
             row->addWidget(m_opacity, 1);
             row->addWidget(m_cornerRadius, 1);
-            pl->addLayout(row);
+            sl->addLayout(row);
 
             connect(m_gridType, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int) { refreshGridControls(); fire(); });
-            connect(m_followGrid, &QPushButton::toggled, this, [this](bool) { fire(); });
+                    this, [this](int) { fire(); });
         }
-        vl->addWidget(new CollapsibleSection("Parameters", paramsContent));
+        vl->addWidget(settings);
+    }
 
-        addShapeSlot(HalftoneShape::Circle, QString(), true);
-        refreshGridControls();
+    BlendMode blend() const
+    {
+        const QVariant v = m_fusion->currentData();
+        return v.isValid() ? BlendMode(v.toInt()) : BlendMode::Normal;
+    }
+    void setBlend(BlendMode m)
+    {
+        for (int i = 0; i < m_fusion->count(); ++i) {
+            const QVariant v = m_fusion->itemData(i);
+            if (v.isValid() && v.toInt() == int(m)) { m_fusion->setCurrentIndex(i); break; }
+        }
     }
 
     HalftoneSettings settings() const
     {
         HalftoneSettings s;
-        s.inputDpi = m_dpi->value();
+        s.inputDpi = 300;                       // fixed high quality (no DPI control)
         s.shapes.clear();
-        for (const auto& slot : m_shapeSlots) {
-            ShapeEntry e;
-            e.shape   = static_cast<HalftoneShape>(slot.combo->currentIndex());
-            e.svgPath = slot.svgPath;
-            s.shapes.push_back(e);
-        }
-        s.multiThreshold = m_sldThreshold->value();
+        ShapeEntry e;
+        e.shape   = static_cast<HalftoneShape>(m_shapeCombo->currentIndex());
+        e.svgPath = m_svgPath;
+        s.shapes.push_back(e);
+        s.multiThreshold = 128;
 
-        s.grid.type              = static_cast<GridType>(m_gridType->currentIndex());
-        s.grid.spacing           = float(m_spacing->value());
-        s.grid.pointSpacing      = float(m_pointSpacing->value());
-        s.grid.rotation          = float(m_rotation->value());
-        s.grid.diameter          = m_diameter->value() / 100.0f;
-        s.grid.stretchFactor     = m_stretch->value()  / 100.0f;
-        s.grid.stretchAngle      = float(m_stretchAngle->value());
-        s.grid.followGridRotation = m_followGrid->isChecked();
+        s.grid.type          = static_cast<GridType>(m_gridType->currentIndex());
+        s.grid.spacing       = float(m_spacing->value());
+        s.grid.rotation      = float(m_rotation->value());
+        s.grid.diameter      = m_diameter->value() / 100.0f;
+        s.grid.stretchFactor = m_stretch->value()  / 100.0f;
+        s.grid.stretchAngle  = float(m_stretchAngle->value());
 
-        s.gamma          = m_gamma->value()  / 100.0f;
-        s.jitter         = m_jitter->value() / 100.0f;
-        s.opacity        = m_opacity->value() / 100.0f;
-        s.cornerRadius   = float(m_cornerRadius->value());
+        s.gamma        = m_gamma->value()  / 100.0f;
+        s.jitter       = m_jitter->value() / 100.0f;
+        s.opacity      = m_opacity->value() / 100.0f;
+        s.cornerRadius = float(m_cornerRadius->value());
         return s;
     }
 
     void setSettings(const HalftoneSettings& s)
     {
         m_updating = true;
-        m_dpi->setValue(s.inputDpi);
-
-        clearShapeSlots();
-        if (s.shapes.empty()) {
-            addShapeSlot(HalftoneShape::Circle, QString(), true);
-        } else {
-            for (const auto& e : s.shapes)
-                addShapeSlot(e.shape, e.svgPath, true);
-        }
-
-        m_sldThreshold->blockSignals(true);
-        m_sldThreshold->setValue(s.multiThreshold);
-        m_sldThreshold->blockSignals(false);
+        const ShapeEntry e = s.shapes.empty() ? ShapeEntry{} : s.shapes.front();
+        m_svgPath = e.svgPath;
+        m_shapeCombo->blockSignals(true);
+        m_shapeCombo->setCurrentIndex(int(e.shape));
+        m_shapeCombo->blockSignals(false);
+        m_svgBtn->setVisible(e.shape == HalftoneShape::CustomSVG);
+        m_svgBtn->setText(e.svgPath.isEmpty() ? "  Upload SVG"
+                                              : "  " + QFileInfo(e.svgPath).baseName());
 
         m_gridType->blockSignals(true);
         m_gridType->setCurrentIndex(int(s.grid.type));
         m_gridType->blockSignals(false);
         m_spacing->setValue(qRound(s.grid.spacing));
-        m_pointSpacing->setValue(qRound(s.grid.pointSpacing));
         m_rotation->setValue(qRound(s.grid.rotation));
         m_diameter->setValue(qRound(s.grid.diameter * 100));
         m_stretch->setValue(qRound(s.grid.stretchFactor * 100));
         m_stretchAngle->setValue(qRound(s.grid.stretchAngle));
-        m_followGrid->blockSignals(true);
-        m_followGrid->setChecked(s.grid.followGridRotation);
-        m_followGrid->blockSignals(false);
-
         m_gamma->setValue(qRound(s.gamma * 100));
         m_jitter->setValue(qRound(s.jitter * 100));
         m_opacity->setValue(qRound(s.opacity * 100));
         m_cornerRadius->setValue(qRound(s.cornerRadius));
-        refreshGridControls();
         m_updating = false;
     }
 
 private:
-    struct ShapeSlot {
-        QWidget*         widget   = nullptr;
-        NoWheelComboBox* combo    = nullptr;
-        QPushButton*     minusBtn = nullptr;
-        QWidget*         svgRow   = nullptr;
-        QPushButton*     svgBtn   = nullptr;
-        QString          svgPath;
-    };
-
-    void refreshMinusButtons()
-    {
-        for (int i = 0; i < m_shapeSlots.size(); ++i) {
-            const bool removable = (i > 0);
-            m_shapeSlots[i].minusBtn->setVisible(removable);
-            m_shapeSlots[i].minusBtn->setEnabled(removable);
-        }
-    }
-
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
-    void clearShapeSlots()
-    {
-        for (auto& slot : m_shapeSlots) {
-            m_shapesLayout->removeWidget(slot.widget);
-            slot.widget->deleteLater();
-        }
-        m_shapeSlots.clear();
-    }
+    NoWheelComboBox* m_shapeCombo   = nullptr;
+    QPushButton*     m_svgBtn       = nullptr;
+    QString          m_svgPath;
 
-    void addShapeSlot(HalftoneShape shape, const QString& svgPath, bool silent)
-    {
-        if (m_shapeSlots.size() >= 4) return;
-
-        ShapeSlot slot;
-        slot.widget = new QWidget;
-        auto* outer = new QVBoxLayout(slot.widget);
-        outer->setContentsMargins(0, 0, 0, 0);
-        outer->setSpacing(4);
-
-        auto* mainRow = new QHBoxLayout;
-        mainRow->setContentsMargins(0, 0, 0, 0);
-        mainRow->setSpacing(6);
-
-        slot.combo = new NoWheelComboBox;
-        slot.combo->addItems({ "Triangle", "Circle", "Square", "Star", "Custom SVG" });
-        slot.combo->setCurrentIndex(static_cast<int>(shape));
-        slot.minusBtn = makeIconButton(":/icons/minus.svg");
-        slot.svgPath  = svgPath;
-
-        mainRow->addWidget(slot.combo, 1);
-        mainRow->addWidget(slot.minusBtn);
-
-        slot.svgRow = new QWidget;
-        {
-            auto* svgLay = new QHBoxLayout(slot.svgRow);
-            svgLay->setContentsMargins(0, 0, 30, 0);
-            slot.svgBtn = new QPushButton;
-            slot.svgBtn->setObjectName("uploadBtn");
-            slot.svgBtn->setFixedHeight(38);
-            if (svgPath.isEmpty()) {
-                slot.svgBtn->setIcon(QIcon(":/icons/upload.svg"));
-                slot.svgBtn->setIconSize(QSize(16, 17));
-                slot.svgBtn->setText("  Upload SVG");
-            } else {
-                slot.svgBtn->setText("  Change SVG");
-                const int ci = static_cast<int>(HalftoneShape::CustomSVG);
-                slot.combo->setItemIcon(ci, QIcon(svgPath));
-                slot.combo->setItemText(ci, "  " + QFileInfo(svgPath).baseName());
-            }
-            svgLay->addWidget(slot.svgBtn);
-        }
-        slot.svgRow->setVisible(shape == HalftoneShape::CustomSVG);
-
-        outer->addLayout(mainRow);
-        outer->addWidget(slot.svgRow);
-
-        m_shapeSlots.append(slot);
-        m_shapesLayout->addWidget(slot.widget);
-        refreshMinusButtons();
-
-        QWidget*         slotWidget = slot.widget;
-        QWidget*         svgRow     = slot.svgRow;
-        QPushButton*     svgBtn     = slot.svgBtn;
-        NoWheelComboBox* combo      = slot.combo;
-
-        connect(slot.minusBtn, &QPushButton::clicked, this, [this, slotWidget]() {
-            removeShapeSlot(slotWidget);
-        });
-        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this, svgRow](int idx) {
-            svgRow->setVisible(idx == static_cast<int>(HalftoneShape::CustomSVG));
-            fire();
-        });
-        connect(svgBtn, &QPushButton::clicked, this, [this, slotWidget, svgBtn, combo]() {
-            QString path = QFileDialog::getOpenFileName(this, "Load SVG", "", "SVG files (*.svg)");
-            if (!path.isEmpty()) {
-                for (auto& s : m_shapeSlots)
-                    if (s.widget == slotWidget) { s.svgPath = path; break; }
-                const int ci = static_cast<int>(HalftoneShape::CustomSVG);
-                combo->setItemIcon(ci, QIcon(path));
-                combo->setItemText(ci, "  " + QFileInfo(path).baseName());
-                svgBtn->setIcon(QIcon());
-                svgBtn->setText("  Change SVG");
-                fire();
-            }
-        });
-
-        refreshThreshold();
-        if (!silent) fire();
-    }
-
-    void removeShapeSlot(QWidget* slotWidget)
-    {
-        if (m_shapeSlots.size() <= 1) return;
-        int idx = -1;
-        for (int i = 0; i < m_shapeSlots.size(); ++i)
-            if (m_shapeSlots[i].widget == slotWidget) { idx = i; break; }
-        if (idx < 0) return;
-        m_shapesLayout->removeWidget(slotWidget);
-        slotWidget->deleteLater();
-        m_shapeSlots.removeAt(idx);
-        refreshMinusButtons();
-        refreshThreshold();
-        fire();
-    }
-
-    void refreshThreshold()
-    {
-        m_thresholdRow->setVisible(m_shapeSlots.size() > 1);
-        refreshMinusButtons();
-    }
-
-    void refreshGridControls()
-    {
-        const GridType t = static_cast<GridType>(m_gridType->currentIndex());
-        m_pointSpacingRow->setVisible(gridUsesPointSpacing(t));
-    }
-
-    SliderRow*           m_dpi             = nullptr;
-    QPushButton*         m_shapePlus       = nullptr;
-    QWidget*             m_shapesContainer = nullptr;
-    QVBoxLayout*         m_shapesLayout    = nullptr;
-    QWidget*             m_thresholdRow    = nullptr;
-    NoWheelSlider*       m_sldThreshold    = nullptr;
-    QVector<ShapeSlot>   m_shapeSlots;
-
-    NoWheelComboBox* m_gridType        = nullptr;
-    SliderRow*       m_spacing         = nullptr;
-    QWidget*         m_pointSpacingRow = nullptr;
-    SliderRow*       m_pointSpacing    = nullptr;
-    SliderRow*       m_rotation        = nullptr;
-    SliderRow*       m_gamma           = nullptr;
-    SliderRow*       m_diameter        = nullptr;
-    SliderRow*       m_stretch         = nullptr;
-    SliderRow*       m_stretchAngle    = nullptr;
-    SliderRow*       m_jitter          = nullptr;
-    QPushButton*     m_followGrid      = nullptr;
-    DragSpinBox*     m_opacity         = nullptr;
-    DragSpinBox*     m_cornerRadius    = nullptr;
+    NoWheelComboBox* m_gridType     = nullptr;
+    SliderRow*       m_spacing      = nullptr;
+    SliderRow*       m_rotation     = nullptr;
+    SliderRow*       m_gamma        = nullptr;
+    SliderRow*       m_diameter     = nullptr;
+    SliderRow*       m_stretch      = nullptr;
+    SliderRow*       m_stretchAngle = nullptr;
+    SliderRow*       m_jitter       = nullptr;
+    NoWheelComboBox* m_fusion       = nullptr;
+    DragSpinBox*     m_opacity      = nullptr;
+    DragSpinBox*     m_cornerRadius = nullptr;
 
     bool m_updating = false;
 };
@@ -772,37 +695,33 @@ ModePanel::ModePanel(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName("sidePanel");
-    setMinimumWidth(300);
-    setMaximumWidth(560);
+    setMinimumWidth(Ui::px(420));
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    // ── Tabs ─────────────────────────────────────────────────
+    // ── Tabs (rectangle active style) ────────────────────────
     {
         auto* tabRow = new QWidget;
-        tabRow->setObjectName("tabRow");
         auto* tl = new QHBoxLayout(tabRow);
-        tl->setContentsMargins(0, 0, 0, 0);
-        tl->setSpacing(0);
+        tl->setContentsMargins(Ui::px(40), Ui::px(16), Ui::px(40), Ui::px(12));
+        tl->setSpacing(Ui::px(6));
 
         auto makeTab = [&](const QString& text) {
             auto* b = new QPushButton(text);
-            b->setObjectName("tabBtn");
+            b->setObjectName("rectTab");
             b->setCheckable(true);
             b->setAutoExclusive(true);
-            b->setFixedHeight(42);
             b->setCursor(Qt::PointingHandCursor);
-            tl->addWidget(b, 1);
+            tl->addWidget(b);
             return b;
         };
         m_tabHalftone = makeTab("Halftone");
         m_tabDither   = makeTab("Dither");
         m_tabAscii    = makeTab("Ascii");
-        m_tabHalftone->setProperty("tabPos", "first");
-        m_tabAscii->setProperty("tabPos", "last");
         m_tabHalftone->setChecked(true);
+        tl->addStretch(1);
 
         connect(m_tabHalftone, &QPushButton::clicked, this, [this]() { emit modeSelected(RenderMode::Halftone); });
         connect(m_tabDither,   &QPushButton::clicked, this, [this]() { emit modeSelected(RenderMode::Dither); });
@@ -811,18 +730,21 @@ ModePanel::ModePanel(QWidget* parent)
         outer->addWidget(tabRow);
     }
 
-    // ── Scrollable page area ─────────────────────────────────
+    // ── Scrollable section stack ─────────────────────────────
     auto* scroll = new QScrollArea;
+    scroll->setObjectName("modeScroll");
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroll->setFrameShape(QFrame::NoFrame);
 
     auto* content = new QWidget;
     content->setObjectName("controlRoot");
     auto* cl = new QVBoxLayout(content);
-    cl->setContentsMargins(16, 18, 16, 16);
+    cl->setContentsMargins(0, 0, 0, 0);
     cl->setSpacing(0);
 
+    // Per-mode pages (Shape + Settings).
     m_halftonePage = new HalftonePage;
     m_ditherPage   = new DitherPage;
     m_asciiPage    = new AsciiPage;
@@ -832,52 +754,120 @@ ModePanel::ModePanel(QWidget* parent)
     m_halftonePage->onChanged = [this]() { if (!m_updating) emit paramsChanged(); };
     m_ditherPage->onChanged   = [this]() { if (!m_updating) emit paramsChanged(); };
     m_asciiPage->onChanged    = [this]() { if (!m_updating) emit paramsChanged(); };
+    m_halftonePage->onBlendChanged = [this]() {
+        if (!m_updating) emit blendChanged(m_halftonePage->blend());
+    };
 
     cl->addWidget(m_halftonePage);
     cl->addWidget(m_ditherPage);
     cl->addWidget(m_asciiPage);
-    cl->addStretch();
 
-    scroll->setWidget(content);
-    outer->addWidget(scroll, 1);
+    // ── Fill (shared palette) ────────────────────────────────
+    auto* fill = new PanelSection("Fill", /*collapsible*/ true, true);
+    // Extend the body to the +/− gutter so the favourite icon can sit in that
+    // column; the palette controls compensate with their own right margin.
+    fill->body()->setContentsMargins(Ui::px(40), Ui::px(2), Ui::px(24), Ui::px(14));
+    m_tonal = new TonalControlsWidget(
+        TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
+    m_tonal->onChanged = [this]() { if (!m_updating) emit tonalChanged(); };
+    fill->body()->addWidget(m_tonal);
+    cl->addWidget(fill);
 
-    // ── Export (pinned bottom) ───────────────────────────────
+    // ── Stroke (stub: off by default) ────────────────────────
+    auto* stroke = new PanelSection("Stroke", /*collapsible*/ true, false);
     {
-        auto* exportBox = new QWidget;
-        exportBox->setObjectName("exportBox");
-        auto* ev = new QVBoxLayout(exportBox);
-        ev->setContentsMargins(16, 12, 16, 14);
-        ev->setSpacing(2);
+        auto* sw = new FillSwatch(QColor(0x10, 0x10, 0x10), 1.0f, /*showOpacity*/ false);
+        stroke->body()->addWidget(sw);
+        auto* thick = new SliderRow("Thickness", 0, 20, 0);
+        stroke->body()->addWidget(thick);
+    }
+    cl->addWidget(stroke);
 
-        ev->addWidget(makeSectionTitle("Export"));
-        ev->addSpacing(6);
+    // ── Background (shared document colour; "−" removes it) ───
+    auto* bg = new PanelSection("Background", /*collapsible*/ true, true);
+    m_setBgOpen = [bg](bool open) { bg->setOpen(open); };
+    bg->onToggled = [this](bool open) {
+        m_bgEnabled = open;                      // collapsed = no background
+        if (!m_updating) emit backgroundChanged();
+    };
+    m_bgSwatch = new FillSwatch(QColor(0x0A, 0x0A, 0x0A), 1.0f, /*showOpacity*/ true);
+    m_bgSwatch->onColorEdited = [this](QColor) { if (!m_updating) emit backgroundChanged(); };
+    m_bgSwatch->onClicked = [this]() {
+        auto* dlg = new ColorPickerDialog(m_bgSwatch->color(), m_bgSwatch->opacity(), true, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->moveNextTo(m_bgSwatch);
+        dlg->onColorChanged = [this](QColor c, float a) {
+            m_bgSwatch->setColor(c);
+            m_bgSwatch->setOpacity(a);
+            if (!m_updating) emit backgroundChanged();
+        };
+        dlg->show(); dlg->raise(); dlg->activateWindow();
+    };
+    bg->body()->addWidget(m_bgSwatch);
+    cl->addWidget(bg);
 
+    // ── Export ────────────────────────────────────────────────
+    auto* exp = new PanelSection("Export", /*collapsible*/ true, true);
+    {
         auto* labelsRow = new QHBoxLayout;
         labelsRow->setContentsMargins(0, 0, 0, 0);
-        labelsRow->setSpacing(8);
+        labelsRow->setSpacing(Ui::px(10));
         labelsRow->addWidget(makeParamLabel("Output name"), 2);
         labelsRow->addWidget(makeParamLabel("Type of file"), 1);
-        ev->addLayout(labelsRow);
+        exp->body()->addLayout(labelsRow);
 
         auto* fieldsRow = new QHBoxLayout;
         fieldsRow->setContentsMargins(0, 0, 0, 0);
-        fieldsRow->setSpacing(8);
+        fieldsRow->setSpacing(Ui::px(10));
         m_outputName = new QLineEdit("output");
         m_format     = new NoWheelComboBox;
         m_format->addItems({ "SVG", "PNG", "JPG", "PNG Sequence", "MP4" });
         fieldsRow->addWidget(m_outputName, 2);
         fieldsRow->addWidget(m_format, 1);
-        ev->addLayout(fieldsRow);
-        ev->addSpacing(8);
+        exp->body()->addLayout(fieldsRow);
 
         auto* btnExport = new QPushButton("Export");
-        btnExport->setObjectName("exportBtn");
-        btnExport->setFixedHeight(40);
+        btnExport->setObjectName("accentBtn");
+        btnExport->setFixedHeight(Ui::px(44));
         connect(btnExport, &QPushButton::clicked, this, &ModePanel::exportRequested);
-        ev->addWidget(btnExport);
-
-        outer->addWidget(exportBox);
+        exp->body()->addWidget(btnExport);
     }
+    cl->addWidget(exp);
+
+    cl->addSpacing(Ui::px(48));   // breathing room below Export
+    cl->addStretch();
+
+    scroll->setWidget(content);
+    installAutoHideScrollbar(scroll);
+    outer->addWidget(scroll, 1);
+}
+
+// ── Fill / Background / source ───────────────────────────────
+
+TonalSettings ModePanel::tonalSettings() const { return m_tonal->settings(); }
+
+void ModePanel::setTonalSettings(const TonalSettings& t)
+{
+    m_updating = true;
+    m_tonal->setSettings(t);
+    m_updating = false;
+}
+
+void ModePanel::setColorsEnabled(bool enabled) { m_tonal->setEnabled(enabled); }
+void ModePanel::setSourceImage(const QImage& img) { m_tonal->setSourceImage(img); }
+
+QColor ModePanel::background()        const { return m_bgSwatch->color(); }
+float  ModePanel::backgroundOpacity() const { return m_bgEnabled ? m_bgSwatch->opacity() : 0.0f; }
+
+void ModePanel::setBackground(QColor c, float opacity)
+{
+    m_updating = true;
+    // A fully-transparent background is treated as "removed" → section collapsed.
+    m_bgEnabled = (opacity > 0.001f);
+    if (m_setBgOpen) m_setBgOpen(m_bgEnabled);
+    m_bgSwatch->setColor(c);
+    m_bgSwatch->setOpacity(m_bgEnabled ? opacity : 1.0f);
+    m_updating = false;
 }
 
 HalftoneSettings ModePanel::halftoneSettings() const { return m_halftonePage->settings(); }
@@ -904,16 +894,25 @@ void ModePanel::setFromLayer(const Layer& layer)
     m_halftonePage->setSettings(layer.halftone);
     m_ditherPage->setSettings(layer.dither);
     m_asciiPage->setSettings(layer.ascii);
+    m_halftonePage->setBlend(layer.blend);
+
+    // Fill (tonal) mirrors the active layer's mode tonal.
+    switch (layer.kind) {
+        case LayerKind::Halftone: m_tonal->setSettings(layer.halftone.tonal); break;
+        case LayerKind::Dither:   m_tonal->setSettings(layer.dither.tonal);   break;
+        case LayerKind::Ascii:    m_tonal->setSettings(layer.ascii.tonal);    break;
+        case LayerKind::Original: break;
+    }
 
     if (layer.kind != LayerKind::Original)
         setMode(modeForLayerKind(layer.kind));
 
-    // The Original layer has no mode settings: only the left
-    // adjustments apply to it.
+    // The Original layer has no mode settings: only the left adjustments apply.
     const bool editable = (layer.kind != LayerKind::Original);
     m_halftonePage->setEnabled(editable);
     m_ditherPage->setEnabled(editable);
     m_asciiPage->setEnabled(editable);
+    m_tonal->setEnabled(editable);
 
     m_updating = false;
 }

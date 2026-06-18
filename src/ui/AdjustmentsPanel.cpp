@@ -1,4 +1,5 @@
 #include "AdjustmentsPanel.h"
+#include "UiScale.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -18,84 +19,80 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     outer->setSpacing(0);
 
     // ── Scrollable adjustments ───────────────────────────────
+    // The scrollbar auto-hides (only shows while interacting) — see
+    // AutoHideScroll applied by ControlsPanel.
     auto* scroll = new QScrollArea;
+    scroll->setObjectName("paramsScroll");
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroll->setFrameShape(QFrame::NoFrame);
+    // Scrollbar on the LEFT edge of the column (design choice): flip the
+    // viewport, keep the content laid out left-to-right.
+    scroll->setLayoutDirection(Qt::RightToLeft);
 
     auto* content = new QWidget;
     content->setObjectName("controlRoot");
+    content->setLayoutDirection(Qt::LeftToRight);
     auto* vlay = new QVBoxLayout(content);
-    vlay->setContentsMargins(16, 16, 16, 14);
-    vlay->setSpacing(0);
+    // Left edge aligns with the section titles (40px); the right keeps a 70px
+    // gutter free for the +/−/favourite icon column (design spec).
+    vlay->setContentsMargins(Ui::px(40), Ui::px(4), Ui::px(70), Ui::px(12));
+    vlay->setSpacing(Ui::px(10));
 
-    auto makeSection = [&](const QString& title, auto buildFn) -> CollapsibleSection* {
-        auto* rows = new QWidget;
-        auto* rl = new QVBoxLayout(rows);
-        rl->setContentsMargins(0, 0, 0, 0);
-        rl->setSpacing(8);
-        buildFn(rl);
-        return new CollapsibleSection(title, rows);
-    };
-
-    auto addRow = [&](QVBoxLayout* rl, SliderRow*& target, const QString& label,
+    auto addRow = [&](SliderRow*& target, const QString& label,
                       int minV, int maxV, int defV) {
         target = new SliderRow(label, minV, maxV, defV);
         target->onValueChanged = [this](int) { emit adjustmentsChanged(); };
-        rl->addWidget(target);
+        vlay->addWidget(target);
     };
 
-    // ── Tone ─────────────────────────────────────────────────
-    auto* toneSection = makeSection("Tone", [&](QVBoxLayout* rl) {
-        addRow(rl, m_brightness,  "Brightness",   -100, 100, 0);
-        addRow(rl, m_contrast,    "Contrast",     -100, 100, 0);
-        addRow(rl, m_gamma,       "Gamma",          10, 300, 100);
-        // Levels sub-group
-        rl->addWidget(makeParamLabel("Levels"));
-        m_levels = new LevelsWidget;
-        m_levels->onChanged = [this]() { emit adjustmentsChanged(); };
-        rl->addWidget(m_levels);
-        addRow(rl, m_saturation,  "Saturation",   -100, 100,   0);
-    });
+    // Visible parameters (the trimmed set): Brightness · Contrast · Gamma ·
+    // Levels · Blur · Grain · Posterize — a flat list, no collapsible groups.
+    addRow(m_brightness, "Brightness", -100, 100,   0);
+    addRow(m_contrast,   "Contrast",   -100, 100,   0);
+    addRow(m_gamma,      "Gamma",        10, 300, 100);
 
-    // ── Detail ───────────────────────────────────────────────
-    auto* detailSection = makeSection("Detail", [&](QVBoxLayout* rl) {
-        addRow(rl, m_sharpenStrength, "Sharpen strength",  0, 100, 0);
-        addRow(rl, m_sharpenRadius,   "Sharpen radius",    1,  10, 1);
-        addRow(rl, m_edgeEnhancement, "Edge enhancement",  0, 100, 0);
-        addRow(rl, m_blur,            "Blur",              0, 100, 0);
-        addRow(rl, m_grain,           "Grain",             0, 100, 0);
-    });
+    vlay->addWidget(makeParamLabel("Levels"));
+    m_levels = new LevelsWidget;
+    m_levels->onChanged = [this]() { emit adjustmentsChanged(); };
+    vlay->addWidget(m_levels);
 
-    // ── Resolution ───────────────────────────────────────────
-    auto* resolutionSection = makeSection("Resolution", [&](QVBoxLayout* rl) {
-        addRow(rl, m_size, "Size", 10, 200, 100);
-    });
+    addRow(m_blur,      "Blur",      0, 100,   0);
+    addRow(m_grain,     "Grain",     0, 100,   0);
+    addRow(m_posterize, "Posterize", 2, 256, 256);
 
-    // ── Creative ─────────────────────────────────────────────
-    auto* creativeSection = makeSection("Creative", [&](QVBoxLayout* rl) {
-        addRow(rl, m_posterize, "Posterize",  2, 256, 256);
-        addRow(rl, m_threshold, "Threshold",  0, 255,   0);
-    });
+    // Removed-from-UI parameters: kept alive (hidden, default values) so the
+    // Adjustments struct round-trips unchanged through collect/apply/undo.
+    auto* hidden = new QWidget(content);
+    hidden->setVisible(false);
+    auto* hl = new QVBoxLayout(hidden);
+    hl->setContentsMargins(0, 0, 0, 0);
+    auto addHidden = [&](SliderRow*& target, int minV, int maxV, int defV) {
+        target = new SliderRow(QString(), minV, maxV, defV);
+        hl->addWidget(target);
+    };
+    addHidden(m_saturation,      -100, 100,   0);
+    addHidden(m_sharpenStrength,    0, 100,   0);
+    addHidden(m_sharpenRadius,      1,  10,   1);
+    addHidden(m_edgeEnhancement,    0, 100,   0);
+    addHidden(m_size,              10, 200, 100);
+    addHidden(m_threshold,          0, 255,   0);
+    vlay->addWidget(hidden);
 
-    // Reset button lives outside sections so it's always visible in the scroll area
-    auto* btnReset = new QPushButton("Reset adjustments");
-    btnReset->setObjectName("exportBtn");
-    btnReset->setFixedHeight(42);
+    // Reset button: always visible at the foot of the scroll area.
+    auto* btnReset = new QPushButton("reset adjustments");
+    btnReset->setObjectName("resetBtn");
+    btnReset->setFixedHeight(Ui::px(44));
+    btnReset->setCursor(Qt::PointingHandCursor);
     connect(btnReset, &QPushButton::clicked, this, &AdjustmentsPanel::resetRequested);
 
-    vlay->addWidget(toneSection);
-    vlay->addSpacing(8);
-    vlay->addWidget(detailSection);
-    vlay->addSpacing(8);
-    vlay->addWidget(resolutionSection);
-    vlay->addSpacing(8);
-    vlay->addWidget(creativeSection);
-    vlay->addSpacing(12);
+    vlay->addSpacing(2);
     vlay->addWidget(btnReset);
     vlay->addStretch();
 
     scroll->setWidget(content);
+    installAutoHideScrollbar(scroll);
     outer->addWidget(scroll, 1);
 }
 

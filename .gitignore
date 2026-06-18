@@ -73,3 +73,9 @@ Testing/
 # Qt Creator local state
 .qtcreator/
 *.user
+
+# UI capture / debug artifacts (tools/capture.ps1)
+/capture.png
+/font_check.png
+/pass*.png
+/scale_debug.txt

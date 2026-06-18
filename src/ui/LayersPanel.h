@@ -33,7 +33,10 @@ class LayersPanel : public QWidget
     Q_OBJECT
 
 public:
-    explicit LayersPanel(QWidget* parent = nullptr);
+    // embedded=true → renders only the scrollable row list (no floating
+    // chrome, no collapse button, no blend/trash footer), for hosting inside
+    // the left column. embedded=false keeps the legacy floating panel.
+    explicit LayersPanel(bool embedded = false, QWidget* parent = nullptr);
 
     void setLayers(const std::vector<Layer>& layers, int activeId);
     void setSourceImage(const QImage& source);
@@ -60,6 +63,7 @@ private:
     void reposition();
     QPixmap thumbFor(const Layer& layer) const;
 
+    bool               m_embedded = false;
     std::vector<Layer> m_layers;
     int                m_activeId = -1;
     QImage             m_smallSource;   // downscaled source for row thumbs
@@ -68,6 +72,7 @@ private:
 
     QWidget*         m_expandedBox  = nullptr;
     QPushButton*     m_collapsedBtn = nullptr;
+    QWidget*         m_rowsScroll   = nullptr;   // embedded: scroll host for rows
     RowsArea*        m_rowsArea     = nullptr;
     QList<LayerRow*> m_rows;
     NoWheelComboBox* m_blendCombo   = nullptr;

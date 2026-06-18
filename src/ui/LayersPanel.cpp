@@ -1,5 +1,6 @@
 #include "LayersPanel.h"
 #include "Widgets.h"
+#include "UiScale.h"
 #include "../core/ImageAdjuster.h"
 #include "../workers/RenderWorker.h"
 
@@ -17,6 +18,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QStyle>
 #include <QLineEdit>
 
@@ -108,28 +110,39 @@ public:
     LayerRow(int layerId, QWidget* parent = nullptr)
         : QFrame(parent), m_id(layerId)
     {
-        setObjectName("layerRow");
-        setProperty("selected", false);
-        setFixedHeight(44);
+        // Outer row is transparent; the coloured selection "pill" wraps only
+        // the thumbnail + name, while the eye sits in the gutter to its right.
+        setObjectName("layerRowOuter");
         setCursor(Qt::PointingHandCursor);
+        setFixedHeight(Ui::px(52));
 
         auto* hl = new QHBoxLayout(this);
-        hl->setContentsMargins(6, 0, 8, 0);
-        hl->setSpacing(8);
+        hl->setContentsMargins(0, Ui::px(2), 0, Ui::px(2));
+        hl->setSpacing(0);
+
+        m_pill = new QFrame(this);
+        m_pill->setObjectName("layerRow");
+        m_pill->setProperty("selected", false);
+        m_pill->setAttribute(Qt::WA_TransparentForMouseEvents);
+        auto* pl = new QHBoxLayout(m_pill);
+        pl->setContentsMargins(Ui::px(8), Ui::px(4), Ui::px(12), Ui::px(4));
+        pl->setSpacing(Ui::px(10));
 
         m_thumb = new QLabel;
-        m_thumb->setFixedSize(46, 32);
+        m_thumb->setFixedSize(Ui::px(46), Ui::px(32));
         m_thumb->setStyleSheet("background: transparent;");
         m_thumb->setAttribute(Qt::WA_TransparentForMouseEvents);
-        hl->addWidget(m_thumb);
+        pl->addWidget(m_thumb);
 
         m_name = new QLabel;
         m_name->setObjectName("layerName");
         m_name->setTextInteractionFlags(Qt::NoTextInteraction);
         m_name->setAttribute(Qt::WA_TransparentForMouseEvents);
-        hl->addWidget(m_name, 1);
+        pl->addWidget(m_name, 1);
 
-        m_nameEdit = new QLineEdit(this);
+        hl->addWidget(m_pill, 1);
+
+        m_nameEdit = new QLineEdit(m_pill);
         m_nameEdit->setObjectName("layerNameEdit");
         m_nameEdit->setFrame(false);
         m_nameEdit->setVisible(false);
@@ -140,10 +153,18 @@ public:
 
         m_eye = new QPushButton;
         m_eye->setObjectName("eyeBtn");
-        m_eye->setFixedSize(26, 26);
+        m_eye->setFixedSize(Ui::px(30), Ui::px(30));
         m_eye->setCursor(Qt::PointingHandCursor);
-        m_eye->setIconSize(QSize(17, 17));
-        hl->addWidget(m_eye);
+        m_eye->setIconSize(QSize(Ui::px(20), Ui::px(20)));
+
+        // The eye lives centred in the right gutter (≈70px), detached from
+        // the pill, lined up with the parameters' icon gutter.
+        auto* eyeWrap = new QWidget(this);
+        eyeWrap->setFixedWidth(Ui::px(70));
+        auto* ew = new QHBoxLayout(eyeWrap);
+        ew->setContentsMargins(0, 0, 0, 0);
+        ew->addWidget(m_eye, 0, Qt::AlignCenter);
+        hl->addWidget(eyeWrap);
 
         connect(m_eye, &QPushButton::clicked, this, [this]() {
             setLayerVisible(!m_visible);
@@ -164,9 +185,9 @@ public:
 
     void setSelected(bool sel)
     {
-        if (property("selected").toBool() == sel) return;
-        setProperty("selected", sel);
-        repolish(this);
+        if (m_pill->property("selected").toBool() == sel) return;
+        m_pill->setProperty("selected", sel);
+        repolish(m_pill);
         repolish(m_name);
     }
 
@@ -199,7 +220,7 @@ protected:
 
     void mouseDoubleClickEvent(QMouseEvent* e) override
     {
-        if (e->button() == Qt::LeftButton && m_name->geometry().contains(e->pos())) {
+        if (e->button() == Qt::LeftButton && m_pill->geometry().contains(e->pos())) {
             beginNameEditing();
             e->accept();
             return;
@@ -244,6 +265,7 @@ private:
     int          m_id;
     bool         m_visible = true;
     bool         m_editingName = false;
+    QFrame*      m_pill    = nullptr;
     QLabel*      m_thumb   = nullptr;
     QLabel*      m_name    = nullptr;
     QLineEdit*   m_nameEdit = nullptr;
@@ -317,24 +339,47 @@ protected:
     }
 
 private:
+    int rowCount() const
+    {
+        int n = 0;
+        for (int i = 0; i < m_layout->count(); ++i)
+            if (m_layout->itemAt(i)->widget()) ++n;
+        return n;
+    }
+
     int insertIndexAt(const QPoint& pos) const
     {
+        int idx = 0;
         for (int i = 0; i < m_layout->count(); ++i) {
             QWidget* w = m_layout->itemAt(i)->widget();
             if (!w) continue;
-            if (pos.y() < w->geometry().center().y()) return i;
+            if (pos.y() < w->geometry().center().y()) return idx;
+            ++idx;
         }
-        return m_layout->count();
+        return idx;
+    }
+
+    QWidget* rowWidgetAt(int index) const
+    {
+        int idx = 0;
+        for (int i = 0; i < m_layout->count(); ++i) {
+            QWidget* w = m_layout->itemAt(i)->widget();
+            if (!w) continue;
+            if (idx == index) return w;
+            ++idx;
+        }
+        return nullptr;
     }
 
     int indicatorYFor(int index) const
     {
-        if (m_layout->count() == 0) return 0;
-        if (index >= m_layout->count()) {
-            QWidget* last = m_layout->itemAt(m_layout->count() - 1)->widget();
+        const int n = rowCount();
+        if (n == 0) return 2;
+        if (index >= n) {
+            QWidget* last = rowWidgetAt(n - 1);
             return last ? last->geometry().bottom() + 3 : height() - 2;
         }
-        QWidget* w = m_layout->itemAt(index)->widget();
+        QWidget* w = rowWidgetAt(index);
         return w ? qMax(2, w->geometry().top() - 3) : 0;
     }
 
@@ -393,9 +438,44 @@ protected:
 //  LayersPanel
 // ============================================================
 
-LayersPanel::LayersPanel(QWidget* parent)
-    : QWidget(parent)
+LayersPanel::LayersPanel(bool embedded, QWidget* parent)
+    : QWidget(parent), m_embedded(embedded)
 {
+    if (m_embedded) {
+        // Embedded: just the scrollable list of rows. The "Layers" header,
+        // separators and the surrounding column chrome belong to ControlsPanel.
+        // Fusion lives in the right panel; deletion is via Backspace.
+        setAttribute(Qt::WA_StyledBackground, true);
+        setObjectName("layersEmbedded");
+
+        auto* root = new QVBoxLayout(this);
+        root->setContentsMargins(0, 0, 0, 0);
+        root->setSpacing(0);
+
+        auto* scroll = new QScrollArea;
+        scroll->setObjectName("layersScroll");
+        scroll->setWidgetResizable(true);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setLayoutDirection(Qt::RightToLeft);   // scrollbar on the left
+        m_rowsScroll = scroll;
+
+        m_rowsArea = new RowsArea;
+        m_rowsArea->setLayoutDirection(Qt::LeftToRight);
+        m_rowsArea->onReorder = [this](int id, int idx) { emit reorderRequested(id, idx); };
+        // Left margin aligns the thumbnail with the section titles (40px); the
+        // row's own 70px eye gutter sits flush against the right content edge.
+        m_rowsArea->rowsLayout()->setContentsMargins(Ui::px(32), Ui::px(14), 0, Ui::px(2));
+        m_rowsArea->rowsLayout()->setSpacing(Ui::px(6));
+        scroll->setWidget(m_rowsArea);
+        installAutoHideScrollbar(scroll);
+
+        root->addWidget(scroll, 1);
+        m_isExpanded = true;
+        return;
+    }
+
     setAttribute(Qt::WA_StyledBackground, false);
 
     auto* root = new QVBoxLayout(this);
@@ -552,15 +632,16 @@ QPixmap LayersPanel::thumbFor(const Layer& layer) const
     const QImage ref = m_smallSource.isNull()
         ? QImage()
         : RenderWorker::renderLayer(m_smallSource, layer);
-    return roundedThumb(ref, QSize(46, 32), 4.0, m_background, m_bgOpacity);
+    return roundedThumb(ref, QSize(Ui::px(46), Ui::px(32)), Ui::px(5), m_background, m_bgOpacity);
 }
 
 void LayersPanel::rebuildRows()
 {
-    for (LayerRow* row : m_rows) {
-        m_rowsArea->rowsLayout()->removeWidget(row);
-        row->hide();
-        row->deleteLater();
+    // Clear the whole layout (rows + any trailing stretch).
+    QVBoxLayout* lay = m_rowsArea->rowsLayout();
+    while (QLayoutItem* it = lay->takeAt(0)) {
+        if (QWidget* w = it->widget()) { w->hide(); w->deleteLater(); }
+        delete it;
     }
     m_rows.clear();
 
@@ -579,6 +660,11 @@ void LayersPanel::rebuildRows()
         m_rowsArea->rowsLayout()->addWidget(row);
         m_rows.append(row);
     }
+
+    // Anchor rows to the top so the first layers sit together near the header
+    // and new ones stack above, pushing the list down (then scroll).
+    if (m_embedded)
+        m_rowsArea->rowsLayout()->addStretch(1);
 }
 
 void LayersPanel::updateRowsInPlace()
@@ -595,6 +681,8 @@ void LayersPanel::updateRowsInPlace()
 
 void LayersPanel::syncFooter()
 {
+    if (m_embedded || !m_blendCombo) return;   // no blend/trash footer when embedded
+
     const int idx = findLayerById(m_layers, m_activeId);
 
     m_updating = true;
@@ -616,6 +704,7 @@ void LayersPanel::syncFooter()
 
 void LayersPanel::reposition()
 {
+    if (m_embedded) return;   // laid out by the column, never self-positioned
     QWidget* p = parentWidget();
     if (!p) return;
     move(p->width() - width() - kMargin, kMargin);
@@ -624,6 +713,8 @@ void LayersPanel::reposition()
 
 bool LayersPanel::eventFilter(QObject* obj, QEvent* ev)
 {
+    if (m_embedded) return QWidget::eventFilter(obj, ev);
+
     if (obj == m_headerWidget) {
         if (ev->type() == QEvent::MouseButtonPress) {
             auto* mev = static_cast<QMouseEvent*>(ev);
@@ -658,5 +749,5 @@ bool LayersPanel::eventFilter(QObject* obj, QEvent* ev)
 void LayersPanel::resizeEvent(QResizeEvent* ev)
 {
     QWidget::resizeEvent(ev);
-    reposition();
+    if (!m_embedded) reposition();
 }

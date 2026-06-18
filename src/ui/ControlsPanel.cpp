@@ -1,161 +1,111 @@
 #include "ControlsPanel.h"
 #include "AdjustmentsPanel.h"
-#include "TonalControlsWidget.h"
+#include "LayersPanel.h"
 #include "Widgets.h"
+#include "UiScale.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QStackedWidget>
-#include <QScrollArea>
+#include <QFrame>
+#include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
+
+namespace {
+
+// Full-width 1px divider used to bracket the section titles.
+QFrame* bandLine()
+{
+    auto* f = new QFrame;
+    f->setObjectName("bandLine");
+    f->setFixedHeight(1);
+    return f;
+}
+
+// A fixed section-title band: title text in a row with vertical padding.
+QWidget* titleBand(const QString& text)
+{
+    auto* w = new QWidget;
+    auto* l = new QHBoxLayout(w);
+    l->setContentsMargins(Ui::px(40), Ui::px(12), Ui::px(40), Ui::px(12));
+    l->setSpacing(0);
+    l->addWidget(makeSectionTitle(text), 1);
+    return w;
+}
+
+} // namespace
 
 ControlsPanel::ControlsPanel(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName("sidePanel");
-    setMinimumWidth(280);
-    setMaximumWidth(520);
+    setMinimumWidth(Ui::px(420));
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    // ── Tabs (Colors / Parameters) ───────────────────────────
+    // ── File name (editable, click to rename, Enter confirms) ────
     {
-        auto* tabRow = new QWidget;
-        tabRow->setObjectName("tabRow");
-        auto* tl = new QHBoxLayout(tabRow);
-        tl->setContentsMargins(0, 0, 0, 0);
-        tl->setSpacing(0);
+        auto* nameRow = new QWidget;
+        auto* nl = new QHBoxLayout(nameRow);
+        nl->setContentsMargins(Ui::px(20), Ui::px(14), Ui::px(20), Ui::px(14));
+        nl->setSpacing(0);
 
-        auto makeTab = [&](const QString& text) {
-            auto* b = new QPushButton(text);
-            b->setObjectName("tabBtn");
-            b->setCheckable(true);
-            b->setAutoExclusive(true);
-            b->setFixedHeight(42);
-            b->setCursor(Qt::PointingHandCursor);
-            tl->addWidget(b, 1);
-            return b;
-        };
-        m_tabColors = makeTab("Colors");
-        m_tabParams = makeTab("Parameters");
-        m_tabColors->setProperty("tabPos", "first");
-        m_tabParams->setProperty("tabPos", "last");
-        m_tabColors->setChecked(true);
-
-        connect(m_tabColors, &QPushButton::clicked, this, [this]() { selectTab(0); });
-        connect(m_tabParams, &QPushButton::clicked, this, [this]() { selectTab(1); });
-
-        outer->addWidget(tabRow);
+        m_fileTitle = new QLineEdit("Senza Titolo");
+        m_fileTitle->setObjectName("fileTitleEdit");
+        m_fileTitle->setFrame(false);
+        m_fileTitle->setFocusPolicy(Qt::ClickFocus);   // no caret until clicked
+        m_fileTitle->setCursorPosition(0);
+        connect(m_fileTitle, &QLineEdit::returnPressed, this, [this]() {
+            m_fileTitle->clearFocus();
+        });
+        connect(m_fileTitle, &QLineEdit::editingFinished, this, [this]() {
+            const QString t = m_fileTitle->text().trimmed();
+            if (t.isEmpty()) { m_fileTitle->setText("Senza Titolo"); }
+            if (!m_updating) emit fileRenamed(m_fileTitle->text());
+        });
+        nl->addWidget(m_fileTitle, 1);
+        outer->addWidget(nameRow);
     }
 
-    // ── Stacked pages ────────────────────────────────────────
-    m_stack = new QStackedWidget;
+    outer->addWidget(bandLine());
 
-    // Page 0 — Colors (tonal controls in a scroll area)
-    {
-        auto* scroll = new QScrollArea;
-        scroll->setWidgetResizable(true);
-        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        scroll->setFrameShape(QFrame::NoFrame);
+    // ── Layers (fixed header + scrollable embedded list) ─────────
+    outer->addWidget(titleBand("Layers"));
+    outer->addWidget(bandLine());
 
-        auto* content = new QWidget;
-        content->setObjectName("controlRoot");
-        auto* cl = new QVBoxLayout(content);
-        cl->setContentsMargins(16, 16, 16, 14);
-        cl->setSpacing(0);
+    m_layers = new LayersPanel(/*embedded*/ true);
+    m_layers->setObjectName("layersEmbedded");
+    // Reserve room for exactly four rows (row = 52 + 6 spacing), then scroll.
+    const int fourRows = Ui::px(4 * 52 + 3 * 6 + 8);
+    m_layers->setMinimumHeight(fourRows);
+    m_layers->setMaximumHeight(fourRows);
+    outer->addWidget(m_layers, 0);
 
-        m_tonal = new TonalControlsWidget(
-            TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
-        m_tonal->onChanged = [this]() { if (!m_updating) emit tonalChanged(); };
-        cl->addWidget(new CollapsibleSection("Tonal controls", m_tonal));
-        cl->addStretch();
+    // ── Parameters (fixed header + scrollable adjustments) ───────
+    outer->addWidget(bandLine());
+    outer->addWidget(titleBand("Parameters"));
+    outer->addWidget(bandLine());   // separates the title from the scrolling part
 
-        scroll->setWidget(content);
-        m_stack->addWidget(scroll);
-    }
-
-    // Page 1 — Parameters (image adjustments)
     m_adjust = new AdjustmentsPanel;
     connect(m_adjust, &AdjustmentsPanel::adjustmentsChanged,
             this, &ControlsPanel::adjustmentsChanged);
     connect(m_adjust, &AdjustmentsPanel::resetRequested,
             this, &ControlsPanel::resetRequested);
-    m_stack->addWidget(m_adjust);
-
-    outer->addWidget(m_stack, 1);
-
-    // ── Background (pinned bottom) ───────────────────────────
-    {
-        auto* bgBox = new QWidget;
-        bgBox->setObjectName("exportBox");
-        auto* bl = new QVBoxLayout(bgBox);
-        bl->setContentsMargins(16, 12, 16, 14);
-        bl->setSpacing(8);
-        bl->addWidget(makeSectionTitle("Background"));
-
-        m_bgSwatch = new FillSwatch(QColor(0x0A, 0x0A, 0x0A), 1.0f, /*showOpacity*/ true);
-        m_bgSwatch->onColorEdited    = [this](QColor) { if (!m_updating) emit backgroundChanged(); };
-        m_bgSwatch->onClicked = [this]() {
-            auto* dlg = new ColorPickerDialog(m_bgSwatch->color(),
-                                              m_bgSwatch->opacity(),
-                                              /*showOpacity*/ true, this);
-            dlg->setAttribute(Qt::WA_DeleteOnClose);
-            dlg->moveNextTo(m_bgSwatch);
-            dlg->onColorChanged = [this](QColor c, float a) {
-                m_bgSwatch->setColor(c);
-                m_bgSwatch->setOpacity(a);
-                if (!m_updating) emit backgroundChanged();
-            };
-            dlg->show();
-            dlg->raise();
-            dlg->activateWindow();
-        };
-        bl->addWidget(m_bgSwatch);
-
-        outer->addWidget(bgBox);
-    }
+    outer->addWidget(m_adjust, 1);
 }
 
-void ControlsPanel::selectTab(int index)
+void ControlsPanel::setFileName(const QString& name)
 {
-    m_stack->setCurrentIndex(index);
-    m_tabColors->setChecked(index == 0);
-    m_tabParams->setChecked(index == 1);
+    m_updating = true;
+    m_fileTitle->setText(name.isEmpty() ? "Senza Titolo" : name);
+    m_fileTitle->setCursorPosition(0);
+    m_updating = false;
 }
 
 // ── Parameters ───────────────────────────────────────────────
 
-Adjustments ControlsPanel::adjustments() const         { return m_adjust->adjustments(); }
+Adjustments ControlsPanel::adjustments() const          { return m_adjust->adjustments(); }
 void ControlsPanel::setAdjustments(const Adjustments& a) { m_adjust->setAdjustments(a); }
-void ControlsPanel::setSourceImage(const QImage& img)    { m_adjust->setSourceImage(img); m_tonal->setSourceImage(img); }
-
-// ── Colors ───────────────────────────────────────────────────
-
-TonalSettings ControlsPanel::tonalSettings() const { return m_tonal->settings(); }
-
-void ControlsPanel::setTonalSettings(const TonalSettings& t)
-{
-    m_updating = true;
-    m_tonal->setSettings(t);
-    m_updating = false;
-}
-
-void ControlsPanel::setColorsEnabled(bool enabled)
-{
-    m_tonal->setEnabled(enabled);
-}
-
-// ── Background ───────────────────────────────────────────────
-
-QColor ControlsPanel::background()        const { return m_bgSwatch->color(); }
-float  ControlsPanel::backgroundOpacity() const { return m_bgSwatch->opacity(); }
-
-void ControlsPanel::setBackground(QColor c, float opacity)
-{
-    m_updating = true;
-    m_bgSwatch->setColor(c);
-    m_bgSwatch->setOpacity(opacity);
-    m_updating = false;
-}
+void ControlsPanel::setSourceImage(const QImage& img)    { m_adjust->setSourceImage(img); }

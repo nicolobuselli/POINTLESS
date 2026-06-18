@@ -256,3 +256,9 @@ QLabel*      makeParamLabel(const QString& text);
 QLabel*      makeSectionTitle(const QString& text);
 QFrame*      makeSeparatorLine();
 QPushButton* makeIconButton(const QString& iconRes);
+
+// Make a scroll area's vertical scrollbar auto-hide: it fades in only while
+// the user is actually scrolling (and only exists when content overflows),
+// then fades back out shortly after.
+class QAbstractScrollArea;
+void installAutoHideScrollbar(QAbstractScrollArea* area);

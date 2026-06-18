@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/">
         <file alias="style.qss">../assets/style.qss</file>
+        <file alias="fonts/FunnelDisplay.ttf">../assets/fonts/FunnelDisplay.ttf</file>
         <file alias="logo.png">../assets/logo.png</file>
         <file alias="example.jpg">../assets/example.jpg</file>
         <file alias="icons/plus.svg">../assets/icons/plus.svg</file>
@@ -16,5 +17,9 @@
         <file alias="icons/eye_open.svg">../assets/icons/eye_open.svg</file>
         <file alias="icons/eye_closed.svg">../assets/icons/eye_closed.svg</file>
         <file alias="icons/trash.svg">../assets/icons/trash.svg</file>
+        <file alias="icons/tl_end.svg">../assets/icons/tl_end.svg</file>
+        <file alias="icons/tl_key.svg">../assets/icons/tl_key.svg</file>
+        <file alias="icons/tl_play.svg">../assets/icons/tl_play.svg</file>
+        <file alias="icons/favorite.svg">../assets/icons/favorite.svg</file>
 </qresource>
 </RCC>

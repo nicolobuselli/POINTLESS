@@ -1,4 +1,5 @@
 #include "Widgets.h"
+#include "UiScale.h"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -12,6 +13,11 @@
 #include <QGuiApplication>
 #include <QPainterPath>
 #include <QStyle>
+#include <QScrollBar>
+#include <QAbstractScrollArea>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
+#include <QTimer>
 #include <cmath>
 
 // ============================================================
@@ -32,17 +38,17 @@ DragSpinBox::DragSpinBox(const QString& iconRes, int minVal, int maxVal, int def
     setObjectName("dragSpinBox");
     setFrameShape(QFrame::NoFrame);
     setCursor(Qt::SizeHorCursor);
-    setFixedHeight(38);
+    setFixedHeight(Ui::px(48));
 
     auto* lay = new QHBoxLayout(this);
-    lay->setContentsMargins(8, 1, 8, 1);
-    lay->setSpacing(6);
+    lay->setContentsMargins(Ui::px(10), Ui::px(6), Ui::px(10), Ui::px(6));
+    lay->setSpacing(Ui::px(6));
 
     const bool hasIcon = !iconRes.isEmpty();
     if (hasIcon) {
         m_iconLbl = new QLabel(this);
-        m_iconLbl->setPixmap(QIcon(iconRes).pixmap(16, 16));
-        m_iconLbl->setFixedSize(16, 16);
+        m_iconLbl->setPixmap(QIcon(iconRes).pixmap(Ui::px(16), Ui::px(16)));
+        m_iconLbl->setFixedSize(Ui::px(16), Ui::px(16));
         m_iconLbl->setStyleSheet("background:transparent;");
         m_iconLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
         lay->addWidget(m_iconLbl);
@@ -50,7 +56,7 @@ DragSpinBox::DragSpinBox(const QString& iconRes, int minVal, int maxVal, int def
 
     m_valueLbl = new QLabel(this);
     m_valueLbl->setAlignment(Qt::AlignVCenter | (hasIcon ? Qt::AlignRight : Qt::AlignHCenter));
-    m_valueLbl->setStyleSheet("color:#E3E3E3; font-size:10pt; background:transparent;");
+    m_valueLbl->setStyleSheet(QString("color:#A6A6A6; font-size:%1px; font-weight:500; background:transparent;").arg(Ui::px(19)));
     m_valueLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
     lay->addWidget(m_valueLbl, 1);
 
@@ -67,9 +73,9 @@ void DragSpinBox::setCompact()
 {
     m_compact = true;
     setObjectName("dragSpinBoxCompact");   // QSS: smaller min/max-height
-    setFixedHeight(22);
-    layout()->setContentsMargins(12, 0, 12, 0);
-    m_valueLbl->setStyleSheet("color:#E3E3E3; font-size:9pt; background:transparent;");
+    setFixedHeight(Ui::px(24));
+    layout()->setContentsMargins(Ui::px(10), 0, Ui::px(10), 0);
+    m_valueLbl->setStyleSheet(QString("color:#A6A6A6; font-size:%1px; font-weight:500; background:transparent;").arg(Ui::px(14)));
     // Re-polish so the new objectName picks up its QSS rule.
     style()->unpolish(this);
     style()->polish(this);
@@ -110,8 +116,8 @@ void DragSpinBox::mouseDoubleClickEvent(QMouseEvent* e)
         m_lineEdit->setFrame(false);
         m_lineEdit->setAlignment(m_valueLbl->alignment());
         m_lineEdit->setStyleSheet(QString(
-            "background:transparent; color:#E3E3E3; font-size:%1pt; border:none; padding:0;")
-            .arg(m_compact ? 9 : 10));
+            "background:transparent; color:#A6A6A6; font-weight:500; font-size:%1px; border:none; padding:0;")
+            .arg(Ui::px(m_compact ? 14 : 18)));
         connect(m_lineEdit, &QLineEdit::editingFinished, m_lineEdit, [this]() {
             bool ok; int v = m_lineEdit->text().toInt(&ok);
             if (ok) { setValue(v); if (onValueChanged) onValueChanged(m_value); }
@@ -168,24 +174,30 @@ SliderRow::SliderRow(const QString& label, int minVal, int maxVal, int defVal,
 {
     auto* vl = new QVBoxLayout(this);
     vl->setContentsMargins(0, 0, 0, 0);
-    vl->setSpacing(4);
+    vl->setSpacing(Ui::px(2));
 
-    if (!label.isEmpty())
-        vl->addWidget(makeParamLabel(label));
+    if (!label.isEmpty()) {
+        auto* lbl = makeParamLabel(label);
+        lbl->setObjectName("sliderLabel");   // a touch smaller than section labels
+        vl->addWidget(lbl, 0, Qt::AlignTop);
+    }
 
     auto* row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(10);
+    row->setSpacing(Ui::px(12));
 
     m_slider = new NoWheelSlider(Qt::Horizontal);
     m_slider->setRange(minVal, maxVal);
     m_slider->setValue(defVal);
+    m_slider->setFixedHeight(Ui::px(40));   // shorter than the box
 
     m_box = new DragSpinBox(QString(), minVal, maxVal, defVal);
-    m_box->setFixedSize(48, 38);
+    m_box->setFixedSize(Ui::px(58), Ui::px(48));
 
-    row->addWidget(m_slider, 1);
-    row->addWidget(m_box);
+    // Bottom-align: the value box and the slider share a bottom edge, with
+    // the title sitting at the top.
+    row->addWidget(m_slider, 1, Qt::AlignBottom);
+    row->addWidget(m_box, 0, Qt::AlignBottom);
     vl->addLayout(row);
 
     connect(m_slider, &QSlider::valueChanged, this, [this](int v) {
@@ -600,7 +612,7 @@ bool CollapsibleSection::eventFilter(QObject* obj, QEvent* ev)
 FillSwatch::FillSwatch(QColor color, float opacity, bool showOpacity, QWidget* parent)
     : QWidget(parent), m_color(color), m_opacity(opacity), m_showOpacity(showOpacity)
 {
-    setFixedHeight(34);
+    setFixedHeight(Ui::px(48));
     setCursor(Qt::PointingHandCursor);
 
     // Selectable / hand-editable hex value over the painted area.
@@ -608,9 +620,9 @@ FillSwatch::FillSwatch(QColor color, float opacity, bool showOpacity, QWidget* p
     m_hexEdit->setFrame(false);
     m_hexEdit->setMaxLength(7);   // allow leading '#'
     m_hexEdit->setCursor(Qt::IBeamCursor);
-    m_hexEdit->setStyleSheet(
+    m_hexEdit->setStyleSheet(QString(
         "QLineEdit { background: transparent; border: none; color: #E3E3E3;"
-        " padding: 0; margin: 0; min-height: 0; font-size: 10pt; }");
+        " padding: 0; margin: 0; min-height: 0; font-size: %1px; font-weight:500; }").arg(Ui::px(16)));
     syncHexText();
 
     connect(m_hexEdit, &QLineEdit::returnPressed, m_hexEdit, [this]() {
@@ -642,11 +654,11 @@ void FillSwatch::syncHexText()
 
 void FillSwatch::placeHexEdit()
 {
-    const int padH   = 7;
-    const int sqSize = 20;
-    const int textX  = padH + sqSize + 6;
+    const int padH   = Ui::px(8);
+    const int sqSize = Ui::px(22);
+    const int textX  = padH + sqSize + Ui::px(8);
     const int divX   = m_showOpacity ? dividerX() : width() - padH;
-    m_hexEdit->setGeometry(textX, 0, qMax(10, divX - textX - 4), height());
+    m_hexEdit->setGeometry(textX, 0, qMax(Ui::px(10), divX - textX - Ui::px(4)), height());
 }
 
 void FillSwatch::resizeEvent(QResizeEvent*)
@@ -654,7 +666,7 @@ void FillSwatch::resizeEvent(QResizeEvent*)
     placeHexEdit();
 }
 
-int FillSwatch::dividerX() const { return width() - 55; }
+int FillSwatch::dividerX() const { return width() - Ui::px(56); }
 
 void FillSwatch::paintEvent(QPaintEvent*)
 {
@@ -663,17 +675,17 @@ void FillSwatch::paintEvent(QPaintEvent*)
 
     p.setPen(QPen(QColor("#5D5D5D"), 1));
     p.setBrush(QColor("#3B3B3B"));
-    p.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 6, 6);
+    p.drawRoundedRect(rect().adjusted(0, 0, -1, -1), Ui::px(8), Ui::px(8));
 
     const int h      = height();
-    const int padH   = 7;
-    const int sqSize = 20;
+    const int padH   = Ui::px(8);
+    const int sqSize = Ui::px(22);
     const int sqY    = (h - sqSize) / 2;
 
     // Checkerboard behind the chip when semi-transparent
     if (m_showOpacity && m_opacity < 0.999f) {
         p.setPen(Qt::NoPen);
-        const int cs = 5;
+        const int cs = Ui::px(5);
         for (int xx = 0; xx < sqSize; xx += cs)
             for (int yy = 0; yy < sqSize; yy += cs)
                 p.fillRect(padH + xx, sqY + yy, qMin(cs, sqSize - xx), qMin(cs, sqSize - yy),
@@ -684,11 +696,11 @@ void FillSwatch::paintEvent(QPaintEvent*)
     if (m_showOpacity) chip.setAlphaF(m_opacity);
     p.setPen(Qt::NoPen);
     p.setBrush(chip);
-    p.drawRoundedRect(QRectF(padH, sqY, sqSize, sqSize), 3, 3);
+    p.drawRoundedRect(QRectF(padH, sqY, sqSize, sqSize), Ui::px(4), Ui::px(4));
 
     QFont f;
     f.setFamilies({"Funnel Display", "Segoe UI", "Arial"});
-    f.setPixelSize(13);
+    f.setPixelSize(Ui::px(15));
     f.setWeight(QFont::Medium);
     p.setFont(f);
 
@@ -697,7 +709,7 @@ void FillSwatch::paintEvent(QPaintEvent*)
     // Hex value is shown by the embedded QLineEdit (selectable/editable).
 
     if (m_showOpacity) {
-        int divH   = 28;
+        int divH   = Ui::px(28);
         int divTop = (h - divH) / 2;
         p.setPen(QPen(QColor("#272727"), 1));
         p.drawLine(divX, divTop, divX, divTop + divH);
@@ -1057,4 +1069,61 @@ QPushButton* makeIconButton(const QString& iconRes)
     btn->setIconSize(QSize(14, 14));
     btn->setFixedSize(24, 24);
     return btn;
+}
+
+// ── Auto-hide scrollbar ──────────────────────────────────────
+namespace {
+class AutoHideFilter : public QObject {
+public:
+    AutoHideFilter(QScrollBar* sb, QGraphicsOpacityEffect* eff, QObject* parent)
+        : QObject(parent), m_sb(sb), m_eff(eff)
+    {
+        m_anim = new QPropertyAnimation(eff, "opacity", this);
+        m_anim->setDuration(160);
+        m_timer = new QTimer(this);
+        m_timer->setSingleShot(true);
+        m_timer->setInterval(900);
+        connect(m_timer, &QTimer::timeout, this, [this]{ fade(0.0); });
+    }
+    // Reveal only while scrolling and only when something is actually hidden.
+    void reveal()
+    {
+        if (m_sb->maximum() <= m_sb->minimum()) return;
+        fade(1.0);
+        m_timer->start();
+    }
+protected:
+    bool eventFilter(QObject* o, QEvent* e) override
+    {
+        if (e->type() == QEvent::Wheel) reveal();
+        else if (o == m_sb && (e->type() == QEvent::Enter || e->type() == QEvent::HoverEnter))
+            reveal();
+        return QObject::eventFilter(o, e);
+    }
+private:
+    void fade(double to)
+    {
+        m_anim->stop();
+        m_anim->setStartValue(m_eff->opacity());
+        m_anim->setEndValue(to);
+        m_anim->start();
+    }
+    QScrollBar*             m_sb;
+    QGraphicsOpacityEffect* m_eff;
+    QPropertyAnimation*     m_anim;
+    QTimer*                 m_timer;
+};
+} // namespace
+
+void installAutoHideScrollbar(QAbstractScrollArea* area)
+{
+    QScrollBar* sb = area->verticalScrollBar();
+    auto* eff = new QGraphicsOpacityEffect(sb);
+    eff->setOpacity(0.0);
+    sb->setGraphicsEffect(eff);
+
+    auto* f = new AutoHideFilter(sb, eff, area);
+    sb->installEventFilter(f);
+    area->viewport()->installEventFilter(f);
+    QObject::connect(sb, &QScrollBar::valueChanged, f, [f](int) { f->reveal(); });
 }

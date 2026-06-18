@@ -6,6 +6,7 @@
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QVector>
+#include <QHash>
 #include <QKeyEvent>
 #include "../core/Params.h"
 #include "../core/Animation.h"
@@ -56,11 +57,21 @@ private slots:
     void copyToClipboard();
 
 private:
+    // A piece of media in the board's library: a still image or a video clip.
+    struct MediaClip {
+        QString         name;
+        QImage          image;     // still, or first frame of a clip
+        QVector<QImage> frames;    // non-empty → video clip
+        double          fps = 0.0;
+    };
+
     struct UndoState { SessionParams params; Animation anim; };
     struct SessionImage {
         QString             name;
-        QImage              source;       // still image (or first frame of a clip)
-        QVector<QImage>     frames;        // non-empty → image sequence / clip
+        QImage              source;       // document base (first media's image)
+        QVector<QImage>     frames;        // legacy single-clip frames (base)
+        QHash<int, MediaClip> media;       // library: layers reference these by mediaId
+        int                 nextMediaId = 1;
         SessionParams       state;         // un-animated baseline parameters
         Animation           anim;          // keyframe animation over the parameters
         QVector<UndoState>  undoStack;
@@ -75,6 +86,7 @@ private:
     QString uniqueLayerName(const SessionParams& p, LayerKind kind) const;
     void syncLayersPanel();
     void scheduleRender(bool previewOnly = false);
+    QHash<int, QImage> layerSourcesAt(const SessionImage& img, int frame) const;
     void pushUndoSnapshot();
     void addImages(const QStringList& paths);
     void importSequence(const QStringList& paths);
