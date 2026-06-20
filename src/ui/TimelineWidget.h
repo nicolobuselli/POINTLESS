@@ -30,6 +30,7 @@ public:
     void      setPlayingSilent(bool on);           // sync play button without emitting
     void      copyKeys();                           // Ctrl+C: copy selected keyframes
     void      pasteKeys();                          // Ctrl+V: paste at the playhead
+    bool      deleteSelectedKeys();                 // Backspace: delete selected keys (true if any)
 
     // Callbacks (set by MainWindow)
     std::function<void(int)>  onPlayheadChanged;  // scrub / frame jump

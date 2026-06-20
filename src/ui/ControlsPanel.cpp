@@ -6,10 +6,12 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QSplitter>
 #include <QFrame>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QIcon>
 
 namespace {
 
@@ -49,21 +51,19 @@ ControlsPanel::ControlsPanel(QWidget* parent)
     {
         auto* nameRow = new QWidget;
         auto* nl = new QHBoxLayout(nameRow);
-        nl->setContentsMargins(Ui::px(20), Ui::px(14), Ui::px(20), Ui::px(14));
+        nl->setContentsMargins(Ui::px(40), Ui::px(14), Ui::px(20), Ui::px(14));   // aligned with "Layers"
         nl->setSpacing(0);
 
-        m_fileTitle = new QLineEdit("Senza Titolo");
+        m_fileTitle = new QLineEdit;
         m_fileTitle->setObjectName("fileTitleEdit");
         m_fileTitle->setFrame(false);
+        m_fileTitle->setPlaceholderText("add title…");
         m_fileTitle->setFocusPolicy(Qt::ClickFocus);   // no caret until clicked
-        m_fileTitle->setCursorPosition(0);
         connect(m_fileTitle, &QLineEdit::returnPressed, this, [this]() {
             m_fileTitle->clearFocus();
         });
         connect(m_fileTitle, &QLineEdit::editingFinished, this, [this]() {
-            const QString t = m_fileTitle->text().trimmed();
-            if (t.isEmpty()) { m_fileTitle->setText("Senza Titolo"); }
-            if (!m_updating) emit fileRenamed(m_fileTitle->text());
+            if (!m_updating) emit fileRenamed(m_fileTitle->text().trimmed());
         });
         nl->addWidget(m_fileTitle, 1);
         outer->addWidget(nameRow);
@@ -71,35 +71,82 @@ ControlsPanel::ControlsPanel(QWidget* parent)
 
     outer->addWidget(bandLine());
 
-    // ── Layers (fixed header + scrollable embedded list) ─────────
-    outer->addWidget(titleBand("Layers"));
-    outer->addWidget(bandLine());
+    // Layers / Parameters are split by a draggable handle so the user can
+    // decide how much height each gets.
+    auto* split = new QSplitter(Qt::Vertical);
+    split->setObjectName("leftSplit");
+    split->setChildrenCollapsible(false);
+    split->setHandleWidth(Ui::px(3));
 
-    m_layers = new LayersPanel(/*embedded*/ true);
-    m_layers->setObjectName("layersEmbedded");
-    // Reserve room for exactly four rows (row = 52 + 6 spacing), then scroll.
-    const int fourRows = Ui::px(4 * 52 + 3 * 6 + 8);
-    m_layers->setMinimumHeight(fourRows);
-    m_layers->setMaximumHeight(fourRows);
-    outer->addWidget(m_layers, 0);
+    // ── Layers pane (header + scrollable embedded list) ──────────
+    auto* layersPane = new QWidget;
+    {
+        auto* ll = new QVBoxLayout(layersPane);
+        ll->setContentsMargins(0, 0, 0, 0);
+        ll->setSpacing(0);
 
-    // ── Parameters (fixed header + scrollable adjustments) ───────
-    outer->addWidget(bandLine());
-    outer->addWidget(titleBand("Parameters"));
-    outer->addWidget(bandLine());   // separates the title from the scrolling part
+        // "Layers" header with a "+" in the gutter to add a layer (a new layer
+        // of the current mode, or a duplicate of the active one).
+        {
+            auto* hdr = new QWidget;
+            auto* hl = new QHBoxLayout(hdr);
+            hl->setContentsMargins(Ui::px(40), Ui::px(12), 0, Ui::px(12));
+            hl->setSpacing(0);
+            hl->addWidget(makeSectionTitle("Layers"), 1);
+            // "+" centred in a 70px gutter so it lines up with the layer eyes.
+            auto* gut = new QWidget;
+            gut->setFixedWidth(Ui::px(70));
+            auto* gl = new QHBoxLayout(gut);
+            gl->setContentsMargins(0, 0, 0, 0);
+            auto* add = new QPushButton;
+            add->setObjectName("iconBtn");
+            add->setCursor(Qt::PointingHandCursor);
+            add->setFixedSize(Ui::px(26), Ui::px(26));
+            add->setIcon(QIcon(":/icons/plus.svg"));
+            add->setIconSize(QSize(Ui::px(16), Ui::px(16)));
+            add->setToolTip("Add layer");
+            connect(add, &QPushButton::clicked, this, [this]() { m_layers->requestAddLayer(); });
+            gl->addWidget(add, 0, Qt::AlignCenter);
+            hl->addWidget(gut);
+            ll->addWidget(hdr);
+        }
+        ll->addWidget(bandLine());
+        m_layers = new LayersPanel(/*embedded*/ true);
+        m_layers->setObjectName("layersEmbedded");
+        m_layers->setMinimumHeight(Ui::px(64));   // at least ~1 row, then scroll
+        ll->addWidget(m_layers, 1);
+    }
 
-    m_adjust = new AdjustmentsPanel;
-    connect(m_adjust, &AdjustmentsPanel::adjustmentsChanged,
-            this, &ControlsPanel::adjustmentsChanged);
-    connect(m_adjust, &AdjustmentsPanel::resetRequested,
-            this, &ControlsPanel::resetRequested);
-    outer->addWidget(m_adjust, 1);
+    // ── Parameters pane (header + scrollable adjustments) ────────
+    auto* paramsPane = new QWidget;
+    {
+        auto* pp = new QVBoxLayout(paramsPane);
+        pp->setContentsMargins(0, 0, 0, 0);
+        pp->setSpacing(0);
+        pp->addWidget(titleBand("Parameters"));
+        pp->addWidget(bandLine());
+        m_adjust = new AdjustmentsPanel;
+        connect(m_adjust, &AdjustmentsPanel::adjustmentsChanged,
+                this, &ControlsPanel::adjustmentsChanged);
+        connect(m_adjust, &AdjustmentsPanel::resetRequested,
+                this, &ControlsPanel::resetRequested);
+        pp->addWidget(m_adjust, 1);
+        paramsPane->setMinimumHeight(Ui::px(120));
+    }
+
+    split->addWidget(layersPane);
+    split->addWidget(paramsPane);
+    split->setStretchFactor(0, 0);
+    split->setStretchFactor(1, 1);
+    // Default: Layers shows ~4 rows (title + bandLine + 4 rows), Parameters the rest.
+    split->setSizes({ Ui::px(4 * 52 + 3 * 6 + 58), Ui::px(900) });
+    outer->addWidget(split, 1);
 }
 
 void ControlsPanel::setFileName(const QString& name)
 {
     m_updating = true;
-    m_fileTitle->setText(name.isEmpty() ? "Senza Titolo" : name);
+    m_fileTitle->setText(name);          // empty → "add title…" placeholder
     m_fileTitle->setCursorPosition(0);
     m_updating = false;
 }

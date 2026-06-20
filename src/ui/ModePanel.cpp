@@ -13,6 +13,10 @@
 #include <QPushButton>
 #include <QFrame>
 #include <QStandardItemModel>
+#include <QSvgRenderer>
+#include <QPainter>
+#include <QIcon>
+#include <QStyle>
 
 // ============================================================
 //  Shared section helpers
@@ -28,6 +32,23 @@ QFrame* bandLine()
     f->setObjectName("bandLine");
     f->setFixedHeight(1);
     return f;
+}
+
+// Render a shape SVG as a light silhouette (so it's visible on the dark box),
+// used as a live preview of the chosen custom symbol.
+QIcon shapePreviewIcon(const QString& path, int sidePx)
+{
+    QSvgRenderer r(path);
+    const int s = sidePx * 2;   // supersample
+    QImage img(s, s, QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::transparent);
+    QPainter p(&img);
+    r.render(&p);
+    // Recolour the silhouette to a light tone, keeping its alpha.
+    p.setCompositionMode(QPainter::CompositionMode_SourceIn);
+    p.fillRect(img.rect(), QColor("#E3E3E3"));
+    p.end();
+    return QIcon(QPixmap::fromImage(img));
 }
 
 struct BlendItem { BlendMode mode; const char* name; bool groupStart; };
@@ -49,6 +70,11 @@ const BlendItem kBlend[] = {
     { BlendMode::Color, "Color", false }, { BlendMode::Luminosity, "Luminosity", false },
 };
 
+bool fillSectionOpenFor(const TonalSettings& tonal)
+{
+    return tonal.mode == ToneMode::ImageColors || tonal.enabled;
+}
+
 // A section with a bold title bracketed by lines, an optional +/− collapse
 // toggle in the right gutter, and a content area. Fill the section via body().
 class PanelSection : public QWidget
@@ -69,8 +95,9 @@ public:
         auto* titleRow = new QWidget;
         auto* tl = new QHBoxLayout(titleRow);
         tl->setContentsMargins(Ui::px(40), Ui::px(12), Ui::px(24), Ui::px(12));
-        tl->setSpacing(0);
+        tl->setSpacing(Ui::px(6));
         tl->addWidget(makeSectionTitle(title), 1);
+        m_titleLayout = tl;
 
         if (collapsible) {
             m_toggle = new QPushButton;
@@ -94,6 +121,20 @@ public:
 
     QVBoxLayout* body() const { return m_body; }
 
+    // Add an icon button into the title gutter (e.g. a "+" for Shape), placed
+    // in the same column as the collapse +/− toggles.
+    QPushButton* addHeaderButton(const QString& iconRes)
+    {
+        auto* b = new QPushButton;
+        b->setObjectName("iconBtn");
+        b->setCursor(Qt::PointingHandCursor);
+        b->setFixedSize(Ui::px(26), Ui::px(26));
+        b->setIcon(QIcon(iconRes));
+        b->setIconSize(QSize(Ui::px(16), Ui::px(16)));
+        m_titleLayout->addWidget(b);
+        return b;
+    }
+
     void setOpen(bool open)
     {
         m_open = open;
@@ -110,6 +151,7 @@ private:
     QPushButton* m_toggle  = nullptr;
     QWidget*     m_content = nullptr;
     QVBoxLayout* m_body    = nullptr;
+    QHBoxLayout* m_titleLayout = nullptr;
 };
 
 } // namespace
@@ -132,33 +174,23 @@ public:
         vl->setContentsMargins(0, 0, 0, 0);
         vl->setSpacing(0);
 
-        // ── Shape (single dropdown; DPI fixed at high quality) ──
-        auto* shape = new PanelSection("Shape", /*collapsible*/ false, true);
+        // ── Shape (one or more shapes; header "+" adds, "−" removes) ──
+        m_shapeSection = new PanelSection("Shape", /*collapsible*/ false, true);
+        // Body extends to the symbol gutter (24); each row reserves kGutterComp
+        // on the right so the combos all share one width and the "−" buttons
+        // line up with the section toggles.
+        m_shapeSection->body()->setContentsMargins(Ui::px(40), Ui::px(2), Ui::px(24), Ui::px(22));
+        m_shapeSection->body()->setSpacing(Ui::px(8));
+        m_shapesLayout = m_shapeSection->body();
         {
-            m_shapeCombo = new NoWheelComboBox;
-            m_shapeCombo->addItems({ "Triangle", "Circle", "Square", "Star", "Custom SVG" });
-            m_shapeCombo->setCurrentIndex(int(HalftoneShape::Square));
-            shape->body()->addWidget(m_shapeCombo);
-
-            m_svgBtn = new QPushButton("  Upload SVG");
-            m_svgBtn->setObjectName("uploadBtn");
-            m_svgBtn->setFixedHeight(Ui::px(40));
-            m_svgBtn->setIcon(QIcon(":/icons/upload.svg"));
-            m_svgBtn->setIconSize(QSize(Ui::px(16), Ui::px(16)));
-            m_svgBtn->setVisible(false);
-            shape->body()->addWidget(m_svgBtn);
-
-            connect(m_shapeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int idx) {
-                m_svgBtn->setVisible(idx == int(HalftoneShape::CustomSVG));
-                fire();
-            });
-            connect(m_svgBtn, &QPushButton::clicked, this, [this]() {
-                const QString p = QFileDialog::getOpenFileName(this, "Load SVG", "", "SVG files (*.svg)");
-                if (!p.isEmpty()) { m_svgPath = p; m_svgBtn->setText("  " + QFileInfo(p).baseName()); fire(); }
+            auto* addBtn = m_shapeSection->addHeaderButton(":/icons/plus.svg");
+            addBtn->setToolTip("Add shape");
+            connect(addBtn, &QPushButton::clicked, this, [this]() {
+                if (m_shapeSlots.size() < 4) addShapeSlot(HalftoneShape::Circle, QString(), false);
             });
         }
-        vl->addWidget(shape);
+        vl->addWidget(m_shapeSection);
+        addShapeSlot(HalftoneShape::Square, QString(), true);
 
         // ── Settings ────────────────────────────────────────
         auto* settings = new PanelSection("Settings", /*collapsible*/ false, true);
@@ -169,6 +201,7 @@ public:
             m_gridType = new NoWheelComboBox;
             m_gridType->addItems({ "Square", "Hexagonal", "Radial", "Line", "Circles" });
             sl->addWidget(m_gridType);
+            sl->addSpacing(Ui::px(8));   // breathing room before the sliders
 
             m_spacing      = new SliderRow("Spacing",       2, 200,  20);
             m_rotation     = new SliderRow("Rotation",      0, 360,   0);
@@ -238,10 +271,13 @@ public:
         HalftoneSettings s;
         s.inputDpi = 300;                       // fixed high quality (no DPI control)
         s.shapes.clear();
-        ShapeEntry e;
-        e.shape   = static_cast<HalftoneShape>(m_shapeCombo->currentIndex());
-        e.svgPath = m_svgPath;
-        s.shapes.push_back(e);
+        for (const auto& slot : m_shapeSlots) {
+            ShapeEntry e;
+            e.shape   = static_cast<HalftoneShape>(slot.combo->currentIndex());
+            e.svgPath = slot.svgPath;
+            s.shapes.push_back(e);
+        }
+        if (s.shapes.empty()) s.shapes.push_back(ShapeEntry{});
         s.multiThreshold = 128;
 
         s.grid.type          = static_cast<GridType>(m_gridType->currentIndex());
@@ -261,14 +297,12 @@ public:
     void setSettings(const HalftoneSettings& s)
     {
         m_updating = true;
-        const ShapeEntry e = s.shapes.empty() ? ShapeEntry{} : s.shapes.front();
-        m_svgPath = e.svgPath;
-        m_shapeCombo->blockSignals(true);
-        m_shapeCombo->setCurrentIndex(int(e.shape));
-        m_shapeCombo->blockSignals(false);
-        m_svgBtn->setVisible(e.shape == HalftoneShape::CustomSVG);
-        m_svgBtn->setText(e.svgPath.isEmpty() ? "  Upload SVG"
-                                              : "  " + QFileInfo(e.svgPath).baseName());
+        clearShapeSlots();
+        if (s.shapes.empty())
+            addShapeSlot(HalftoneShape::Square, QString(), true);
+        else
+            for (const auto& e : s.shapes)
+                addShapeSlot(e.shape, e.svgPath, true);
 
         m_gridType->blockSignals(true);
         m_gridType->setCurrentIndex(int(s.grid.type));
@@ -288,9 +322,137 @@ public:
 private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
-    NoWheelComboBox* m_shapeCombo   = nullptr;
-    QPushButton*     m_svgBtn       = nullptr;
-    QString          m_svgPath;
+    struct ShapeSlot {
+        QWidget*         widget   = nullptr;
+        NoWheelComboBox* combo    = nullptr;
+        QPushButton*     minusBtn = nullptr;
+        QPushButton*     svgBtn   = nullptr;
+        QString          svgPath;
+    };
+
+    void refreshMinusButtons()
+    {
+        for (int i = 0; i < m_shapeSlots.size(); ++i)
+            m_shapeSlots[i].minusBtn->setVisible(i > 0);   // first shape isn't removable
+    }
+
+    void clearShapeSlots()
+    {
+        for (auto& slot : m_shapeSlots) {
+            m_shapesLayout->removeWidget(slot.widget);
+            slot.widget->deleteLater();
+        }
+        m_shapeSlots.clear();
+    }
+
+    // Custom-SVG button: a live preview of the symbol once loaded (no name,
+    // which would truncate), or the upload prompt when empty.
+    void styleSvgButton(QPushButton* b, const QString& path)
+    {
+        if (path.isEmpty()) {
+            b->setIcon(QIcon(":/icons/upload.svg"));
+            b->setIconSize(QSize(Ui::px(16), Ui::px(16)));
+            b->setText("  Upload SVG");
+            b->setProperty("preview", false);
+        } else {
+            b->setIcon(shapePreviewIcon(path, Ui::px(26)));
+            b->setIconSize(QSize(Ui::px(26), Ui::px(26)));
+            b->setText(QString());
+            b->setProperty("preview", true);
+        }
+        b->style()->unpolish(b);
+        b->style()->polish(b);
+    }
+
+    void addShapeSlot(HalftoneShape shape, const QString& svgPath, bool silent)
+    {
+        if (m_shapeSlots.size() >= 4) return;
+        const int gutterComp = Ui::px(46);   // boxes stop here; symbol sits beyond
+
+        ShapeSlot slot;
+        slot.svgPath = svgPath;
+        slot.widget  = new QWidget;
+        auto* ov = new QVBoxLayout(slot.widget);
+        ov->setContentsMargins(0, 0, 0, 0);
+        ov->setSpacing(Ui::px(6));
+
+        // Combo (capped at the box gutter) + "−" in the symbol gutter.
+        auto* rowl = new QHBoxLayout;
+        rowl->setContentsMargins(0, 0, 0, 0);
+        rowl->setSpacing(0);
+        slot.combo = new NoWheelComboBox;
+        slot.combo->addItems({ "Triangle", "Circle", "Square", "Star", "Custom SVG" });
+        slot.combo->setCurrentIndex(int(shape));
+        rowl->addWidget(slot.combo, 1);
+
+        auto* gut = new QWidget;
+        gut->setFixedWidth(gutterComp);
+        auto* gl = new QHBoxLayout(gut);
+        gl->setContentsMargins(0, 0, 0, 0);
+        gl->setSpacing(0);
+        gl->addStretch(1);
+        slot.minusBtn = new QPushButton;
+        slot.minusBtn->setObjectName("iconBtn");
+        slot.minusBtn->setCursor(Qt::PointingHandCursor);
+        slot.minusBtn->setFixedSize(Ui::px(26), Ui::px(26));
+        slot.minusBtn->setIcon(QIcon(":/icons/minus.svg"));
+        slot.minusBtn->setIconSize(QSize(Ui::px(16), Ui::px(16)));
+        gl->addWidget(slot.minusBtn);
+        rowl->addWidget(gut);
+        ov->addLayout(rowl);
+
+        // SVG upload / preview row (also reserves the gutter so it lines up).
+        auto* sr = new QHBoxLayout;
+        sr->setContentsMargins(0, 0, gutterComp, 0);
+        slot.svgBtn = new QPushButton;
+        slot.svgBtn->setObjectName("uploadBtn");
+        slot.svgBtn->setFixedHeight(Ui::px(40));
+        styleSvgButton(slot.svgBtn, svgPath);
+        slot.svgBtn->setVisible(shape == HalftoneShape::CustomSVG);
+        sr->addWidget(slot.svgBtn);
+        ov->addLayout(sr);
+
+        m_shapeSlots.append(slot);
+        m_shapesLayout->addWidget(slot.widget);
+        refreshMinusButtons();
+
+        QWidget*         w      = slot.widget;
+        NoWheelComboBox* combo  = slot.combo;
+        QPushButton*     svgBtn = slot.svgBtn;
+        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, svgBtn](int idx) {
+            svgBtn->setVisible(idx == int(HalftoneShape::CustomSVG));
+            fire();
+        });
+        connect(slot.minusBtn, &QPushButton::clicked, this, [this, w]() { removeShapeSlot(w); });
+        connect(svgBtn, &QPushButton::clicked, this, [this, w, svgBtn]() {
+            const QString p = QFileDialog::getOpenFileName(this, "Load SVG", "", "SVG files (*.svg)");
+            if (p.isEmpty()) return;
+            for (auto& s : m_shapeSlots)
+                if (s.widget == w) { s.svgPath = p; break; }
+            styleSvgButton(svgBtn, p);
+            fire();
+        });
+
+        if (!silent) fire();
+    }
+
+    void removeShapeSlot(QWidget* w)
+    {
+        if (m_shapeSlots.size() <= 1) return;
+        for (int i = 0; i < m_shapeSlots.size(); ++i)
+            if (m_shapeSlots[i].widget == w) {
+                m_shapesLayout->removeWidget(w);
+                w->deleteLater();
+                m_shapeSlots.removeAt(i);
+                break;
+            }
+        refreshMinusButtons();
+        fire();
+    }
+
+    PanelSection*      m_shapeSection = nullptr;
+    QVBoxLayout*       m_shapesLayout = nullptr;
+    QVector<ShapeSlot> m_shapeSlots;
 
     NoWheelComboBox* m_gridType     = nullptr;
     SliderRow*       m_spacing      = nullptr;
@@ -705,8 +867,8 @@ ModePanel::ModePanel(QWidget* parent)
     {
         auto* tabRow = new QWidget;
         auto* tl = new QHBoxLayout(tabRow);
-        tl->setContentsMargins(Ui::px(40), Ui::px(16), Ui::px(40), Ui::px(12));
-        tl->setSpacing(Ui::px(6));
+        tl->setContentsMargins(Ui::px(24), Ui::px(16), Ui::px(12), Ui::px(12));
+        tl->setSpacing(Ui::px(4));
 
         auto makeTab = [&](const QString& text) {
             auto* b = new QPushButton(text);
@@ -771,17 +933,13 @@ ModePanel::ModePanel(QWidget* parent)
         TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
     m_tonal->onChanged = [this]() { if (!m_updating) emit tonalChanged(); };
     fill->body()->addWidget(m_tonal);
+    // The "−" removes the fill (collapsed = no fill); "+" restores it.
+    m_setFillOpen = [fill](bool open) { fill->setOpen(open); };
+    fill->onToggled = [this](bool open) {
+        m_fillEnabled = open;
+        if (!m_updating) emit tonalChanged();
+    };
     cl->addWidget(fill);
-
-    // ── Stroke (stub: off by default) ────────────────────────
-    auto* stroke = new PanelSection("Stroke", /*collapsible*/ true, false);
-    {
-        auto* sw = new FillSwatch(QColor(0x10, 0x10, 0x10), 1.0f, /*showOpacity*/ false);
-        stroke->body()->addWidget(sw);
-        auto* thick = new SliderRow("Thickness", 0, 20, 0);
-        stroke->body()->addWidget(thick);
-    }
-    cl->addWidget(stroke);
 
     // ── Background (shared document colour; "−" removes it) ───
     auto* bg = new PanelSection("Background", /*collapsible*/ true, true);
@@ -809,28 +967,27 @@ ModePanel::ModePanel(QWidget* parent)
     // ── Export ────────────────────────────────────────────────
     auto* exp = new PanelSection("Export", /*collapsible*/ true, true);
     {
-        auto* labelsRow = new QHBoxLayout;
-        labelsRow->setContentsMargins(0, 0, 0, 0);
-        labelsRow->setSpacing(Ui::px(10));
-        labelsRow->addWidget(makeParamLabel("Output name"), 2);
-        labelsRow->addWidget(makeParamLabel("Type of file"), 1);
-        exp->body()->addLayout(labelsRow);
-
-        auto* fieldsRow = new QHBoxLayout;
-        fieldsRow->setContentsMargins(0, 0, 0, 0);
-        fieldsRow->setSpacing(Ui::px(10));
-        m_outputName = new QLineEdit("output");
-        m_format     = new NoWheelComboBox;
-        m_format->addItems({ "SVG", "PNG", "JPG", "PNG Sequence", "MP4" });
-        fieldsRow->addWidget(m_outputName, 2);
-        fieldsRow->addWidget(m_format, 1);
-        exp->body()->addLayout(fieldsRow);
+        // Just the file type + the Export button. The output name comes from
+        // the document title (top-left), so no name field is needed here.
+        auto* row = new QHBoxLayout;
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(Ui::px(14));
+        m_format = new NoWheelComboBox;
+        m_format->addItems({ "PNG", "PNG Sequence", "JPG", "MP4" });
+        m_format->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_format->setMinimumWidth(Ui::px(60));   // allow the combo to shrink
+        row->addWidget(m_format, 1);
 
         auto* btnExport = new QPushButton("Export");
         btnExport->setObjectName("accentBtn");
-        btnExport->setFixedHeight(Ui::px(44));
+        // Override the qss min-height (raw 40px) so it matches the combo height.
+        btnExport->setStyleSheet(QString("QPushButton#accentBtn{min-height:%1px;}").arg(Ui::px(48)));
+        btnExport->setFixedHeight(Ui::px(48));
+        btnExport->setMinimumWidth(Ui::px(110));
+        btnExport->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         connect(btnExport, &QPushButton::clicked, this, &ModePanel::exportRequested);
-        exp->body()->addWidget(btnExport);
+        row->addWidget(btnExport, 1);
+        exp->body()->addLayout(row);
     }
     cl->addWidget(exp);
 
@@ -838,17 +995,24 @@ ModePanel::ModePanel(QWidget* parent)
     cl->addStretch();
 
     scroll->setWidget(content);
-    installAutoHideScrollbar(scroll);
+    installOverlayScrollbar(scroll);   // floats → dividers reach the panel edge
     outer->addWidget(scroll, 1);
 }
 
 // ── Fill / Background / source ───────────────────────────────
 
-TonalSettings ModePanel::tonalSettings() const { return m_tonal->settings(); }
+TonalSettings ModePanel::tonalSettings() const
+{
+    TonalSettings t = m_tonal->settings();
+    t.enabled = m_fillEnabled || t.mode == ToneMode::ImageColors;
+    return t;
+}
 
 void ModePanel::setTonalSettings(const TonalSettings& t)
 {
     m_updating = true;
+    m_fillEnabled = fillSectionOpenFor(t);
+    if (m_setFillOpen) m_setFillOpen(m_fillEnabled);
     m_tonal->setSettings(t);
     m_updating = false;
 }
@@ -874,7 +1038,6 @@ HalftoneSettings ModePanel::halftoneSettings() const { return m_halftonePage->se
 DitherSettings   ModePanel::ditherSettings()   const { return m_ditherPage->settings(); }
 AsciiSettings    ModePanel::asciiSettings()    const { return m_asciiPage->settings(); }
 
-QString ModePanel::outputFileName() const { return m_outputName->text(); }
 QString ModePanel::outputFormat()   const { return m_format->currentText(); }
 
 void ModePanel::setMode(RenderMode m)
@@ -897,11 +1060,18 @@ void ModePanel::setFromLayer(const Layer& layer)
     m_halftonePage->setBlend(layer.blend);
 
     // Fill (tonal) mirrors the active layer's mode tonal.
+    TonalSettings tonal;
+    bool haveTonal = true;
     switch (layer.kind) {
-        case LayerKind::Halftone: m_tonal->setSettings(layer.halftone.tonal); break;
-        case LayerKind::Dither:   m_tonal->setSettings(layer.dither.tonal);   break;
-        case LayerKind::Ascii:    m_tonal->setSettings(layer.ascii.tonal);    break;
-        case LayerKind::Original: break;
+        case LayerKind::Halftone: tonal = layer.halftone.tonal; break;
+        case LayerKind::Dither:   tonal = layer.dither.tonal;   break;
+        case LayerKind::Ascii:    tonal = layer.ascii.tonal;    break;
+        case LayerKind::Original: haveTonal = false; break;
+    }
+    if (haveTonal) {
+        m_fillEnabled = fillSectionOpenFor(tonal);
+        if (m_setFillOpen) m_setFillOpen(m_fillEnabled);
+        m_tonal->setSettings(tonal);
     }
 
     if (layer.kind != LayerKind::Original)

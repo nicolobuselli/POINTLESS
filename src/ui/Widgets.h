@@ -262,3 +262,7 @@ QPushButton* makeIconButton(const QString& iconRes);
 // then fades back out shortly after.
 class QAbstractScrollArea;
 void installAutoHideScrollbar(QAbstractScrollArea* area);
+
+// Like installAutoHideScrollbar, but the scrollbar floats over the content
+// (reserves no width), so content/dividers reach the panel's right edge.
+void installOverlayScrollbar(QAbstractScrollArea* area);

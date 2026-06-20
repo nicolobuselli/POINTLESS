@@ -172,33 +172,32 @@ SliderRow::SliderRow(const QString& label, int minVal, int maxVal, int defVal,
                      QWidget* parent)
     : QWidget(parent)
 {
-    auto* vl = new QVBoxLayout(this);
-    vl->setContentsMargins(0, 0, 0, 0);
-    vl->setSpacing(Ui::px(2));
+    // Title + slider stacked on the left; the value box on the right, centred
+    // vertically over the whole (title + slider) block.
+    auto* outer = new QHBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(Ui::px(12));
 
+    auto* leftCol = new QVBoxLayout;
+    leftCol->setContentsMargins(0, 0, 0, 0);
+    leftCol->setSpacing(Ui::px(2));
     if (!label.isEmpty()) {
         auto* lbl = makeParamLabel(label);
         lbl->setObjectName("sliderLabel");   // a touch smaller than section labels
-        vl->addWidget(lbl, 0, Qt::AlignTop);
+        leftCol->addWidget(lbl);
     }
-
-    auto* row = new QHBoxLayout;
-    row->setContentsMargins(0, 0, 0, 0);
-    row->setSpacing(Ui::px(12));
 
     m_slider = new NoWheelSlider(Qt::Horizontal);
     m_slider->setRange(minVal, maxVal);
     m_slider->setValue(defVal);
-    m_slider->setFixedHeight(Ui::px(40));   // shorter than the box
+    m_slider->setFixedHeight(Ui::px(30));
+    leftCol->addWidget(m_slider);
 
     m_box = new DragSpinBox(QString(), minVal, maxVal, defVal);
-    m_box->setFixedSize(Ui::px(58), Ui::px(48));
+    m_box->setFixedSize(Ui::px(58), Ui::px(46));
 
-    // Bottom-align: the value box and the slider share a bottom edge, with
-    // the title sitting at the top.
-    row->addWidget(m_slider, 1, Qt::AlignBottom);
-    row->addWidget(m_box, 0, Qt::AlignBottom);
-    vl->addLayout(row);
+    outer->addLayout(leftCol, 1);
+    outer->addWidget(m_box, 0, Qt::AlignVCenter);
 
     connect(m_slider, &QSlider::valueChanged, this, [this](int v) {
         if (m_updating) return;
@@ -235,7 +234,7 @@ void SliderRow::setValue(int v)
 // ============================================================
 
 namespace {
-    static constexpr int kLvHistH   = 92;   // rounded histogram box height
+    static constexpr int kLvHistH   = 60;   // rounded histogram box height (was 92)
     static constexpr int kLvStripH  = 16;   // handle strip below the box
     static constexpr int kLvTrackH  = kLvHistH + kLvStripH;   // interactive zone
     static constexpr int kLvRadius  = 10;   // histogram box corner radius
@@ -1126,4 +1125,92 @@ void installAutoHideScrollbar(QAbstractScrollArea* area)
     sb->installEventFilter(f);
     area->viewport()->installEventFilter(f);
     QObject::connect(sb, &QScrollBar::valueChanged, f, [f](int) { f->reveal(); });
+}
+
+// ── Overlay scrollbar ────────────────────────────────────────
+namespace {
+class OverlayScrollCtl : public QObject {
+public:
+    OverlayScrollCtl(QAbstractScrollArea* area, QScrollBar* over, QGraphicsOpacityEffect* eff)
+        : QObject(area), m_area(area), m_over(over), m_eff(eff)
+    {
+        m_real = area->verticalScrollBar();
+        m_anim = new QPropertyAnimation(eff, "opacity", this);
+        m_anim->setDuration(160);
+        m_timer = new QTimer(this);
+        m_timer->setSingleShot(true);
+        m_timer->setInterval(900);
+        connect(m_timer, &QTimer::timeout, this, [this] { fade(0.0); });
+
+        connect(m_real, &QScrollBar::rangeChanged, this, [this](int lo, int hi) { syncRange(lo, hi); });
+        connect(m_real, &QScrollBar::valueChanged, this, [this](int v) {
+            if (m_over->value() != v) m_over->setValue(v);
+            reveal();
+        });
+        connect(m_over, &QScrollBar::valueChanged, this, [this](int v) {
+            if (m_real->value() != v) m_real->setValue(v);
+        });
+        syncRange(m_real->minimum(), m_real->maximum());
+
+        area->installEventFilter(this);
+        if (area->viewport()) area->viewport()->installEventFilter(this);
+        reposition();
+    }
+    void reveal()
+    {
+        if (m_real->maximum() <= m_real->minimum()) return;
+        fade(1.0);
+        m_timer->start();
+    }
+protected:
+    bool eventFilter(QObject*, QEvent* e) override
+    {
+        if (e->type() == QEvent::Resize) reposition();
+        else if (e->type() == QEvent::Wheel) reveal();
+        return false;
+    }
+private:
+    void syncRange(int lo, int hi)
+    {
+        m_over->setRange(lo, hi);
+        m_over->setPageStep(m_real->pageStep());
+        m_over->setSingleStep(m_real->singleStep());
+        m_over->setVisible(hi > lo);
+    }
+    void reposition()
+    {
+        QWidget* vp = m_area->viewport();
+        if (!vp) return;
+        const QRect r = vp->geometry();
+        const int w = m_over->width();
+        m_over->setGeometry(r.right() - w + 1, r.top(), w, r.height());
+        m_over->raise();
+    }
+    void fade(double to)
+    {
+        m_anim->stop();
+        m_anim->setStartValue(m_eff->opacity());
+        m_anim->setEndValue(to);
+        m_anim->start();
+    }
+    QAbstractScrollArea*    m_area;
+    QScrollBar*             m_over;
+    QScrollBar*             m_real;
+    QGraphicsOpacityEffect* m_eff;
+    QPropertyAnimation*     m_anim;
+    QTimer*                 m_timer;
+};
+} // namespace
+
+void installOverlayScrollbar(QAbstractScrollArea* area)
+{
+    // The real scrollbar reserves no width; a floating one is drawn over the
+    // content so dividers/boxes can reach the panel's right edge.
+    area->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* over = new QScrollBar(Qt::Vertical, area);
+    over->setFixedWidth(Ui::px(10));
+    auto* eff = new QGraphicsOpacityEffect(over);
+    eff->setOpacity(0.0);
+    over->setGraphicsEffect(eff);
+    new OverlayScrollCtl(area, over, eff);
 }

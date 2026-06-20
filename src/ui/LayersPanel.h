@@ -41,6 +41,7 @@ public:
     void setLayers(const std::vector<Layer>& layers, int activeId);
     void setSourceImage(const QImage& source);
     void setBackground(const QColor& background, float opacity);
+    void requestAddLayer();   // external "+" trigger (embedded header lives in ControlsPanel)
 
 signals:
     void visibilityToggled(int layerId, bool visible);

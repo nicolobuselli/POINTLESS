@@ -21,6 +21,18 @@
 
 namespace {
 
+// The timeline always offers at least this many frames of working space, even
+// when the animation's end frame is earlier — so keyframes can be placed past
+// the end of the animation.
+constexpr int kMinTimelineFrames = 200;
+
+// Last frame the timeline displays / accepts keyframes at: the animation end,
+// or the minimum working span, whichever is larger.
+int dispEnd(const Animation& a)
+{
+    return std::max(a.frameEnd, a.frameStart + kMinTimelineFrames - 1);
+}
+
 // Scaled metrics (design px → on-screen px).
 int GUT()  { return Ui::px(150); }   // label column width
 int RUL()  { return Ui::px(30); }    // ruler strip height
@@ -121,6 +133,17 @@ public:
         }
     }
 
+    // Backspace/Delete from MainWindow: remove the selected keyframes.
+    // Returns true if there was a selection to delete.
+    bool deleteSelected()
+    {
+        if (m_sel.isEmpty()) return false;
+        deleteSelection();
+        update();
+        m_owner->emitEdited();
+        return true;
+    }
+
     void pasteAtPlayhead()
     {
         if (g_keyClip.isEmpty()) return;
@@ -164,8 +187,9 @@ protected:
         while (majorStep * ppf < Ui::px(48)) majorStep *= 2;   // keep labels readable
         const int minorStep = std::max(1, majorStep / 2);
         const int gridBottom = height();   // run lines all the way to the bottom
+        const int dEnd       = dispEnd(a);
 
-        for (int f = a.frameStart; f <= a.frameEnd; ++f) {
+        for (int f = a.frameStart; f <= dEnd; ++f) {
             const int rel = f - a.frameStart;
             const int x = frameToX(f);
             if (x < gut) continue;
@@ -184,7 +208,7 @@ protected:
         p.drawLine(0, rul, width(), rul);
 
         QFont rf = p.font(); rf.setPixelSize(Ui::px(16)); p.setFont(rf);
-        for (int f = a.frameStart; f <= a.frameEnd; ++f) {
+        for (int f = a.frameStart; f <= dEnd; ++f) {
             if ((f - a.frameStart) % majorStep != 0) continue;
             const int x = frameToX(f);
             if (x < gut) continue;
@@ -277,7 +301,7 @@ protected:
             for (int i = 0; i < m_sel.size(); ++i) {
                 const int ti = m_sel[i].first, ki = m_sel[i].second;
                 m_owner->m_anim.tracks[size_t(ti)].keys[size_t(ki)].frame =
-                    qBound(a.frameStart, m_dragOrigFrames[i] + delta, a.frameEnd);
+                    qBound(a.frameStart, m_dragOrigFrames[i] + delta, dispEnd(a));
             }
             update();
             m_owner->emitEdited();
@@ -410,7 +434,7 @@ private:
     double pxPerFrame() const
     {
         const Animation& a = m_owner->m_anim;
-        const int span = std::max(1, a.frameEnd - a.frameStart);
+        const int span = std::max(1, dispEnd(a) - a.frameStart);
         return double(std::max(1, width() - GUT() - PADR())) / span;
     }
     int frameToX(int f) const { return GUT() + int((f - m_owner->m_anim.frameStart) * pxPerFrame()); }
@@ -633,12 +657,13 @@ void TimelineWidget::setPlayingSilent(bool on)
 
 void TimelineWidget::copyKeys()  { if (m_canvas) m_canvas->copySelection(); }
 void TimelineWidget::pasteKeys() { if (m_canvas) m_canvas->pasteAtPlayhead(); }
+bool TimelineWidget::deleteSelectedKeys() { return m_canvas && m_canvas->deleteSelected(); }
 
 void TimelineWidget::syncControls()
 {
     const bool prev = m_updating;
     m_updating = true;
-    m_frameSpin->setRange(m_anim.frameStart, m_anim.frameEnd);
+    m_frameSpin->setRange(m_anim.frameStart, dispEnd(m_anim));
     m_frameSpin->setValue(m_anim.playhead);
     m_startSpin->setValue(m_anim.frameStart);
     m_endSpin->setValue(m_anim.frameEnd);
@@ -653,7 +678,7 @@ void TimelineWidget::emitEdited()
 
 void TimelineWidget::scrubTo(int frame)
 {
-    frame = qBound(m_anim.frameStart, frame, m_anim.frameEnd);
+    frame = qBound(m_anim.frameStart, frame, dispEnd(m_anim));
     m_anim.playhead = frame;
     if (m_frameSpin) {
         m_frameSpin->blockSignals(true);

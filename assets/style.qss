@@ -119,9 +119,9 @@ QPushButton#rectTab {
     color: #8E8E8E;
     border: none;
     border-radius: s(5)px;
-    padding: s(12)px s(26)px;
+    padding: s(12)px s(20)px;
     font-size: s(18)px;
-    font-weight: 500;
+    font-weight: 600;   /* constant weight → width doesn't jump when checked */
 }
 QPushButton#rectTab:hover {
     color: #C8C8C8;
@@ -129,7 +129,6 @@ QPushButton#rectTab:hover {
 QPushButton#rectTab:checked {
     background-color: #3F3F3F;
     color: #EEEEEE;
-    font-weight: 700;
 }
 
 /* ── Bottom bar (same colour as the side panels) ──────────────── */
@@ -264,6 +263,10 @@ QPushButton#uploadBtn:hover {
 QPushButton#uploadBtn:pressed {
     background-color: #2E2E2E;
 }
+/* When showing a custom-shape preview (icon only), centre it. */
+QPushButton#uploadBtn[preview="true"] {
+    text-align: center;
+}
 
 /* ── Export button ───────────────────────────────────────────── */
 QPushButton#exportBtn {
@@ -341,6 +344,13 @@ QPushButton#paletteItem:hover {
     background-color: #3B3B3B;
     border-color: #5D5D5D;
 }
+QPushButton#paletteItem[selected="true"] {
+    background-color: #568AD9;
+    border-color: #568AD9;
+}
+QPushButton#paletteItem[selected="true"]:hover {
+    background-color: #5E92E0;
+}
 
 #saveEditBox {
     background-color: #313131;
@@ -353,6 +363,13 @@ QPushButton#paletteItem:hover {
     background-color: #272727;
     border: 1px solid #5D5D5D;
     border-radius: 6px;
+}
+
+/* Save-palette popup */
+#savePopup {
+    background-color: #2A2A2A;
+    border: 1px solid #5D5D5D;
+    border-radius: s(12)px;
 }
 
 /* Inline delete confirmation inside the palette popup */
@@ -404,11 +421,14 @@ QPushButton#iconBtn:pressed {
     background-color: #2A2A2A;
 }
 
-/* Favourite (save palette) bookmark — sits in the right gutter */
+/* Favourite (save palette) bookmark — sits in the right gutter, same
+   width as the section +/− toggles (iconBtn) so the glyphs share a column. */
 QPushButton#favBtn {
     background-color: transparent;
     border: none;
     border-radius: s(6)px;
+    min-width:  24px;
+    max-width:  24px;
 }
 QPushButton#favBtn:hover   { background-color: #3B3B3B; }
 QPushButton#favBtn:pressed { background-color: #2A2A2A; }
@@ -434,8 +454,8 @@ QComboBox::drop-down {
 }
 QComboBox::down-arrow {
     image: url(:/icons/arrow.svg);
-    width: 12px;
-    height: 7px;
+    width: s(14)px;
+    height: s(8)px;
 }
 
 QComboBox QAbstractItemView {
@@ -563,9 +583,7 @@ QPushButton#layersToggleBtn:pressed {
     border: none;
     border-radius: s(10)px;
 }
-#layerRowOuter:hover #layerRow {
-    background-color: #2E2E2E;
-}
+/* Unselected rows stay fully transparent (no hover fill). */
 #layerRow[selected="true"] {
     background-color: #568AD9;
 }
@@ -624,6 +642,14 @@ QComboBox#blendCombo {
 QSplitter::handle {
     background-color: #3B3B3B;
     width: 1px;
+}
+
+/* Draggable Layers/Parameters divider in the left column. */
+#leftSplit::handle:vertical {
+    background-color: #3B3B3B;
+}
+#leftSplit::handle:vertical:hover {
+    background-color: #5D5D5D;
 }
 
 /* ── Status bar ──────────────────────────────────────────────── */

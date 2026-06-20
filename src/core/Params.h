@@ -129,10 +129,11 @@ inline bool operator==(const ToneEntry& a, const ToneEntry& b) {
 struct TonalSettings {
     ToneMode               mode = ToneMode::FixedTones;
     std::vector<ToneEntry> tones;   // UI order: light → dark
+    bool                   enabled = true;   // Fill "−" removes the fill (false → render uses image colours)
 };
 
 inline bool operator==(const TonalSettings& a, const TonalSettings& b) {
-    return a.mode == b.mode && a.tones == b.tones;
+    return a.mode == b.mode && a.tones == b.tones && a.enabled == b.enabled;
 }
 
 // Evenly spaced default tones, light → dark.

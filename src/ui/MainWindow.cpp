@@ -26,7 +26,6 @@
 #include <QShortcut>
 #include <QSplitter>
 #include <QStackedWidget>
-#include <QSvgGenerator>
 #include <QTemporaryDir>
 
 namespace {
@@ -132,8 +131,8 @@ MainWindow::MainWindow(QWidget* parent)
     mainSplit->setStretchFactor(0, 0);
     mainSplit->setStretchFactor(1, 1);
     mainSplit->setStretchFactor(2, 0);
-    // Side columns ≈ 497/2558 of the design width each (Ui scale handles DPI).
-    mainSplit->setSizes({ Ui::px(497), Ui::px(1564), Ui::px(497) });
+    // Start with the side columns at their minimum width (the user can widen).
+    mainSplit->setSizes({ Ui::px(420), Ui::px(1718), Ui::px(420) });
 
     hl->addWidget(mainSplit);
 
@@ -155,7 +154,7 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(m_left, &ControlsPanel::fileRenamed, this, [this](const QString& name) {
         if (m_current < 0) return;
-        m_images[m_current].name = name;
+        m_images[m_current].title = name;
     });
     connect(m_right, &ModePanel::paramsChanged,             this, &MainWindow::onParamsChanged);
     connect(m_right, &ModePanel::tonalChanged,              this, &MainWindow::onParamsChanged);
@@ -351,6 +350,11 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
     // Backspace / Delete removes the active layer (unless typing in a field).
     if ((event->key() == Qt::Key_Backspace || event->key() == Qt::Key_Delete)
         && !qobject_cast<QLineEdit*>(QApplication::focusWidget())) {
+        // Selected timeline keyframes take precedence over deleting the layer.
+        if (m_timeline && m_timeline->deleteSelectedKeys()) {
+            event->accept();
+            return;
+        }
         if (m_current >= 0) {
             const auto& st = m_images[m_current].state;
             const Layer* l = activeLayer();
@@ -1072,7 +1076,7 @@ void MainWindow::switchToImage(int index)
     m_playing = false;
     m_left->setSourceImage(m_images[index].source);
     m_right->setSourceImage(m_images[index].source);
-    m_left->setFileName(m_images[index].name);
+    m_left->setFileName(m_images[index].title);
     applyParams(m_images[index].state);
     m_filmstrip->setActive(index);
     m_layersPanel->setVisible(true);
@@ -1151,7 +1155,7 @@ void MainWindow::onExport()
     const SessionParams params = m_images[m_current].state;
 
     QString format = m_right->outputFormat().toLower();
-    QString name   = m_right->outputFileName();
+    QString name   = m_images[m_current].title.trimmed();   // from the title top-left
     if (name.isEmpty()) name = "output";
 
     if (format == "png sequence") {
@@ -1166,61 +1170,28 @@ void MainWindow::onExport()
     QString filter;
     if      (format == "png") filter = "PNG Image (*.png)";
     else if (format == "jpg") filter = "JPEG Image (*.jpg)";
-    else if (format == "svg") filter = "SVG File (*.svg)";
 
     QString savePath = QFileDialog::getSaveFileName(
         this, "Export", name + "." + format, filter);
     if (savePath.isEmpty()) return;
 
-    if (format == "svg") {
-        const QSize outSize = source.size();
+    QImage canvas = RenderWorker::renderDocument(source, params);
 
-        QSvgGenerator gen;
-        gen.setFileName(savePath);
-        gen.setSize(outSize);
-        gen.setViewBox(QRect(QPoint(0, 0), outSize));
-        gen.setTitle("ULTRA_Ditherer export");
+    if (format == "jpg") {
+        // JPEG has no alpha — flatten on white
+        QImage flat(canvas.size(), QImage::Format_RGB32);
+        flat.fill(Qt::white);
+        QPainter fp(&flat);
+        fp.drawImage(0, 0, canvas);
+        fp.end();
+        canvas = flat;
+    }
 
-        QPainter painter(&gen);
-        if (params.backgroundOpacity > 0.001f) {
-            QColor bg = params.background;
-            bg.setAlphaF(params.backgroundOpacity);
-            painter.fillRect(QRect(QPoint(0, 0), outSize), bg);
-        }
-        // Visible layers bottom→top, each from its own reference image.
-        // SVG cannot carry the raster blend modes, so layers are painted
-        // with normal compositing here.
-        for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
-            if (!it->visible) continue;
-            const QImage adjusted = ImageAdjuster::apply(source, it->adjustments);
-            painter.save();
-            if (adjusted.size() != outSize && !adjusted.isNull()) {
-                painter.scale(qreal(outSize.width())  / adjusted.width(),
-                              qreal(outSize.height()) / adjusted.height());
-            }
-            RenderWorker::renderLayerInto(painter, adjusted, *it);
-            painter.restore();
-        }
-        painter.end();
-    } else {
-        QImage canvas = RenderWorker::renderDocument(source, params);
-
-        if (format == "jpg") {
-            // JPEG has no alpha — flatten on white
-            QImage flat(canvas.size(), QImage::Format_RGB32);
-            flat.fill(Qt::white);
-            QPainter fp(&flat);
-            fp.drawImage(0, 0, canvas);
-            fp.end();
-            canvas = flat;
-        }
-
-        int quality = (format == "jpg") ? 95 : -1;
-        if (!canvas.save(savePath, format.toUpper().toUtf8().constData(), quality)) {
-            QMessageBox::critical(this, "Export Failed",
-                                  "Could not save file:\n" + savePath);
-            return;
-        }
+    int quality = (format == "jpg") ? 95 : -1;
+    if (!canvas.save(savePath, format.toUpper().toUtf8().constData(), quality)) {
+        QMessageBox::critical(this, "Export Failed",
+                              "Could not save file:\n" + savePath);
+        return;
     }
 
     m_preview->setStatus("Exported: " + savePath);

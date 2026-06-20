@@ -21,6 +21,8 @@
 #include <QScrollArea>
 #include <QStyle>
 #include <QLineEdit>
+#include <QMenu>
+#include <QContextMenuEvent>
 
 namespace {
 
@@ -106,6 +108,9 @@ public:
     std::function<void()>            onSelected;
     std::function<void(bool)>       onEyeToggled;
     std::function<void(const QString&)> onRenamed;
+    std::function<void()>            onDeleteRequested;
+
+    void setDeletable(bool d) { m_deletable = d; }
 
     LayerRow(int layerId, QWidget* parent = nullptr)
         : QFrame(parent), m_id(layerId)
@@ -228,6 +233,15 @@ protected:
         QFrame::mouseDoubleClickEvent(e);
     }
 
+    void contextMenuEvent(QContextMenuEvent* e) override
+    {
+        if (!m_deletable) return;
+        QMenu menu(this);
+        QAction* del = menu.addAction("Delete layer");
+        if (menu.exec(e->globalPos()) == del && onDeleteRequested)
+            onDeleteRequested();
+    }
+
 private:
     void beginNameEditing()
     {
@@ -265,6 +279,7 @@ private:
     int          m_id;
     bool         m_visible = true;
     bool         m_editingName = false;
+    bool         m_deletable = true;
     QFrame*      m_pill    = nullptr;
     QLabel*      m_thumb   = nullptr;
     QLabel*      m_name    = nullptr;
@@ -568,6 +583,8 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
     if (m_headerWidget) m_headerWidget->installEventFilter(this);
 }
 
+void LayersPanel::requestAddLayer() { emit addLayerRequested(); }
+
 void LayersPanel::setExpandedUi(bool expanded)
 {
     m_isExpanded = expanded;
@@ -653,9 +670,11 @@ void LayersPanel::rebuildRows()
         row->setSelected(layer.id == m_activeId);
 
         const int id = layer.id;
+        row->setDeletable(layer.kind != LayerKind::Original);
         row->onSelected   = [this, id]()               { emit layerSelected(id); };
         row->onEyeToggled = [this, id](bool on)        { emit visibilityToggled(id, on); };
         row->onRenamed    = [this, id](const QString& name) { emit layerRenamed(id, name); };
+        row->onDeleteRequested = [this, id]()          { emit deleteRequested(id); };
 
         m_rowsArea->rowsLayout()->addWidget(row);
         m_rows.append(row);

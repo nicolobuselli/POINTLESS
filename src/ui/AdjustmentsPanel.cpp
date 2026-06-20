@@ -37,7 +37,7 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     auto* vlay = new QVBoxLayout(content);
     // Left edge aligns with the section titles (40px); the right keeps a 70px
     // gutter free for the +/−/favourite icon column (design spec).
-    vlay->setContentsMargins(Ui::px(40), Ui::px(4), Ui::px(70), Ui::px(12));
+    vlay->setContentsMargins(Ui::px(40), Ui::px(18), Ui::px(70), Ui::px(12));
     vlay->setSpacing(Ui::px(10));
 
     auto addRow = [&](SliderRow*& target, const QString& label,

@@ -41,8 +41,19 @@ float symbolSupersampleFactor(const Layer& layer, const QSize& size)
 // ---------------------------------------------------------------------------
 
 void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
-                                   const Layer& layer)
+                                   const Layer& layerIn)
 {
+    // A removed fill (Fill section "−") paints no ink at all: the shapes have
+    // no fill, so the layer contributes nothing (stroke, when added, would
+    // still paint). The stored palette is left intact for when it's restored.
+    const Layer& layer = layerIn;
+    switch (layer.kind) {
+        case LayerKind::Halftone: if (!layer.halftone.tonal.enabled) return; break;
+        case LayerKind::Dither:   if (!layer.dither.tonal.enabled)   return; break;
+        case LayerKind::Ascii:    if (!layer.ascii.tonal.enabled)    return; break;
+        case LayerKind::Original: break;
+    }
+
     switch (layer.kind) {
         case LayerKind::Original: {
             painter.drawImage(0, 0, adjusted);

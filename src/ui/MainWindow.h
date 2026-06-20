@@ -67,7 +67,8 @@ private:
 
     struct UndoState { SessionParams params; Animation anim; };
     struct SessionImage {
-        QString             name;
+        QString             name;          // file/identifier (filmstrip)
+        QString             title;         // user-editable title shown top-left
         QImage              source;       // document base (first media's image)
         QVector<QImage>     frames;        // legacy single-clip frames (base)
         QHash<int, MediaClip> media;       // library: layers reference these by mediaId

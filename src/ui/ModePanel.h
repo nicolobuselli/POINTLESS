@@ -18,7 +18,7 @@ class FillSwatch;
  *
  * Rectangle tab row (Halftone / Dither / Ascii) on top, then the active
  * mode's sections (Shape, Settings) followed by the shared Fill (palette),
- * Stroke, Background and Export sections.
+ * Background and Export sections.
  *
  * The pages edit the active layer's settings; Fill/Background edit the
  * shared tonal + document background. Clicking a tab emits modeSelected().
@@ -46,7 +46,6 @@ public:
     float  backgroundOpacity() const;
     void   setBackground(QColor c, float opacity);            // silent
 
-    QString outputFileName() const;
     QString outputFormat()   const;
 
     void setFromLayer(const Layer& layer);   // silent
@@ -70,12 +69,13 @@ private:
     DitherPage*   m_ditherPage   = nullptr;
     AsciiPage*    m_asciiPage    = nullptr;
 
-    TonalControlsWidget* m_tonal     = nullptr;   // Fill
+    TonalControlsWidget* m_tonal       = nullptr; // Fill
+    bool                 m_fillEnabled = true;    // Fill section open = fill present
+    std::function<void(bool)> m_setFillOpen;      // collapse/expand the fill section
     FillSwatch*          m_bgSwatch  = nullptr;   // Background
     bool                 m_bgEnabled = true;      // Background section open = present
     std::function<void(bool)> m_setBgOpen;        // collapse/expand the bg section
 
-    QLineEdit*       m_outputName = nullptr;
     NoWheelComboBox* m_format     = nullptr;
 
     RenderMode m_mode     = RenderMode::Halftone;

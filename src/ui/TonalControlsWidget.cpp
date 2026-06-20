@@ -11,6 +11,9 @@
 #include <QPaintEvent>
 #include <QHideEvent>
 #include <QDateTime>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QStyle>
 
 namespace {
 constexpr int kMaxTones = 8;
@@ -86,13 +89,28 @@ public:
         m_layout->setSpacing(4);
     }
 
+    void setCurrentName(const QString& n) { m_currentName = n; }
+
     void showBelow(QWidget* anchor)
     {
         m_pendingDelete = -1;
         reload();
         build();
-        setFixedWidth(anchor->width());
-        move(anchor->mapToGlobal(QPoint(0, anchor->height() + 4)));
+        // Anchored under the palette box (so it stays within the right panel)
+        // but wider than the box so names are readable; kept fully on-screen,
+        // flipping above the box if it would overflow the bottom.
+        setFixedWidth(Ui::px(330));
+        adjustSize();
+        QScreen* scr = anchor->screen() ? anchor->screen() : QGuiApplication::primaryScreen();
+        const QRect a = scr->availableGeometry();
+        const QPoint below = anchor->mapToGlobal(QPoint(0, anchor->height() + Ui::px(4)));
+        int x = qBound(a.left() + 6, below.x(), a.right() - width() - 6);
+        int y = below.y();
+        if (y + height() > a.bottom() - 6) {
+            const int above = anchor->mapToGlobal(QPoint(0, 0)).y() - height() - Ui::px(4);
+            y = (above >= a.top() + 6) ? above : qMax(a.top() + 6, a.bottom() - 6 - height());
+        }
+        move(x, y);
         show();
     }
 
@@ -138,6 +156,25 @@ private:
             m_layout->addWidget(row);
         }
 
+        // "Custom" indicator — shown highlighted when the current palette
+        // matches none of the saved ones.
+        if (m_currentName == "Custom") {
+            auto* row = new QPushButton;
+            row->setObjectName("paletteItem");
+            row->setProperty("selected", true);
+            row->setCursor(Qt::PointingHandCursor);
+            row->setFixedHeight(Ui::px(36));
+            auto* hl = new QHBoxLayout(row);
+            hl->setContentsMargins(Ui::px(12), 0, Ui::px(10), 0);
+            auto* name = new QLabel("Custom");
+            name->setAttribute(Qt::WA_TransparentForMouseEvents);
+            name->setStyleSheet(QString("background:transparent; color:#FFFFFF; font-size:%1px; font-weight:500;").arg(Ui::px(15)));
+            hl->addWidget(name);
+            hl->addStretch(1);
+            connect(row, &QPushButton::clicked, this, [this]() { hide(); });
+            m_layout->addWidget(row);
+        }
+
         if (m_library.empty()) {
             auto* empty = new QLabel("No saved palettes");
             empty->setStyleSheet("color:#808080; background:transparent;"
@@ -154,21 +191,24 @@ private:
     QWidget* buildItemRow(int i)
     {
         const PalettePreset& pal = m_library[i];
+        const bool selected = (pal.name == m_currentName);
 
         auto* row = new QPushButton;
         row->setObjectName("paletteItem");
+        row->setProperty("selected", selected);
         row->setCursor(Qt::PointingHandCursor);
-        row->setFixedHeight(34);
+        row->setFixedHeight(Ui::px(36));
 
         auto* hl = new QHBoxLayout(row);
-        hl->setContentsMargins(12, 0, 6, 0);
-        hl->setSpacing(8);
+        hl->setContentsMargins(Ui::px(12), 0, Ui::px(8), 0);
+        hl->setSpacing(Ui::px(8));
 
         auto* name = new QLabel(pal.name);
         name->setAttribute(Qt::WA_TransparentForMouseEvents);
-        name->setStyleSheet("background:transparent; color:#E3E3E3; font-size:9pt;");
+        name->setStyleSheet(QString("background:transparent; color:%1; font-size:%2px; font-weight:500;")
+                            .arg(selected ? "#FFFFFF" : "#E3E3E3").arg(Ui::px(15)));
 
-        auto* strip = new SwatchStrip(16);
+        auto* strip = new SwatchStrip(Ui::px(16));
         strip->setColors(pal.colors);
 
         auto* trash = makeIconButton(":/icons/trash.svg");
@@ -238,6 +278,99 @@ private:
     QVBoxLayout*               m_layout = nullptr;
     std::vector<PalettePreset> m_library;
     int                        m_pendingDelete = -1;
+    QString                    m_currentName;   // highlight the active palette
+};
+
+// ============================================================
+//  SavePalettePopup — floating "Save palette" panel
+// ============================================================
+
+class SavePalettePopup : public QFrame
+{
+public:
+    std::function<void(const QString&)> onSave;   // name
+
+    explicit SavePalettePopup(QWidget* parent = nullptr)
+        : QFrame(parent, Qt::Popup)
+    {
+        setObjectName("savePopup");
+        setAttribute(Qt::WA_StyledBackground, true);
+        setFixedWidth(Ui::px(360));
+
+        auto* v = new QVBoxLayout(this);
+        v->setContentsMargins(Ui::px(20), Ui::px(16), Ui::px(20), Ui::px(18));
+        v->setSpacing(Ui::px(14));
+
+        auto* tr = new QHBoxLayout;
+        tr->setContentsMargins(0, 0, 0, 0);
+        auto* title = new QLabel("Save palette");
+        title->setStyleSheet(QString("background:transparent; color:#EEEEEE; font-size:%1px; font-weight:700;").arg(Ui::px(20)));
+        auto* x = new QPushButton(QString::fromUtf8("\xC3\x97"));   // ×
+        x->setObjectName("closeMini");
+        x->setCursor(Qt::PointingHandCursor);
+        x->setFixedSize(Ui::px(32), Ui::px(32));
+        x->setStyleSheet(QString("QPushButton#closeMini{background:transparent;border:none;color:#B2B2B2;font-size:%1px;font-weight:600;}"
+                                 "QPushButton#closeMini:hover{color:#FFFFFF;}").arg(Ui::px(28)));
+        tr->addWidget(title, 1);
+        tr->addWidget(x);
+        v->addLayout(tr);
+
+        m_strip = new SwatchStrip(Ui::px(24));
+        v->addWidget(m_strip);
+
+        m_name = new QLineEdit;
+        m_name->setPlaceholderText("Name…");
+        v->addWidget(m_name);
+
+        auto* br = new QHBoxLayout;
+        br->setContentsMargins(0, 0, 0, 0);
+        br->addStretch(1);
+        auto* save = new QPushButton("Save");
+        save->setObjectName("accentBtn");
+        save->setFixedHeight(Ui::px(36));
+        save->setMinimumWidth(Ui::px(92));
+        save->setStyleSheet(QString("QPushButton#accentBtn{min-height:%1px;padding:0 %2px;font-size:%3px;}")
+                                .arg(Ui::px(36)).arg(Ui::px(16)).arg(Ui::px(15)));
+        save->setCursor(Qt::PointingHandCursor);
+        br->addWidget(save);
+        v->addLayout(br);
+
+        connect(x,    &QPushButton::clicked, this, [this]() { hide(); });
+        connect(save, &QPushButton::clicked, this, [this]() { commit(); });
+        connect(m_name, &QLineEdit::returnPressed, this, [this]() { commit(); });
+    }
+
+    void showFor(QWidget* anchor, const std::vector<QColor>& colors)
+    {
+        m_strip->setColors(colors);
+        m_name->clear();
+        adjustSize();
+        QScreen* scr = anchor->screen() ? anchor->screen() : QGuiApplication::primaryScreen();
+        const QRect a = scr->availableGeometry();
+        // Centre the popup over the panel that holds the controls (not off to
+        // the side): horizontally on the panel centre, vertically by the anchor.
+        QWidget* panel = parentWidget() ? parentWidget() : anchor;
+        const QRect pg(panel->mapToGlobal(QPoint(0, 0)), panel->size());
+        int x = pg.center().x() - width() / 2;
+        int y = anchor->mapToGlobal(QPoint(0, anchor->height() + Ui::px(8))).y();
+        x = qBound(a.left() + 6, x, a.right() - width() - 6);
+        if (y + height() > a.bottom() - 6)
+            y = qMax(a.top() + 6, a.bottom() - 6 - height());
+        move(x, y);
+        show();
+        m_name->setFocus();
+    }
+
+private:
+    void commit()
+    {
+        const QString n = m_name->text().trimmed();
+        if (n.isEmpty()) return;
+        if (onSave) onSave(n);
+        hide();
+    }
+    SwatchStrip* m_strip = nullptr;
+    QLineEdit*   m_name  = nullptr;
 };
 
 // ============================================================
@@ -260,7 +393,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
     // The body extends to the +/− gutter (24px). The favourite sits in that
     // gutter; every other control stops kGutterComp earlier (the 70px box
     // gutter), so all box right-edges line up exactly.
-    const int kFavW       = Ui::px(26);
+    const int kFavW       = 24;           // match iconBtn (toggles) width
     const int kGutterComp = Ui::px(46);   // 70 − 24
 
     // ── Palette selector + colour count + favourite(save) ───────
@@ -269,7 +402,8 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
         auto* pl = new QVBoxLayout(m_paletteSection);
         pl->setContentsMargins(0, 0, 0, 0);
         pl->setSpacing(Ui::px(6));
-        pl->addWidget(makeParamLabel("Palette"));
+        m_paletteLabel = makeParamLabel("Palette");
+        pl->addWidget(m_paletteLabel);
 
         auto* row = new QHBoxLayout;
         row->setContentsMargins(0, 0, 0, 0);
@@ -281,17 +415,18 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
         m_paletteHeader->setFixedHeight(Ui::px(48));
         {
             auto* hl = new QHBoxLayout(m_paletteHeader);
-            hl->setContentsMargins(Ui::px(12), 0, Ui::px(10), 0);
+            hl->setContentsMargins(Ui::px(14), 0, Ui::px(10), 0);
             hl->setSpacing(Ui::px(8));
-            m_paletteName = new QLabel("Custom");
-            m_paletteName->setAttribute(Qt::WA_TransparentForMouseEvents);
-            m_paletteName->setStyleSheet(QString("background:transparent; color:#E3E3E3; font-size:%1px; font-weight:500;").arg(Ui::px(17)));
-            m_palettePreview = new SwatchStrip(Ui::px(18));
+            // Closed header shows the colours only (no name); the active palette
+            // name lives in the dropdown highlight instead.
+            m_paletteName = new QLabel("Custom", this);   // text storage only
+            m_paletteName->hide();
+            m_palettePreview = new SwatchStrip(Ui::px(20));
+            m_palettePreview->setAttribute(Qt::WA_TransparentForMouseEvents);
             m_paletteChevron = new ChevronButton(ChevronButton::Down);
             m_paletteChevron->setAttribute(Qt::WA_TransparentForMouseEvents);
-            hl->addWidget(m_paletteName);
-            hl->addStretch(1);
             hl->addWidget(m_palettePreview);
+            hl->addStretch(1);
             hl->addWidget(m_paletteChevron);
         }
         connect(m_paletteHeader, &QPushButton::clicked, this, [this]() { openPalettePopup(); });
@@ -305,23 +440,20 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
         m_modeCombo->setFixedWidth(Ui::px(150));
         row->addWidget(m_modeCombo);
 
-        // Gap so the count box stops at the 70px box-gutter while the
-        // favourite sits in the +/− toggle column. kFavNudge shifts only the
-        // favourite a touch left to line up with the section toggles (the box
-        // edges stay put: spacer + fav + trailing = kGutterComp).
-        const int kFavNudge = Ui::px(6);
-        row->addSpacing(kGutterComp - kFavW - kFavNudge);
+        // Count box stops at the 70px box-gutter; the favourite sits in the
+        // symbol gutter, right-aligned with the section toggles (spacer + fav
+        // = kGutterComp).
+        row->addSpacing(kGutterComp - kFavW);
 
-        auto* fav = new QPushButton;
-        fav->setObjectName("favBtn");
-        fav->setCursor(Qt::PointingHandCursor);
-        fav->setFixedSize(kFavW, Ui::px(48));
-        fav->setIcon(QIcon(":/icons/favorite.svg"));
-        fav->setIconSize(QSize(Ui::px(17), Ui::px(22)));
-        fav->setToolTip("Save palette");
-        connect(fav, &QPushButton::clicked, this, [this]() { beginSavePalette(); });
-        row->addWidget(fav);
-        row->addSpacing(kFavNudge);
+        m_favBtn = new QPushButton;
+        m_favBtn->setObjectName("favBtn");
+        m_favBtn->setCursor(Qt::PointingHandCursor);
+        m_favBtn->setFixedSize(kFavW, Ui::px(48));
+        m_favBtn->setIcon(QIcon(":/icons/favorite.svg"));
+        m_favBtn->setIconSize(QSize(Ui::px(17), Ui::px(22)));
+        m_favBtn->setToolTip("Save palette");
+        connect(m_favBtn, &QPushButton::clicked, this, [this]() { beginSavePalette(); });
+        row->addWidget(m_favBtn);
 
         pl->addLayout(row);
     }
@@ -360,38 +492,14 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
     m_rowsLayout->setSpacing(Ui::px(8));
     vl->addWidget(m_rowsContainer);
 
-    // ── Inline save-name editor (shown by the favourite button) ──
-    m_saveSection = new QWidget;
-    {
-        auto* sl = new QVBoxLayout(m_saveSection);
-        sl->setContentsMargins(0, 0, kGutterComp, 0);
-        sl->setSpacing(0);
-
-        m_saveEditRow = new QWidget;
-        m_saveEditRow->setObjectName("saveEditBox");
-        {
-            auto* el = new QVBoxLayout(m_saveEditRow);
-            el->setContentsMargins(Ui::px(10), Ui::px(10), Ui::px(10), Ui::px(10));
-            el->setSpacing(Ui::px(8));
-            m_saveNameEdit = new QLineEdit;
-            m_saveNameEdit->setPlaceholderText("Save as…");
-            el->addWidget(m_saveNameEdit);
-            auto* btnRow = new QHBoxLayout;
-            btnRow->setContentsMargins(0, 0, 0, 0);
-            btnRow->addStretch(1);
-            auto* confirm = new QPushButton("Confirm");
-            confirm->setObjectName("accentBtn");
-            confirm->setFixedHeight(Ui::px(36));
-            confirm->setCursor(Qt::PointingHandCursor);
-            connect(confirm, &QPushButton::clicked, this, [this]() { commitSavePalette(); });
-            connect(m_saveNameEdit, &QLineEdit::returnPressed, this, [this]() { commitSavePalette(); });
-            btnRow->addWidget(confirm);
-            el->addLayout(btnRow);
-        }
-        m_saveEditRow->setVisible(false);
-        sl->addWidget(m_saveEditRow);
-    }
-    vl->addWidget(m_saveSection);
+    // ── Save palette popup (opened by the favourite button) ──────
+    m_savePopup = new SavePalettePopup(this);
+    m_savePopup->onSave = [this](const QString& name) {
+        PaletteStore::save(name, currentColors());
+        reloadLibrary();
+        m_paletteName->setText(name);
+        refreshPreview();
+    };
 
     // ── Signals ─────────────────────────────────────────────────
     connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -470,10 +578,27 @@ void TonalControlsWidget::rebuildRows()
     }
 
     const bool palette     = (m_settings.mode == ToneMode::Palette);
+    const bool imageColors = (m_settings.mode == ToneMode::ImageColors);
     const bool tonesActive = (m_settings.mode == ToneMode::FixedTones) || palette;
-    m_paletteSection->setVisible(tonesActive);
+
+    // The colour-count dropdown stays visible in every mode (it's the only way
+    // back from Image colors). The palette box / caption / save icon are about
+    // *choosing* a palette, which is meaningless in Image colors — hide them
+    // there and let the dropdown span the row.
+    m_paletteSection->setVisible(true);
+    if (m_paletteLabel)  m_paletteLabel->setVisible(!imageColors);
+    if (m_paletteHeader) m_paletteHeader->setVisible(!imageColors);
+    if (m_favBtn)        m_favBtn->setVisible(!imageColors);
+    if (imageColors) {
+        m_modeCombo->setMinimumWidth(Ui::px(150));
+        m_modeCombo->setMaximumWidth(QWIDGETSIZE_MAX);
+        m_modeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    } else {
+        m_modeCombo->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        m_modeCombo->setFixedWidth(Ui::px(150));
+    }
     m_rowsContainer->setVisible(tonesActive);
-    m_saveSection->setVisible(tonesActive);
+    if (m_saveSection) m_saveSection->setVisible(tonesActive);
     if (m_generateBtn) m_generateBtn->setVisible(tonesActive);
     if (m_extraRow)    m_extraRow->setVisible(tonesActive);
     cancelSavePalette();
@@ -573,6 +698,7 @@ void TonalControlsWidget::openPalettePopup()
     // landing on the header and immediately reopening it.
     if (QDateTime::currentMSecsSinceEpoch() - m_lastPopupClose < 200) return;
     m_paletteChevron->setDirection(ChevronButton::Up);
+    m_palettePopup->setCurrentName(matchLibraryName());
     m_palettePopup->showBelow(m_paletteHeader);
 }
 
@@ -632,27 +758,17 @@ QString TonalControlsWidget::matchLibraryName() const
 
 void TonalControlsWidget::beginSavePalette()
 {
-    if (m_saveBtn) m_saveBtn->setVisible(false);
-    m_saveEditRow->setVisible(true);
-    m_saveNameEdit->clear();
-    m_saveNameEdit->setFocus();
+    if (m_savePopup) m_savePopup->showFor(m_paletteHeader, currentColors());
 }
 
 void TonalControlsWidget::commitSavePalette()
 {
-    const QString name = m_saveNameEdit->text().trimmed();
-    if (name.isEmpty()) { cancelSavePalette(); return; }
-
-    PaletteStore::save(name, currentColors());
-    reloadLibrary();
-    m_paletteName->setText(name);
-    cancelSavePalette();
+    // Saving is handled by the popup's onSave callback.
 }
 
 void TonalControlsWidget::cancelSavePalette()
 {
-    if (m_saveEditRow) m_saveEditRow->setVisible(false);
-    if (m_saveBtn)     m_saveBtn->setVisible(true);
+    if (m_savePopup) m_savePopup->hide();
 }
 
 void TonalControlsWidget::generateRandom()

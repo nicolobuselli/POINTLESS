@@ -15,6 +15,7 @@ class QPushButton;
 class SwatchStrip;
 class ChevronButton;
 class PalettePopup;
+class SavePalettePopup;
 
 /**
  * TonalControlsWidget
@@ -77,7 +78,9 @@ private:
 
     // Palette selector (header + floating popup)
     QWidget*       m_paletteSection = nullptr;
+    QLabel*        m_paletteLabel   = nullptr;   // "Palette" caption
     QPushButton*   m_paletteHeader  = nullptr;
+    QPushButton*   m_favBtn         = nullptr;   // save-palette (favourite)
     QLabel*        m_paletteName    = nullptr;
     SwatchStrip*   m_palettePreview = nullptr;
     ChevronButton* m_paletteChevron = nullptr;
@@ -103,6 +106,7 @@ private:
     QPushButton* m_saveBtn      = nullptr;
     QWidget*     m_saveEditRow  = nullptr;
     QLineEdit*   m_saveNameEdit = nullptr;
+    SavePalettePopup* m_savePopup = nullptr;
 
     std::vector<PalettePreset> m_library;
 
