@@ -36,8 +36,14 @@ public:
     void requestRender(const QImage& source, const SessionParams& params,
                        bool fullPass = true, const QHash<int, QImage>& layerSrc = {});
 
-    static constexpr int FAST_MAX_PX   = 600;   // max dimension for preview
-    static constexpr int FULL_DELAY_MS = 350;   // ms idle before full render
+    // Live drag preview resolution, set by the UI to the preview widget's
+    // on-screen pixel size — so the fast pass already looks like the final
+    // (which is downscaled to the same size), making the swap near-invisible.
+    void setInteractivePreviewPx(int px) { m_interactivePx = qBound(256, px, 2000); }
+
+    static constexpr int FAST_MAX_PX        = 600;   // preview res for the playback cache
+    static constexpr int INTERACTIVE_MAX_PX = 900;   // default live drag preview cap
+    static constexpr int FULL_DELAY_MS      = 120;   // ms idle before full render
 
     // Shared pipeline ------------------------------------------------------
     // Full raster pipeline: background + visible layers (each with its own
@@ -74,6 +80,8 @@ private:
     QImage            m_sourceImage;
     SessionParams     m_latestParams;
     QHash<int,QImage> m_layerSrc;    // per-layer media for the current frame
+
+    int m_interactivePx = INTERACTIVE_MAX_PX;
 
     QFutureWatcher<QImage> m_fastWatcher;
     QFutureWatcher<QImage> m_fullWatcher;

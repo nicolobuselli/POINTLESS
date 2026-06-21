@@ -623,15 +623,22 @@ void TonalControlsWidget::rebuildRows()
         hl->setSpacing(Ui::px(10));
 
         auto* swatch = new FillSwatch(m_settings.tones[i].color, m_settings.tones[i].opacity, /*showOpacity*/ true);
-        swatch->setFixedWidth(Ui::px(185));
 
         auto* slider = new NoWheelSlider(Qt::Horizontal);
         slider->setRange(0, 255);
         slider->setValue(m_settings.tones[i].level);
-        slider->setVisible(!palette);   // level anchors are irrelevant for palette match
+        slider->setFixedHeight(Ui::px(30));   // match the other sliders
+        slider->setVisible(n > 1);            // per-colour threshold only when multi-colour
 
-        hl->addWidget(swatch);
-        hl->addWidget(slider, 1);
+        if (n > 1) {
+            swatch->setFixedWidth(Ui::px(185));
+            hl->addWidget(swatch);
+            hl->addWidget(slider, 1);
+        } else {
+            // Single colour: full-width swatch, like the Background fill box.
+            hl->addWidget(swatch, 1);
+            hl->addWidget(slider);   // hidden, takes no space
+        }
         rvl->addLayout(hl);
 
         m_rowsLayout->addWidget(rowWidget);

@@ -59,13 +59,6 @@ BBox gridBounds(const QTransform& inv, int imgW, int imgH)
     return b;
 }
 
-inline float dirAngle(const QTransform& t, double gx, double gy, double dx, double dy)
-{
-    const QPointF a = t.map(QPointF(gx, gy));
-    const QPointF b = t.map(QPointF(gx + dx, gy + dy));
-    return float(std::atan2(b.y() - a.y(), b.x() - a.x()));
-}
-
 // ── Dot layouts (Square / Hexagonal) — culled to the image + margin ────────
 
 void genSquare(const GridSettings& g, const QTransform& t, const BBox& b,
@@ -115,7 +108,10 @@ void genRadial(const GridSettings& g, const QTransform& t, const BBox& b,
                int imgW, int imgH, std::vector<GridSample>& out)
 {
     const double sp     = std::max(2.0f, g.spacing);
-    const double ps     = std::max(2.0f, g.pointSpacing);
+    // ponytail: along-ring spacing tracks `spacing` so the lattice is uniform and
+    // dots stay separate. pointSpacing isn't exposed in the UI; expose it and use
+    // it here if independent ring sampling is ever wanted.
+    const double ps     = sp;
     const double margin = sp;
     const double cx = imgW * 0.5, cy = imgH * 0.5;   // centre is invariant under t
 
@@ -141,52 +137,77 @@ void genRadial(const GridSettings& g, const QTransform& t, const BBox& b,
     }
 }
 
-// ── Stroke layouts (Line / Circles) — kept whole; renderer clips ───────────
-
-void genLine(const GridSettings& g, const QTransform& t, const BBox& b,
-             std::vector<GridSample>& out)
+// Brick: square rows, full vertical step, alternate rows offset by half a cell.
+void genBrick(const GridSettings& g, const QTransform& t, const BBox& b,
+              int imgW, int imgH, std::vector<GridSample>& out)
 {
-    const double sp = std::max(2.0f, g.spacing);
-    const double ps = std::max(2.0f, g.pointSpacing);
-    const float  ang = dirAngle(t, 0.0, 0.0, 1.0, 0.0);   // constant line direction
-
+    const double sp     = std::max(2.0f, g.spacing);
+    const double margin = sp;
     const int j0 = int(std::floor(b.y0 / sp)) - 1, j1 = int(std::ceil(b.y1 / sp)) + 1;
-    const int k0 = int(std::floor(b.x0 / ps)) - 1, k1 = int(std::ceil(b.x1 / ps)) + 1;
 
     for (int j = j0; j <= j1; ++j) {
-        const double gy = j * sp;
-        for (int k = k0; k <= k1; ++k) {
-            const double gx = k * ps;
+        const double gy   = (j + 0.5) * sp;
+        const double xoff = ((j % 2 + 2) % 2) ? sp * 0.5 : 0.0;
+        const int i0 = int(std::floor((b.x0 - xoff) / sp)) - 1;
+        const int i1 = int(std::ceil ((b.x1 - xoff) / sp)) + 1;
+        for (int i = i0; i <= i1; ++i) {
+            const double gx = i * sp + xoff + sp * 0.5;
             const QPointF p = t.map(QPointF(gx, gy));
-            out.push_back({ float(p.x()), float(p.y()), ang, j });
+            if (p.x() < -margin || p.x() > imgW + margin ||
+                p.y() < -margin || p.y() > imgH + margin) continue;
+            out.push_back({ float(p.x()), float(p.y()), 0.0f, j });
         }
     }
 }
 
-void genCircles(const GridSettings& g, const QTransform& t, const BBox& b,
-                int imgW, int imgH, std::vector<GridSample>& out)
+// Wave: square lattice whose rows are displaced vertically by a sine of x —
+// amplitude and wavelength derive from the spacing (no extra controls yet).
+void genWave(const GridSettings& g, const QTransform& t, const BBox& b,
+             int imgW, int imgH, std::vector<GridSample>& out)
 {
-    const double sp = std::max(2.0f, g.spacing);
-    const double ps = std::max(2.0f, g.pointSpacing);
+    const double sp     = std::max(2.0f, g.spacing);
+    const double amp    = sp * 0.9;                 // vertical sway
+    const double k      = 2.0 * M_PI / (sp * 8.0);  // wavelength = 8 cells
+    const double margin = sp + amp;
+    const int i0 = int(std::floor(b.x0 / sp)) - 1,         i1 = int(std::ceil(b.x1 / sp)) + 1;
+    const int j0 = int(std::floor((b.y0 - amp) / sp)) - 1, j1 = int(std::ceil((b.y1 + amp) / sp)) + 1;
+
+    for (int j = j0; j <= j1; ++j) {
+        const double gyBase = (j + 0.5) * sp;
+        for (int i = i0; i <= i1; ++i) {
+            const double gx = (i + 0.5) * sp;
+            const double gy = gyBase + amp * std::sin(gx * k);
+            const QPointF p = t.map(QPointF(gx, gy));
+            if (p.x() < -margin || p.x() > imgW + margin ||
+                p.y() < -margin || p.y() > imgH + margin) continue;
+            out.push_back({ float(p.x()), float(p.y()), 0.0f, j });
+        }
+    }
+}
+
+// Phyllotaxis: Vogel's sunflower — r = c·√n, θ = n·137.5°. Isotropic, no rows.
+void genPhyllotaxis(const GridSettings& g, const QTransform& t, const BBox& b,
+                    int imgW, int imgH, std::vector<GridSample>& out)
+{
+    const double c      = std::max(2.0f, g.spacing) * 0.8;   // seed scale
+    const double margin = c;
     const double cx = imgW * 0.5, cy = imgH * 0.5;
+    const double golden = M_PI * (3.0 - std::sqrt(5.0));      // ≈ 137.5°
 
     double maxR = 0.0;
     const double corners[4][2] = {{b.x0,b.y0},{b.x1,b.y0},{b.x1,b.y1},{b.x0,b.y1}};
-    for (auto& c : corners)
-        maxR = std::max(maxR, std::hypot(c[0] - cx, c[1] - cy));
+    for (auto& cc : corners)
+        maxR = std::max(maxR, std::hypot(cc[0] - cx, cc[1] - cy));
 
-    for (int r = 1; r * sp <= maxR + sp; ++r) {
-        const double ringR = r * sp;
-        const int n = std::max(8, int(std::round(2.0 * M_PI * ringR / ps)));
-        const double dth = 2.0 * M_PI / n;
-        for (int k = 0; k < n; ++k) {
-            const double th = k * dth;
-            const double gx = cx + ringR * std::cos(th);
-            const double gy = cy + ringR * std::sin(th);
-            const QPointF p = t.map(QPointF(gx, gy));
-            const float ang = dirAngle(t, gx, gy, -std::sin(th), std::cos(th));
-            out.push_back({ float(p.x()), float(p.y()), ang, r });
-        }
+    const long nMax = std::min(2000000L, long(std::pow((maxR + c) / c, 2.0)) + 1);
+    for (long n = 0; n < nMax; ++n) {
+        const double r  = c * std::sqrt(double(n));
+        const double th = double(n) * golden;
+        const QPointF p = t.map(QPointF(cx + r * std::cos(th),
+                                        cy + r * std::sin(th)));
+        if (p.x() < -margin || p.x() > imgW + margin ||
+            p.y() < -margin || p.y() > imgH + margin) continue;
+        out.push_back({ float(p.x()), float(p.y()), 0.0f, 0 });
     }
 }
 
@@ -214,11 +235,12 @@ std::vector<GridSample> GridGenerator::generate(const GridSettings& g, int imgW,
 
     std::vector<GridSample> out;
     switch (g.type) {
-        case GridType::Square:    genSquare (g, t, b, imgW, imgH, out); break;
-        case GridType::Hexagonal: genHex    (g, t, b, imgW, imgH, out); break;
-        case GridType::Radial:    genRadial (g, t, b, imgW, imgH, out); break;
-        case GridType::Line:      genLine   (g, t, b,             out); break;
-        case GridType::Circles:   genCircles(g, t, b, imgW, imgH, out); break;
+        case GridType::Square:      genSquare     (g, t, b, imgW, imgH, out); break;
+        case GridType::Hexagonal:   genHex        (g, t, b, imgW, imgH, out); break;
+        case GridType::Brick:       genBrick      (g, t, b, imgW, imgH, out); break;
+        case GridType::Wave:        genWave       (g, t, b, imgW, imgH, out); break;
+        case GridType::Radial:      genRadial     (g, t, b, imgW, imgH, out); break;
+        case GridType::Phyllotaxis: genPhyllotaxis(g, t, b, imgW, imgH, out); break;
     }
 
     s_lastG = g; s_lastW = imgW; s_lastH = imgH; s_valid = true;

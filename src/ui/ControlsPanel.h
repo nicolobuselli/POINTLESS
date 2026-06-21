@@ -7,6 +7,7 @@
 
 class AdjustmentsPanel;
 class LayersPanel;
+class DragSpinBox;
 class QLineEdit;
 
 /**
@@ -33,15 +34,21 @@ public:
     void        setAdjustments(const Adjustments& a);   // silent
     void        setSourceImage(const QImage& img);
 
+    // Frame dimensions (the canvas all layers are composited onto).
+    void setFrameSize(int w, int h);                    // silent
+
 signals:
     void adjustmentsChanged();
     void resetRequested();
     void fileRenamed(const QString& name);
+    void frameSizeChanged(int w, int h);
 
 private:
     LayersPanel*      m_layers    = nullptr;
     QLineEdit*        m_fileTitle = nullptr;
     AdjustmentsPanel* m_adjust    = nullptr;
+    DragSpinBox*      m_frameW    = nullptr;
+    DragSpinBox*      m_frameH    = nullptr;
 
     bool m_updating = false;
 };

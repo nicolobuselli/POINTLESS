@@ -6,6 +6,7 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QMouseEvent>
+#include <QFocusEvent>
 #include <QWheelEvent>
 #include <QScreen>
 #include <QIcon>
@@ -39,6 +40,7 @@ DragSpinBox::DragSpinBox(const QString& iconRes, int minVal, int maxVal, int def
     setFrameShape(QFrame::NoFrame);
     setCursor(Qt::SizeHorCursor);
     setFixedHeight(Ui::px(48));
+    setFocusPolicy(Qt::StrongFocus);   // reachable via Tab (left→right, top→bottom)
 
     auto* lay = new QHBoxLayout(this);
     lay->setContentsMargins(Ui::px(10), Ui::px(6), Ui::px(10), Ui::px(6));
@@ -54,12 +56,23 @@ DragSpinBox::DragSpinBox(const QString& iconRes, int minVal, int maxVal, int def
         lay->addWidget(m_iconLbl);
     }
 
-    m_valueLbl = new QLabel(this);
-    m_valueLbl->setAlignment(Qt::AlignVCenter | (hasIcon ? Qt::AlignRight : Qt::AlignHCenter));
-    m_valueLbl->setStyleSheet(QString("color:#A6A6A6; font-size:%1px; font-weight:500; background:transparent;").arg(Ui::px(19)));
-    m_valueLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
-    lay->addWidget(m_valueLbl, 1);
+    // The value is shown by a read-only QLineEdit that doubles as the editor.
+    // Read-only + transparent-for-mouse → clicks/drags pass through to the frame;
+    // it becomes the box's focus proxy so Tab stops here exactly once.
+    m_valueEdit = new QLineEdit(this);
+    m_valueEdit->setReadOnly(true);
+    m_valueEdit->setFrame(false);
+    m_valueEdit->setContextMenuPolicy(Qt::NoContextMenu);
+    m_valueEdit->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_valueEdit->setAlignment(Qt::AlignVCenter | (hasIcon ? Qt::AlignRight : Qt::AlignHCenter));
+    m_valueEdit->setStyleSheet(QString(
+        "background:transparent; color:#A6A6A6; font-size:%1px; font-weight:500; border:none; padding:0; min-height:0;")
+        .arg(Ui::px(19)));
+    m_valueEdit->installEventFilter(this);
+    connect(m_valueEdit, &QLineEdit::editingFinished, this, [this]() { commitEdit(); });
+    lay->addWidget(m_valueEdit, 1);
 
+    setFocusProxy(m_valueEdit);
     updateDisplay();
 }
 
@@ -75,10 +88,26 @@ void DragSpinBox::setCompact()
     setObjectName("dragSpinBoxCompact");   // QSS: smaller min/max-height
     setFixedHeight(Ui::px(24));
     layout()->setContentsMargins(Ui::px(10), 0, Ui::px(10), 0);
-    m_valueLbl->setStyleSheet(QString("color:#A6A6A6; font-size:%1px; font-weight:500; background:transparent;").arg(Ui::px(14)));
+    m_valueEdit->setStyleSheet(QString(
+        "background:transparent; color:#A6A6A6; font-size:%1px; font-weight:500; border:none; padding:0; min-height:0;")
+        .arg(Ui::px(14)));
     // Re-polish so the new objectName picks up its QSS rule.
     style()->unpolish(this);
     style()->polish(this);
+}
+
+void DragSpinBox::setTextLabel(const QString& text)
+{
+    if (!m_iconLbl) {
+        m_iconLbl = new QLabel(this);
+        m_iconLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+        static_cast<QHBoxLayout*>(layout())->insertWidget(0, m_iconLbl);
+    }
+    m_iconLbl->setText(text);
+    m_iconLbl->setStyleSheet(QString("color:#EEEEEE; font-size:%1px; font-weight:700; background:transparent;")
+                             .arg(Ui::px(19)));
+    // Value sits just after the letter, left-aligned.
+    m_valueEdit->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
 }
 
 void DragSpinBox::mousePressEvent(QMouseEvent* e)
@@ -110,32 +139,49 @@ void DragSpinBox::mouseReleaseEvent(QMouseEvent* e)
 void DragSpinBox::mouseDoubleClickEvent(QMouseEvent* e)
 {
     if (e->button() != Qt::LeftButton) return;
-    m_editingValue = true;
-    if (!m_lineEdit) {
-        m_lineEdit = new QLineEdit(this);
-        m_lineEdit->setFrame(false);
-        m_lineEdit->setAlignment(m_valueLbl->alignment());
-        m_lineEdit->setStyleSheet(QString(
-            "background:transparent; color:#A6A6A6; font-weight:500; font-size:%1px; border:none; padding:0;")
-            .arg(Ui::px(m_compact ? 14 : 18)));
-        connect(m_lineEdit, &QLineEdit::editingFinished, m_lineEdit, [this]() {
-            bool ok; int v = m_lineEdit->text().toInt(&ok);
-            if (ok) { setValue(v); if (onValueChanged) onValueChanged(m_value); }
-            m_editingValue = false;
-            m_lineEdit->hide();
-            updateDisplay();
-        });
+    beginEdit();
+}
+
+bool DragSpinBox::eventFilter(QObject* o, QEvent* e)
+{
+    if (o == m_valueEdit) {
+        if (e->type() == QEvent::FocusIn) {
+            // Tabbed in → start editing immediately; a click just focuses (drag stays).
+            auto reason = static_cast<QFocusEvent*>(e)->reason();
+            if (reason == Qt::TabFocusReason || reason == Qt::BacktabFocusReason)
+                beginEdit();
+        } else if (e->type() == QEvent::FocusOut) {
+            commitEdit();
+        }
     }
-    // Keep layout stable while editing: preserve value-label slot and edit only in that area.
-    m_valueLbl->setText(QString());
-    m_lineEdit->setGeometry(m_valueLbl->geometry().adjusted(0, 0, 0, 0));
-    m_lineEdit->setText(QString::number(m_value));
-    m_lineEdit->show(); m_lineEdit->setFocus(); m_lineEdit->selectAll();
+    return QFrame::eventFilter(o, e);
+}
+
+void DragSpinBox::beginEdit()
+{
+    if (!m_valueEdit->isReadOnly()) return;
+    m_valueEdit->setReadOnly(false);
+    m_valueEdit->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+    m_valueEdit->setText(QString::number(m_value));
+    m_valueEdit->setFocus(Qt::OtherFocusReason);
+    m_valueEdit->selectAll();
+}
+
+void DragSpinBox::commitEdit()
+{
+    if (m_valueEdit->isReadOnly()) return;
+    bool ok; int v = m_valueEdit->text().toInt(&ok);
+    if (ok) { setValue(v); if (onValueChanged) onValueChanged(m_value); }
+    m_valueEdit->setReadOnly(true);
+    m_valueEdit->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_valueEdit->deselect();
+    updateDisplay();
 }
 
 void DragSpinBox::updateDisplay()
 {
-    if (m_valueLbl && !m_editingValue) m_valueLbl->setText(QString::number(m_value) + m_suffix);
+    if (m_valueEdit && m_valueEdit->isReadOnly())
+        m_valueEdit->setText(QString::number(m_value) + m_suffix);
 }
 
 bool ColorPickerDialog::eventFilter(QObject* obj, QEvent* ev)

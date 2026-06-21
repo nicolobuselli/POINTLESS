@@ -471,20 +471,19 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         scroll->setObjectName("layersScroll");
         scroll->setWidgetResizable(true);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         scroll->setFrameShape(QFrame::NoFrame);
-        scroll->setLayoutDirection(Qt::RightToLeft);   // scrollbar on the left
         m_rowsScroll = scroll;
 
         m_rowsArea = new RowsArea;
-        m_rowsArea->setLayoutDirection(Qt::LeftToRight);
         m_rowsArea->onReorder = [this](int id, int idx) { emit reorderRequested(id, idx); };
         // Left margin aligns the thumbnail with the section titles (40px); the
         // row's own 70px eye gutter sits flush against the right content edge.
         m_rowsArea->rowsLayout()->setContentsMargins(Ui::px(32), Ui::px(14), 0, Ui::px(2));
         m_rowsArea->rowsLayout()->setSpacing(Ui::px(6));
         scroll->setWidget(m_rowsArea);
-        installAutoHideScrollbar(scroll);
+        // Floating scrollbar: reserves no width, so rows keep a constant width
+        // whether or not the list overflows (no shrink, no rebuild overlap).
+        installOverlayScrollbar(scroll);
 
         root->addWidget(scroll, 1);
         m_isExpanded = true;
@@ -604,23 +603,25 @@ void LayersPanel::setLayers(const std::vector<Layer>& layers, int activeId)
 {
     m_layers   = layers;
     m_activeId = activeId;
+    refreshRows();
+    syncFooter();
+    reposition();
+}
 
-    bool sameStructure = (int(m_rows.size()) == int(layers.size()));
-    if (sameStructure) {
-        for (int i = 0; i < int(layers.size()); ++i) {
-            if (m_rows[i]->layerId() != layers[i].id) { sameStructure = false; break; }
-        }
-    }
+// Refresh the row thumbs/state in place when the layer set is structurally the
+// same; only rebuild widgets when layers were added/removed/reordered. Keeping
+// the widgets alive avoids killing a row mid-gesture and prevents the paint
+// artifacts from churning widgets on every frame-dimension tick.
+void LayersPanel::refreshRows()
+{
+    bool sameStructure = (int(m_rows.size()) == int(m_layers.size()));
+    for (int i = 0; sameStructure && i < int(m_layers.size()); ++i)
+        if (m_rows[i]->layerId() != m_layers[i].id) sameStructure = false;
 
-    // Updating in place keeps the row widgets alive: rebuilding them on a
-    // selection click would kill the widget mid-gesture and break dragging.
     if (sameStructure)
         updateRowsInPlace();
     else
         rebuildRows();
-
-    syncFooter();
-    reposition();
 }
 
 void LayersPanel::setSourceImage(const QImage& source)
@@ -630,7 +631,7 @@ void LayersPanel::setSourceImage(const QImage& source)
         ? QImage()
         : source.scaled(92, 64, Qt::KeepAspectRatioByExpanding,
                         Qt::SmoothTransformation);
-    rebuildRows();
+    refreshRows();
     syncFooter();
     reposition();
 }
@@ -639,7 +640,7 @@ void LayersPanel::setBackground(const QColor& background, float opacity)
 {
     m_background = background;
     m_bgOpacity = opacity;
-    rebuildRows();
+    refreshRows();
     syncFooter();
     reposition();
 }

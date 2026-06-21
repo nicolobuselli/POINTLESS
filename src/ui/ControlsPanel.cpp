@@ -115,6 +115,32 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         m_layers->setObjectName("layersEmbedded");
         m_layers->setMinimumHeight(Ui::px(64));   // at least ~1 row, then scroll
         ll->addWidget(m_layers, 1);
+
+        // ── Frame dimensions (W × H of the canvas) ───────────────
+        {
+            auto* fw = new QWidget;
+            auto* fl = new QVBoxLayout(fw);
+            fl->setContentsMargins(Ui::px(40), Ui::px(10), Ui::px(40), Ui::px(16));
+            fl->setSpacing(Ui::px(8));
+            fl->addWidget(makeParamLabel("Frame dimensions"));
+
+            auto* row = new QHBoxLayout;
+            row->setContentsMargins(0, 0, 0, 0);
+            row->setSpacing(Ui::px(12));
+            m_frameW = new DragSpinBox("", 16, 8192, 1080);
+            m_frameH = new DragSpinBox("", 16, 8192, 1080);
+            m_frameW->setTextLabel("W");
+            m_frameH->setTextLabel("H");
+            auto emitFrame = [this](int) {
+                if (!m_updating) emit frameSizeChanged(m_frameW->value(), m_frameH->value());
+            };
+            m_frameW->onValueChanged = emitFrame;
+            m_frameH->onValueChanged = emitFrame;
+            row->addWidget(m_frameW, 1);
+            row->addWidget(m_frameH, 1);
+            fl->addLayout(row);
+            ll->addWidget(fw);
+        }
     }
 
     // ── Parameters pane (header + scrollable adjustments) ────────
@@ -148,6 +174,14 @@ void ControlsPanel::setFileName(const QString& name)
     m_updating = true;
     m_fileTitle->setText(name);          // empty → "add title…" placeholder
     m_fileTitle->setCursorPosition(0);
+    m_updating = false;
+}
+
+void ControlsPanel::setFrameSize(int w, int h)
+{
+    m_updating = true;
+    if (m_frameW) m_frameW->setValue(w);
+    if (m_frameH) m_frameH->setValue(h);
     m_updating = false;
 }
 

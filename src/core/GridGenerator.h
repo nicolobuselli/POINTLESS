@@ -7,15 +7,9 @@
 //  GridGenerator
 //
 //  Produces the set of sample positions a halftone renderer draws
-//  onto, decoupling the spatial layout (square / hexagonal / radial /
-//  line / circles) from the primitive rendering. Global rotation and
-//  anisotropic stretch are baked into the returned image-space
-//  coordinates.
-//
-//  Samples carry a `structure` index (row / line / ring) so the
-//  renderer can group them — dots ignore it, while Line and Circles
-//  connect consecutive samples of the same structure into strokes.
-//  `angle` is the local tangent direction (radians) for those strokes.
+//  onto, decoupling the spatial layout (square / hexagonal / radial)
+//  from the primitive rendering. Global rotation and anisotropic
+//  stretch are baked into the returned image-space coordinates.
 // ============================================================
 
 struct GridSample {

@@ -58,6 +58,7 @@ protected:
 
 private:
     void setExpandedUi(bool expanded);
+    void refreshRows();          // in-place if structure matches, else rebuild
     void rebuildRows();
     void updateRowsInPlace();
     void syncFooter();

@@ -244,26 +244,26 @@ inline bool operator==(const ShapeEntry& a, const ShapeEntry& b) {
 //
 //  Decouples WHERE samples are placed from HOW primitives are drawn.
 //  A generator produces transformed sample positions; the renderer
-//  consumes them (dots for Square/Hexagonal/Radial, variable-width
-//  strokes for Line/Circles).
+//  draws a luminance-sized shape at each.
 //
 //    spacing      — distance between grid elements (px)
-//    pointSpacing — sample spacing within a structure (Line/Radial/Circles)
+//    pointSpacing — sample spacing within a ring (Radial)
 //    diameter     — base primitive size multiplier (independent of spacing)
 //    stretch*     — anisotropic scaling of the grid along an axis
 //
 enum class GridType {
     Square = 0,
     Hexagonal,
+    Brick,
+    Wave,
     Radial,
-    Line,
-    Circles
+    Phyllotaxis
 };
 
 struct GridSettings {
     GridType type               = GridType::Square;
     float    spacing            = 20.0f;  // 2..200
-    float    pointSpacing       = 20.0f;  // 2..200 — Line/Radial/Circles
+    float    pointSpacing       = 20.0f;  // 2..200 — Radial ring sampling
     float    rotation           = 0.0f;   // 0..360 deg
     float    diameter           = 1.0f;   // 0.1..3.0 primitive size multiplier
     float    stretchFactor      = 1.0f;   // 0.1..4.0 anisotropic scale
@@ -277,11 +277,6 @@ inline bool operator==(const GridSettings& a, const GridSettings& b) {
         && a.diameter == b.diameter && a.stretchFactor == b.stretchFactor
         && a.stretchAngle == b.stretchAngle
         && a.followGridRotation == b.followGridRotation;
-}
-
-// Point Spacing only matters for structures sampled along a path.
-inline bool gridUsesPointSpacing(GridType t) {
-    return t == GridType::Radial || t == GridType::Line || t == GridType::Circles;
 }
 
 struct HalftoneSettings {
@@ -407,15 +402,27 @@ inline bool operator==(const AsciiSettings& a, const AsciiSettings& b) {
 //  identified by a per-session unique id.
 // ============================================================
 
-// Per-layer placement on the canvas (centre offset as a fraction of the
-// canvas, plus a scale %). Identity = fills the canvas. Animatable.
+// Per-layer placement on the frame: centre offset as a fraction of the frame,
+// a uniform scale (100% = the layer's own pixels drawn 1:1 on the frame) and a
+// rotation. Animatable.
 struct LayerTransform {
-    float xPct     = 0.0f;     // -1..1 — horizontal centre offset (fraction of canvas)
+    float xPct     = 0.0f;     // -1..1 — horizontal centre offset (fraction of frame)
     float yPct     = 0.0f;     // -1..1 — vertical centre offset
-    float scalePct = 100.0f;   // 1..1000 — uniform scale
+    float scalePct = 100.0f;   // uniform scale (100 = native pixels)
+    float rotation = 0.0f;     // 0..360 deg
 };
 inline bool operator==(const LayerTransform& a, const LayerTransform& b) {
-    return a.xPct == b.xPct && a.yPct == b.yPct && a.scalePct == b.scalePct;
+    return a.xPct == b.xPct && a.yPct == b.yPct
+        && a.scalePct == b.scalePct && a.rotation == b.rotation;
+}
+
+// Scale a layer so it fits entirely inside the frame (contain), keeping aspect.
+inline LayerTransform fitTransform(int imgW, int imgH, int frameW, int frameH)
+{
+    LayerTransform t;
+    if (imgW > 0 && imgH > 0 && frameW > 0 && frameH > 0)
+        t.scalePct = qMin(float(frameW) / imgW, float(frameH) / imgH) * 100.0f;
+    return t;
 }
 
 struct Layer {
@@ -480,12 +487,16 @@ struct SessionParams {
 
     QColor background        = QColor(0x0A, 0x0A, 0x0A);
     float  backgroundOpacity = 1.0f;
+
+    int    frameW = 1080;   // canvas the layers are composited onto
+    int    frameH = 1080;
 };
 
 // activeLayerId is deliberately ignored: selection alone is not an
 // undoable change.
 inline bool operator==(const SessionParams& a, const SessionParams& b) {
     return a.layers == b.layers && a.nextLayerId == b.nextLayerId
-        && a.background == b.background && a.backgroundOpacity == b.backgroundOpacity;
+        && a.background == b.background && a.backgroundOpacity == b.backgroundOpacity
+        && a.frameW == b.frameW && a.frameH == b.frameH;
 }
 inline bool operator!=(const SessionParams& a, const SessionParams& b) { return !(a == b); }

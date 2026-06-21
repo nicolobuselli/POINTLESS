@@ -156,6 +156,15 @@ MainWindow::MainWindow(QWidget* parent)
         if (m_current < 0) return;
         m_images[m_current].title = name;
     });
+    connect(m_left, &ControlsPanel::frameSizeChanged, this, [this](int w, int h) {
+        if (m_current < 0) return;
+        m_images[m_current].state.frameW = w;
+        m_images[m_current].state.frameH = h;
+        m_playCacheValid = false;
+        syncLayersPanel();      // row thumbs follow the frame
+        scheduleRender();
+        m_undoTimer.start();
+    });
     connect(m_right, &ModePanel::paramsChanged,             this, &MainWindow::onParamsChanged);
     connect(m_right, &ModePanel::tonalChanged,              this, &MainWindow::onParamsChanged);
     connect(m_right, &ModePanel::backgroundChanged,         this, &MainWindow::onParamsChanged);
@@ -213,6 +222,17 @@ MainWindow::MainWindow(QWidget* parent)
     m_undoTimer.setSingleShot(true);
     m_undoTimer.setInterval(kUndoDebounceMs);
     connect(&m_undoTimer, &QTimer::timeout, this, &MainWindow::pushUndoSnapshot);
+
+    // ── Layer-thumbnail debounce ─────────────────────────────
+    // The big centre preview updates live; only the small layer-panel thumbs
+    // wait ~0.5s after the last param edit (rebuilding them live glitched the
+    // value boxes).
+    m_previewTimer.setSingleShot(true);
+    m_previewTimer.setInterval(500);
+    connect(&m_previewTimer, &QTimer::timeout, this, [this]() {
+        if (m_current < 0) return;
+        syncLayersPanel();
+    });
 
     // ── Shortcuts ────────────────────────────────────────────
     auto addShortcut = [this](const QKeySequence& seq, auto slot) {
@@ -427,6 +447,8 @@ void MainWindow::applyParams(const SessionParams& p)
 
     const Layer& l = p.layers[idx];
     m_left->setAdjustments(l.adjustments);
+    m_left->setFrameSize(p.frameW > 0 ? p.frameW : 1080,
+                         p.frameH > 0 ? p.frameH : 1080);
 
     // Fill (tonal), Fusion and enabled-state are handled by setFromLayer;
     // background is shared and set explicitly.
@@ -462,8 +484,8 @@ void MainWindow::onParamsChanged()
         syncTimeline();   // tracks may have appeared/changed
     }
 
-    syncLayersPanel();   // row thumbs follow the layer's adjustments
-    scheduleRender();
+    scheduleRender();         // centre preview updates live
+    m_previewTimer.start();   // layer thumbs catch up once edits settle
     m_undoTimer.start();
 }
 
@@ -784,6 +806,12 @@ void MainWindow::onLayerReordered(int layerId, int insertIndex)
 void MainWindow::scheduleRender(bool previewOnly)
 {
     if (m_current < 0) return;
+
+    // The previous full render is now stale: invalidate it so the fast preview
+    // pass (which lands within a few ms) is shown immediately instead of being
+    // masked by the old full frame until the 350ms full pass catches up.
+    m_lastRender = {};
+
     const SessionImage& img = m_images[m_current];
 
     // Source: a clip uses the playhead's frame; a still uses its image.
@@ -798,6 +826,13 @@ void MainWindow::scheduleRender(bool previewOnly)
     const SessionParams params = img.anim.hasAnimation()
         ? paramsAtFrame(img.state, img.anim, img.anim.playhead)
         : img.state;
+
+    // Render the live preview at the size it's actually shown on screen, so the
+    // fast pass already matches the (downscaled) final — no jarring quality jump.
+    const qreal dpr = m_preview->devicePixelRatioF();
+    const int previewPx = qMax(qRound(m_preview->width()  * dpr),
+                               qRound(m_preview->height() * dpr));
+    m_worker->setInteractivePreviewPx(previewPx);
 
     m_worker->requestRender(source, params, /*fullPass=*/!previewOnly,
                             layerSourcesAt(img, img.anim.playhead));
@@ -830,8 +865,10 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
     } else {
         m_lastRender = result;
     }
-    // The "hold to compare original" image is not needed while playing back.
-    if (m_current >= 0 && !m_playing) {
+    // The "hold to compare original" overlay (source + adjustments at full res)
+    // is costly, only used on Caps-Lock, and unaffected by mode params — so
+    // refresh it on the full pass only, not on every interactive preview tick.
+    if (!isPreview && m_current >= 0 && !m_playing) {
         const Layer* l = activeLayer();
         m_preview->setOriginalImage(ImageAdjuster::apply(
             m_images[m_current].source,
@@ -970,10 +1007,14 @@ void MainWindow::addImages(const QStringList& paths)
             si.name   = clip.name;
             si.source = clip.image;
             si.frames = clip.frames;
-            si.state  = SessionParams{};
+            si.state  = SessionParams{};   // frame defaults to 1080×1080
+            // Fit the imported image into the frame (contain), centred.
+            const LayerTransform ft = fitTransform(si.source.width(), si.source.height(),
+                                                   si.state.frameW, si.state.frameH);
+            for (Layer& l : si.state.layers) l.transform = ft;
             if (!clip.frames.isEmpty()) {
-                si.anim.frameStart = 1;
-                si.anim.frameEnd   = clip.frames.size();
+                si.anim.frameStart = 0;
+                si.anim.frameEnd   = clip.frames.size() - 1;
                 si.anim.fps        = qBound(1, qRound(clip.fps), 240);
             }
             si.undoStack.append({ si.state, si.anim });
@@ -988,17 +1029,19 @@ void MainWindow::addImages(const QStringList& paths)
             board.media.insert(mid, clip);
 
             Layer nl;
-            nl.id      = board.state.nextLayerId++;
-            nl.kind    = LayerKind::Original;
-            nl.name    = clip.name;
-            nl.mediaId = mid;
-            nl.visible = true;
+            nl.id        = board.state.nextLayerId++;
+            nl.kind      = LayerKind::Original;
+            nl.name      = clip.name;
+            nl.mediaId   = mid;
+            nl.visible   = true;
+            nl.transform = fitTransform(clip.image.width(), clip.image.height(),
+                                        board.state.frameW, board.state.frameH);
             board.state.layers.insert(board.state.layers.begin(), nl);
             board.state.activeLayerId = nl.id;
 
             if (!clip.frames.isEmpty() && board.anim.frameEnd <= 1) {
-                board.anim.frameStart = 1;
-                board.anim.frameEnd   = clip.frames.size();
+                board.anim.frameStart = 0;
+                board.anim.frameEnd   = clip.frames.size() - 1;
                 board.anim.fps        = qBound(1, qRound(clip.fps), 240);
             }
             appended = true;
@@ -1035,9 +1078,14 @@ void MainWindow::importSequence(const QStringList& paths)
     si.frames = frames;
     si.source = frames.first();
     si.state  = (m_current >= 0) ? collectParams() : SessionParams{};
-    si.anim.frameStart = 1;
-    si.anim.frameEnd   = frames.size();
-    si.anim.playhead   = 1;
+    {
+        const LayerTransform ft = fitTransform(si.source.width(), si.source.height(),
+                                               si.state.frameW, si.state.frameH);
+        for (Layer& l : si.state.layers) l.transform = ft;
+    }
+    si.anim.frameStart = 0;
+    si.anim.frameEnd   = frames.size() - 1;
+    si.anim.playhead   = 0;
     si.undoStack.append({ si.state, si.anim });
     si.undoIndex = 0;
 

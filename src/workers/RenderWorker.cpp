@@ -143,12 +143,41 @@ QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& p
     return renderDocument(source, params, {});
 }
 
+// Place a layer's rendered image onto a frame-sized transparent canvas using
+// its transform (centre offset, scale, rotation). 100% scale = native pixels.
+static QImage placeOnFrame(const QImage& layerImg, const LayerTransform& tf, QSize frame)
+{
+    QImage placed(frame, QImage::Format_ARGB32_Premultiplied);
+    placed.fill(Qt::transparent);
+    if (layerImg.isNull()) return placed;
+
+    QPainter p(&placed);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const double s  = qMax(0.0001, double(tf.scalePct) / 100.0);
+    const double cx = frame.width()  * 0.5 + double(tf.xPct) * frame.width();
+    const double cy = frame.height() * 0.5 + double(tf.yPct) * frame.height();
+
+    QTransform m;
+    m.translate(cx, cy);
+    m.rotate(tf.rotation);
+    m.scale(s, s);
+    m.translate(-layerImg.width() * 0.5, -layerImg.height() * 0.5);
+    p.setTransform(m);
+    p.drawImage(0, 0, layerImg);
+    p.end();
+    return placed;
+}
+
 QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& params,
                                     const QHash<int, QImage>& layerSrc)
 {
-    // Canvas size: the document base, or (if there's no base) the first
-    // visible layer's own media.
-    QSize outSize = source.isNull() ? QSize() : source.size();
+    // Canvas size = the frame. Fallback to the base/first-media size for
+    // documents predating the frame (frameW/H == 0).
+    QSize outSize = (params.frameW > 0 && params.frameH > 0)
+                  ? QSize(params.frameW, params.frameH)
+                  : (source.isNull() ? QSize() : source.size());
     if (outSize.isEmpty()) {
         for (const Layer& l : params.layers) {
             const QImage s = layerSrc.value(l.id);
@@ -168,11 +197,9 @@ QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& p
         if (!it->visible) continue;
         const QImage src = layerSrc.contains(it->id) ? layerSrc.value(it->id) : source;
         if (src.isNull()) continue;
-        QImage layerImg = renderLayer(src, *it);
-        if (layerImg.size() != outSize)
-            layerImg = layerImg.scaled(outSize, Qt::IgnoreAspectRatio,
-                                       Qt::SmoothTransformation);
-        BlendCompositor::compositeOver(canvas, layerImg, it->blend);
+        const QImage layerImg = renderLayer(src, *it);
+        const QImage placed   = placeOnFrame(layerImg, it->transform, outSize);
+        BlendCompositor::compositeOver(canvas, placed, it->blend);
     }
 
     return canvas;
@@ -213,6 +240,22 @@ void RenderWorker::requestRender(const QImage& source, const SessionParams& para
     else          m_fullTimer.stop();
 }
 
+// Downscale every per-layer media image by `scale` (preview only), so layers
+// that draw their own clip shrink in step with the frame.
+static QHash<int, QImage> scaledLayerSrc(const QHash<int, QImage>& src, float scale)
+{
+    if (scale >= 0.999f) return src;
+    QHash<int, QImage> out;
+    for (auto it = src.begin(); it != src.end(); ++it) {
+        const QImage& im = it.value();
+        out.insert(it.key(), im.isNull() ? im
+                   : im.scaled(qMax(1, qRound(im.width()  * scale)),
+                               qMax(1, qRound(im.height() * scale)),
+                               Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+    return out;
+}
+
 QImage RenderWorker::renderPreview(const QImage& source, const SessionParams& params, int maxPx,
                                    const QHash<int, QImage>& layerSrc)
 {
@@ -220,8 +263,9 @@ QImage RenderWorker::renderPreview(const QImage& source, const SessionParams& pa
     if (source.isNull() || maxDim <= maxPx || maxDim <= 0)
         return renderDocument(source, params, layerSrc);
 
+    const float k = float(maxPx) / float(maxDim);
     const QImage small = source.scaled(maxPx, maxPx, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    SessionParams p = scaledForPreview(params, float(maxPx) / float(maxDim));
+    SessionParams p = scaledForPreview(params, k);
     // Keep halftone dot scale consistent with the full render (mirrors launchFast).
     for (Layer& l : p.layers) {
         if (l.kind != LayerKind::Halftone) continue;
@@ -231,12 +275,16 @@ QImage RenderWorker::renderPreview(const QImage& source, const SessionParams& pa
         const float eff = qBound(minBySize, requested, maxBySize);
         l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
     }
-    return renderDocument(small, p, layerSrc);
+    return renderDocument(small, p, scaledLayerSrc(layerSrc, k));
 }
 
 SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float scale)
 {
     SessionParams p = params;
+    // The frame is the output canvas; scale it (and the per-pixel params) so the
+    // whole document — frame + transformed layers — shrinks uniformly.
+    p.frameW = qMax(1, qRound(p.frameW * scale));
+    p.frameH = qMax(1, qRound(p.frameH * scale));
     for (Layer& l : p.layers) {
         l.ascii.cellSize   = qMax(3, int(l.ascii.cellSize * scale));
         l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize * scale));
@@ -249,34 +297,37 @@ void RenderWorker::launchFast()
 {
     if (m_sourceImage.isNull()) return;
 
-    QImage preview = m_sourceImage;
-    SessionParams previewParams = m_latestParams;
+    // Downscale the whole document so neither the source render nor the frame
+    // composite exceeds the interactive budget — both are capped.
+    const int srcMax   = qMax(m_sourceImage.width(), m_sourceImage.height());
+    const int frameMax = qMax(qMax(1, m_latestParams.frameW), m_latestParams.frameH);
+    const int docMax   = qMax(srcMax, frameMax);
+    const float k = (docMax > m_interactivePx) ? float(m_interactivePx) / float(docMax) : 1.0f;
 
-    const int maxDim = qMax(preview.width(), preview.height());
-    if (maxDim > FAST_MAX_PX) {
-        preview = preview.scaled(FAST_MAX_PX, FAST_MAX_PX,
-                                 Qt::KeepAspectRatio,
-                                 Qt::SmoothTransformation);
-        const float downscale = float(FAST_MAX_PX) / float(maxDim);
-        previewParams = scaledForPreview(m_latestParams, downscale);
+    QImage src = m_sourceImage;
+    SessionParams p = m_latestParams;
+    QHash<int, QImage> ls = m_layerSrc;
+
+    if (k < 1.0f) {
+        src = m_sourceImage.scaled(qMax(1, qRound(m_sourceImage.width()  * k)),
+                                   qMax(1, qRound(m_sourceImage.height() * k)),
+                                   Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        p  = scaledForPreview(m_latestParams, k);   // scales frame + per-pixel params
+        ls = scaledLayerSrc(m_layerSrc, k);
 
         // Keep preview and full render at the same effective halftone scale.
-        for (Layer& l : previewParams.layers) {
+        for (Layer& l : p.layers) {
             if (l.kind != LayerKind::Halftone) continue;
             const float requestedScale = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
-            const float fullScaleMaxBySize = 6000.0f / float(maxDim);
-            const float fullScaleMinBySize = 16.0f / float(maxDim);
-            const float effectiveFullScale = qBound(fullScaleMinBySize, requestedScale, fullScaleMaxBySize);
-            l.halftone.inputDpi = qBound(18, qRound(effectiveFullScale * 72.0f), 300);
+            const float maxBySize = 6000.0f / float(srcMax);
+            const float minBySize = 16.0f   / float(srcMax);
+            const float eff = qBound(minBySize, requestedScale, maxBySize);
+            l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
         }
     }
 
-    QImage src = preview;
-    SessionParams p = previewParams;
-
     emit renderStarted(true);
 
-    const QHash<int,QImage> ls = m_layerSrc;
     m_fastWatcher.setFuture(QtConcurrent::run([src, p, ls]() {
         return renderDocument(src, p, ls);
     }));

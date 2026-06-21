@@ -25,15 +25,10 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     scroll->setObjectName("paramsScroll");
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroll->setFrameShape(QFrame::NoFrame);
-    // Scrollbar on the LEFT edge of the column (design choice): flip the
-    // viewport, keep the content laid out left-to-right.
-    scroll->setLayoutDirection(Qt::RightToLeft);
 
     auto* content = new QWidget;
     content->setObjectName("controlRoot");
-    content->setLayoutDirection(Qt::LeftToRight);
     auto* vlay = new QVBoxLayout(content);
     // Left edge aligns with the section titles (40px); the right keeps a 70px
     // gutter free for the +/−/favourite icon column (design spec).
@@ -92,7 +87,9 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     vlay->addStretch();
 
     scroll->setWidget(content);
-    installAutoHideScrollbar(scroll);
+    // Floating scrollbar: reserves no width, so the controls keep a constant
+    // width whether or not the list overflows when the pane is resized.
+    installOverlayScrollbar(scroll);
     outer->addWidget(scroll, 1);
 }
 

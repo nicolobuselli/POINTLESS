@@ -16,7 +16,10 @@
 //  display conversions); ranges below are in those raw units.
 // ============================================================
 
-enum class ParamScope { AllLayers, Halftone, Dither, Ascii, Document };
+enum class ParamScope { AllLayers, Halftone, Dither, Ascii, Tonal, Document };
+
+// Max animatable per-colour thresholds (matches the tonal UI's kMaxTones).
+constexpr int kMaxToneLevels = 8;
 
 enum class ParamId {
     // Adjustments (every layer)
@@ -31,11 +34,19 @@ enum class ParamId {
     DiPixelSize, DiStrength, DiOpacity, DiCornerRadius, DiThreshold,
     // Ascii
     AsCellSize, AsGamma,
+    // Tonal — per-colour threshold of the active effect's palette (only the
+    // first N are animatable, N = current tone count). MUST stay contiguous.
+    ToneLevel1, ToneLevel2, ToneLevel3, ToneLevel4,
+    ToneLevel5, ToneLevel6, ToneLevel7, ToneLevel8,
     // Document
     BackgroundOpacity,
 
     Count
 };
+
+inline ParamId toneLevelParam(int index) {
+    return ParamId(int(ParamId::ToneLevel1) + index);
+}
 
 struct ParamDesc {
     const char* label;

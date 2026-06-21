@@ -127,6 +127,7 @@ private:
     bool   m_capsLockActive = false;
     bool   m_spaceDown = false;
     QTimer m_undoTimer;
+    QTimer m_previewTimer;   // debounce live preview until param edits settle
 
     QTimer          m_playTimer;
     bool            m_autoKey = false;

@@ -19,7 +19,9 @@
 
 class NoWheelSlider : public QSlider {
 public:
-    using QSlider::QSlider;
+    explicit NoWheelSlider(Qt::Orientation o, QWidget* p = nullptr) : QSlider(o, p) {
+        setFocusPolicy(Qt::NoFocus);   // Tab skips sliders, stops only on the number boxes
+    }
 protected:
     void wheelEvent(QWheelEvent* e) override;
 };
@@ -44,22 +46,24 @@ public:
     int  value() const { return m_value; }
     void setValue(int v);
     void setCompact();   // half-height variant with smaller font
+    void setTextLabel(const QString& text);   // bold letter (e.g. "W") instead of an icon
 
 protected:
     void mousePressEvent(QMouseEvent* e) override;
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
+    bool eventFilter(QObject* o, QEvent* e) override;
 
 private:
+    void beginEdit();
+    void commitEdit();
     void updateDisplay();
     QLabel*    m_iconLbl   = nullptr;
-    QLabel*    m_valueLbl  = nullptr;
-    QLineEdit* m_lineEdit  = nullptr;
+    QLineEdit* m_valueEdit = nullptr;
     int        m_min, m_max, m_value;
     QString    m_suffix;
     bool       m_compact      = false;
-    bool       m_editingValue = false;
     bool       m_dragging     = false;
     QPoint     m_dragStart;
     int        m_dragStartVal = 0;

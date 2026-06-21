@@ -46,8 +46,41 @@ const std::array<ParamDesc, int(ParamId::Count)> kDescs = {{
     { "Cell size",          4,    48,  true,  ParamScope::Ascii },
     { "Gamma",            0.1,   5.0,  false, ParamScope::Ascii },
 
+    { "Threshold 1",        0,   255,  true,  ParamScope::Tonal },
+    { "Threshold 2",        0,   255,  true,  ParamScope::Tonal },
+    { "Threshold 3",        0,   255,  true,  ParamScope::Tonal },
+    { "Threshold 4",        0,   255,  true,  ParamScope::Tonal },
+    { "Threshold 5",        0,   255,  true,  ParamScope::Tonal },
+    { "Threshold 6",        0,   255,  true,  ParamScope::Tonal },
+    { "Threshold 7",        0,   255,  true,  ParamScope::Tonal },
+    { "Threshold 8",        0,   255,  true,  ParamScope::Tonal },
+
     { "Background opacity", 0,     1,  false, ParamScope::Document },
 }};
+
+// The tonal palette of the effect matching the layer's kind (nullptr for
+// Original, which has no fill).
+const TonalSettings* layerTonal(const Layer& l)
+{
+    switch (l.kind) {
+        case LayerKind::Halftone: return &l.halftone.tonal;
+        case LayerKind::Dither:   return &l.dither.tonal;
+        case LayerKind::Ascii:    return &l.ascii.tonal;
+        default:                  return nullptr;
+    }
+}
+TonalSettings* layerTonal(Layer& l)
+{
+    return const_cast<TonalSettings*>(layerTonal(const_cast<const Layer&>(l)));
+}
+
+// 0-based tone index for a ToneLevelN id, or -1 if id isn't a tone level.
+int toneLevelIndex(ParamId id)
+{
+    if (int(id) >= int(ParamId::ToneLevel1) && int(id) <= int(ParamId::ToneLevel8))
+        return int(id) - int(ParamId::ToneLevel1);
+    return -1;
+}
 
 } // namespace
 
@@ -58,6 +91,10 @@ const ParamDesc& paramDesc(ParamId id)
 
 double getParam(const Layer& l, ParamId id)
 {
+    if (const int ti = toneLevelIndex(id); ti >= 0) {
+        const TonalSettings* t = layerTonal(l);
+        return (t && ti < int(t->tones.size())) ? double(t->tones[size_t(ti)].level) : 0.0;
+    }
     switch (id) {
         case ParamId::AdjBrightness:      return l.adjustments.brightness;
         case ParamId::AdjContrast:        return l.adjustments.contrast;
@@ -107,6 +144,12 @@ void setParam(Layer& l, ParamId id, double v)
     v = qBound(d.lo, v, d.hi);
     const int   iv = qRound(v);
     const float fv = float(v);
+
+    if (const int ti = toneLevelIndex(id); ti >= 0) {
+        TonalSettings* t = layerTonal(l);
+        if (t && ti < int(t->tones.size())) t->tones[size_t(ti)].level = iv;
+        return;
+    }
 
     switch (id) {
         case ParamId::AdjBrightness:      l.adjustments.brightness      = iv; break;
@@ -185,6 +228,14 @@ std::vector<ParamId> animatableParams(const Layer& layer)
         const ParamScope s = paramDesc(id).scope;
         if (s == ParamScope::AllLayers || s == kindScope)
             out.push_back(id);
+    }
+
+    // Per-colour thresholds: only meaningful with more than one tone, and only
+    // for as many tones as the active palette currently has.
+    if (const TonalSettings* t = layerTonal(layer); t && t->tones.size() > 1) {
+        const int n = qMin(int(t->tones.size()), kMaxToneLevels);
+        for (int i = 0; i < n; ++i)
+            out.push_back(toneLevelParam(i));
     }
     return out;
 }

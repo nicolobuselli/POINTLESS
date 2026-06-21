@@ -13,16 +13,6 @@
 
 namespace {
 constexpr int kBandHeight = 256;   // tile height for parallel rendering
-
-// Nearest palette colour (OkLab) to an sRGB colour, alpha from the tone.
-QColor snapToPalette(const std::vector<ColorMath::PaletteEntry>& pal, const QColor& c)
-{
-    const ColorMath::OkLab lab = ColorMath::linearToOklab(
-        ColorMath::srgbToLinear(c.red()),
-        ColorMath::srgbToLinear(c.green()),
-        ColorMath::srgbToLinear(c.blue()));
-    return QColor::fromRgba(pal[ColorMath::nearestPaletteIndex(pal, lab)].out);
-}
 }
 
 // ---------------------------------------------------------------------------
@@ -81,11 +71,7 @@ void HalftoneRenderer::renderTile(const TileJob& job)
     painter.translate(0, -job.bandTop);
     painter.setClipRect(QRectF(0, job.bandTop, job.imgW, job.bandH));
 
-    const GridType type = job.params->grid.type;
-    if (type == GridType::Line || type == GridType::Circles)
-        paintStrokes(painter, job);
-    else
-        paintDots(painter, job);
+    paintDots(painter, job);
 }
 
 // Dot grids (Square / Hexagonal / Radial): a shape per sample sized by luminance.
@@ -97,10 +83,6 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
     const auto&             shapesVec   = params.shapes;
     const auto&             tones       = params.tonal.tones;
     const bool              imageColors = (params.tonal.mode == ToneMode::ImageColors);
-    const bool              paletteMode = (params.tonal.mode == ToneMode::Palette);
-    const std::vector<ColorMath::PaletteEntry> palette =
-        paletteMode ? ColorMath::buildPalette(tones)
-                    : std::vector<ColorMath::PaletteEntry>{};
     const int               imgW = job.imgW, imgH = job.imgH;
     const double            bandTop = job.bandTop;
     const double            bandBot = double(job.bandTop) + job.bandH;
@@ -109,12 +91,16 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
     const float baseR    = (sp * 0.5f) * qMax(0.01f, params.grid.diameter);
     const float invGamma = 1.0f / qMax(0.01f, params.gamma);
     const int   cellPx   = qMax(1, qRound(sp));
+    // Jitter orbits each symbol around an off-centroid pivot, so dots can drift
+    // up to ~spacing away; widen the per-band cull by that reach to avoid seams.
+    const float jitterReach = params.jitter * sp * 2.0f;
 
     std::unique_ptr<QSvgRenderer> svgCache;
     QString cachedSvgPath;
 
     for (const GridSample& s : samples) {
-        if (s.y + baseR < bandTop || s.y - baseR > bandBot) continue;   // band cull
+        if (s.y + baseR + jitterReach < bandTop
+         || s.y - baseR - jitterReach > bandBot) continue;   // band cull (+ jitter drift)
 
         int cx, cy, cw, ch;
         cellAround(s.x, s.y, cellPx, imgW, imgH, cx, cy, cw, ch);
@@ -138,22 +124,30 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
         }
 
         QColor fillColor;
-        if (paletteMode && !palette.empty()) {
-            fillColor = snapToPalette(palette, sampleAverageColor(inputRGB, cx, cy, cw, ch));
-        } else if (imageColors || tones.empty()) {
+        if (imageColors || tones.empty()) {
             fillColor = sampleAverageColor(inputRGB, cx, cy, cw, ch);
         } else {
+            // FixedTones and Palette both map luminosity onto the tones via
+            // their per-colour level thresholds (matches Dither/Ascii).
             const ToneEntry& te = tones[pickToneIndex(tones, lumPerc)];
             fillColor = te.color;
             fillColor.setAlphaF(qBound(0.0f, te.opacity, 1.0f));
         }
         fillColor.setAlphaF(fillColor.alphaF() * params.opacity);
 
-        float rotationDeg = 0.0f;
+        // Jitter = random spin about a pivot that drifts off the centroid. Both
+        // the angle and the pivot distance grow with jitter, so the symbol both
+        // rotates and orbits away from its grid point — gently at low values,
+        // wildly at high ones.
+        float   rotationDeg = 0.0f;
+        QPointF pivot(0.0f, 0.0f);
         if (params.jitter > 0.0f) {
             std::mt19937 rng(cellSeed(qRound(s.x), qRound(s.y)));
-            std::uniform_real_distribution<float> dist(-180.0f, 180.0f);
-            rotationDeg = dist(rng) * params.jitter;
+            std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+            rotationDeg = (uni(rng) * 2.0f - 1.0f) * 180.0f * params.jitter;
+            const float ang = uni(rng) * 6.28318531f;                 // random direction
+            const float mag = uni(rng) * params.jitter * sp * 1.0f;   // distance ∝ jitter
+            pivot = QPointF(std::cos(ang) * mag, std::sin(ang) * mag);
         }
 
         painter.save();
@@ -178,7 +172,9 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
                 }
                 // Compose on top of the band translate (no setTransform reset).
                 painter.translate(s.x, s.y);
-                painter.rotate(rotationDeg);
+                painter.translate(pivot.x(), pivot.y());   // rotate about an
+                painter.rotate(rotationDeg);               // off-centroid pivot →
+                painter.translate(-pivot.x(), -pivot.y()); // spin + drift
                 painter.translate(-isize * 0.5f, -isize * 0.5f);
                 painter.drawImage(QPointF(0, 0), svgImg);
             }
@@ -186,93 +182,14 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
             QPainterPath path = buildShape(shape, 0.0f, 0.0f, r, params.cornerRadius);
             QTransform t;
             t.translate(s.x, s.y);
-            t.rotate(rotationDeg);
+            t.translate(pivot.x(), pivot.y());     // off-centroid pivot:
+            t.rotate(rotationDeg);                 // the symbol spins and
+            t.translate(-pivot.x(), -pivot.y());   // drifts off its grid point
             painter.setPen(Qt::NoPen);
             painter.setBrush(fillColor);
             painter.drawPath(t.map(path));
         }
         painter.restore();
-    }
-}
-
-// Line / Circles: connect consecutive samples of each structure with a
-// variable-width stroke — dark regions thicken the line, light ones thin it.
-void HalftoneRenderer::paintStrokes(QPainter& painter, const TileJob& job)
-{
-    const HalftoneSettings& params      = *job.params;
-    const QImage&           inputRGB    = *job.inputRGB;
-    const auto&             samples     = *job.samples;
-    const auto&             tones       = params.tonal.tones;
-    const bool              imageColors = (params.tonal.mode == ToneMode::ImageColors);
-    const bool              paletteMode = (params.tonal.mode == ToneMode::Palette);
-    const std::vector<ColorMath::PaletteEntry> palette =
-        paletteMode ? ColorMath::buildPalette(tones)
-                    : std::vector<ColorMath::PaletteEntry>{};
-    const bool              closed      = (params.grid.type == GridType::Circles);
-    const int               imgW = job.imgW, imgH = job.imgH;
-    const double            bandTop = job.bandTop;
-    const double            bandBot = double(job.bandTop) + job.bandH;
-
-    const float sp       = qMax(2.0f, params.grid.spacing);
-    const float maxW     = sp * qMax(0.01f, params.grid.diameter);
-    const float invGamma = 1.0f / qMax(0.01f, params.gamma);
-    const float halfMax  = maxW * 0.5f;
-    const int   cellPx   = qMax(2, qRound(qMin(params.grid.pointSpacing, params.grid.spacing)));
-
-    auto sampleAt = [&](const GridSample& s, float& w, QColor& col) {
-        int cx, cy, cw, ch;
-        cellAround(s.x, s.y, cellPx, imgW, imgH, cx, cy, cw, ch);
-        const float lumLin   = sampleLuminosity(inputRGB, cx, cy, cw, ch);
-        const float lumPerc  = ColorMath::linearToSrgb8(lumLin) / 255.0f;
-        const float darkness = 1.0f - lumLin;
-        w = maxW * std::pow(darkness, invGamma);   // stroke area ∝ width ∝ coverage
-        if (paletteMode && !palette.empty()) {
-            col = snapToPalette(palette, sampleAverageColor(inputRGB, cx, cy, cw, ch));
-        } else if (imageColors || tones.empty()) {
-            col = sampleAverageColor(inputRGB, cx, cy, cw, ch);
-        } else {
-            const ToneEntry& te = tones[pickToneIndex(tones, lumPerc)];
-            col = te.color;
-            col.setAlphaF(qBound(0.0f, te.opacity, 1.0f));
-        }
-        col.setAlphaF(col.alphaF() * params.opacity);
-    };
-
-    painter.setBrush(Qt::NoBrush);
-
-    const size_t N = samples.size();
-    size_t i = 0;
-    while (i < N) {
-        const int structure = samples[i].structure;
-        size_t j = i;
-        while (j < N && samples[j].structure == structure) ++j;
-        const size_t cnt = j - i;
-
-        if (cnt >= 2) {
-            const size_t segs = closed ? cnt : cnt - 1;
-            for (size_t k = 0; k < segs; ++k) {
-                const GridSample& a = samples[i + k];
-                const GridSample& b = samples[i + ((k + 1) % cnt)];
-
-                const double ymin = qMin(a.y, b.y) - halfMax;
-                const double ymax = qMax(a.y, b.y) + halfMax;
-                if (ymax < bandTop || ymin > bandBot) continue;   // band cull
-
-                float wa, wb; QColor ca, cb;
-                sampleAt(a, wa, ca);
-                sampleAt(b, wb, cb);
-                const float w = (wa + wb) * 0.5f;
-                if (w < 0.3f) continue;                           // light → no stroke
-
-                QPen pen(cb);
-                pen.setWidthF(w);
-                pen.setCapStyle(Qt::RoundCap);
-                pen.setJoinStyle(Qt::RoundJoin);
-                painter.setPen(pen);
-                painter.drawLine(QPointF(a.x, a.y), QPointF(b.x, b.y));
-            }
-        }
-        i = j;
     }
 }
 

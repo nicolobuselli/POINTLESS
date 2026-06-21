@@ -202,6 +202,17 @@ protected:
             }
         }
 
+        // ── Dim the working space outside the active [start,end] range ─
+        {
+            const QColor dim(0, 0, 0, 90);
+            const int xStart = frameToX(a.frameStart);
+            const int xEnd   = frameToX(a.frameEnd);
+            if (xStart > gut)
+                p.fillRect(QRect(gut, rul, xStart - gut, height() - rul), dim);
+            if (xEnd < width())
+                p.fillRect(QRect(xEnd, rul, width() - xEnd, height() - rul), dim);
+        }
+
         // ── Ruler header band (panel colour, set off by a divider) ─
         p.fillRect(QRect(0, 0, width(), rul), QColor("#272727"));
         p.setPen(QColor("#3B3B3B"));

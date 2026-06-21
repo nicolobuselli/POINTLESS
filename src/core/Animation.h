@@ -35,10 +35,10 @@ inline bool operator==(const Track& a, const Track& b) {
 
 struct Animation {
     std::vector<Track> tracks;
-    int frameStart = 1;
+    int frameStart = 0;
     int frameEnd   = 120;
     int fps        = 24;
-    int playhead   = 1;
+    int playhead   = 0;
 
     bool hasAnimation() const { return !tracks.empty(); }
 };

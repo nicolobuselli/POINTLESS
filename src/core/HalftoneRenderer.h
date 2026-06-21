@@ -11,9 +11,8 @@
 //  HalftoneRenderer
 //
 //  Consumes sample positions from the GridGenerator (square /
-//  hexagonal / radial / line / circles) and draws a primitive at
-//  each: a shape sized by local luminance for dot grids, or a
-//  variable-width stroke connecting samples for Line / Circles.
+//  hexagonal / radial) and draws a shape at each, sized by the
+//  local luminance.
 //
 //  Rendering is split into horizontal tiles (bands) rendered in
 //  parallel and composited without overlap.
@@ -38,8 +37,7 @@ private:
         int                            imgH;
     };
     static void renderTile(const TileJob& job);
-    static void paintDots   (QPainter& painter, const TileJob& job);
-    static void paintStrokes(QPainter& painter, const TileJob& job);
+    static void paintDots  (QPainter& painter, const TileJob& job);
 
     // Shape builders
     static QPainterPath buildTriangle(float cx, float cy, float r);

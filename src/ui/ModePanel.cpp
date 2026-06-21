@@ -199,7 +199,8 @@ public:
 
             sl->addWidget(makeParamLabel("Grid"));
             m_gridType = new NoWheelComboBox;
-            m_gridType->addItems({ "Square", "Hexagonal", "Radial", "Line", "Circles" });
+            m_gridType->addItems({ "Square", "Hexagonal", "Brick", "Wave",
+                                   "Radial", "Phyllotaxis" });
             sl->addWidget(m_gridType);
             sl->addSpacing(Ui::px(8));   // breathing room before the sliders
 
@@ -207,11 +208,9 @@ public:
             m_rotation     = new SliderRow("Rotation",      0, 360,   0);
             m_gamma        = new SliderRow("Gamma",        10, 500, 100);
             m_diameter     = new SliderRow("Diameter",     10, 300, 100);
-            m_stretch      = new SliderRow("Stretch",      10, 400, 100);
-            m_stretchAngle = new SliderRow("Stretch angle", 0, 360,   0);
             m_jitter       = new SliderRow("Jitter",        0, 100,   0);
             for (SliderRow* r : { m_spacing, m_rotation, m_gamma, m_diameter,
-                                  m_stretch, m_stretchAngle, m_jitter }) {
+                                  m_jitter }) {
                 r->onValueChanged = [this](int) { fire(); };
                 sl->addWidget(r);
             }
@@ -284,8 +283,7 @@ public:
         s.grid.spacing       = float(m_spacing->value());
         s.grid.rotation      = float(m_rotation->value());
         s.grid.diameter      = m_diameter->value() / 100.0f;
-        s.grid.stretchFactor = m_stretch->value()  / 100.0f;
-        s.grid.stretchAngle  = float(m_stretchAngle->value());
+        // Stretch / stretch-angle removed from the UI: leave grid at identity.
 
         s.gamma        = m_gamma->value()  / 100.0f;
         s.jitter       = m_jitter->value() / 100.0f;
@@ -310,8 +308,6 @@ public:
         m_spacing->setValue(qRound(s.grid.spacing));
         m_rotation->setValue(qRound(s.grid.rotation));
         m_diameter->setValue(qRound(s.grid.diameter * 100));
-        m_stretch->setValue(qRound(s.grid.stretchFactor * 100));
-        m_stretchAngle->setValue(qRound(s.grid.stretchAngle));
         m_gamma->setValue(qRound(s.gamma * 100));
         m_jitter->setValue(qRound(s.jitter * 100));
         m_opacity->setValue(qRound(s.opacity * 100));
@@ -459,8 +455,6 @@ private:
     SliderRow*       m_rotation     = nullptr;
     SliderRow*       m_gamma        = nullptr;
     SliderRow*       m_diameter     = nullptr;
-    SliderRow*       m_stretch      = nullptr;
-    SliderRow*       m_stretchAngle = nullptr;
     SliderRow*       m_jitter       = nullptr;
     NoWheelComboBox* m_fusion       = nullptr;
     DragSpinBox*     m_opacity      = nullptr;
