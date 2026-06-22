@@ -54,6 +54,14 @@ private slots:
     void onLayerTransformChanged(const LayerTransform& t);
     void onAddLayerRequested();
     void onLayerReordered(int layerId, int insertIndex);
+    // Cascade (parent/child) operations driven by the layer tree.
+    void onAddChildRequested(int mediaId);
+    void onParentReordered(int mediaId, int insertIndex);
+    void onGroupVisibilityToggled(int mediaId, bool visible);
+    void onCollapseToggled(int mediaId, bool collapsed);
+    void onDuplicateParentRequested(int mediaId);
+    void onDeleteParentRequested(int mediaId);
+    void onParentRenamed(int mediaId, const QString& name);
     void undo();
     void redo();
     void copyToClipboard();
@@ -85,6 +93,17 @@ private:
     void applyParams(const SessionParams& p);
     Layer* activeLayer();
     const Layer* activeLayer() const;
+
+    // Cascade helpers. A parent = a media entry + a ParentGroup; its children are
+    // the layers whose mediaId matches. Children render, parents don't.
+    int   addParentMedia(SessionImage& board, const MediaClip& clip);   // → mediaId
+    Layer makeChildLayer(SessionParams& st, int mediaId, LayerKind kind,
+                         QSize native) const;
+    void  regroupLayers(SessionParams& st) const;       // keep layers grouped by parent order
+    void  syncBoardSource(SessionImage& board) const;   // board.source = first parent's image
+    bool  groupVisibleFor(const SessionParams& st, int mediaId) const;
+    SessionParams bakeGroupVisibility(SessionParams p) const;   // child.visible &&= group
+    void  commitStructuralChange();                     // sync panel + render + undo
     QSize activeLayerNativeSize() const;   // layer pixel size at 100% scale
     void  pushPreviewTransform();          // feed active transform to the preview overlay
     void selectLayerInternal(int layerId, bool makeVisible);

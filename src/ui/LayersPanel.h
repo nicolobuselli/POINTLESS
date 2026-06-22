@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QImage>
+#include <QHash>
 #include <QList>
 #include <vector>
 #include "../core/Params.h"
@@ -11,6 +12,7 @@ class QPushButton;
 class NoWheelComboBox;
 class ChevronButton;
 class LayerRow;
+class ParentRow;
 class RowsArea;
 class TrashButton;
 
@@ -38,12 +40,19 @@ public:
     // the left column. embedded=false keeps the legacy floating panel.
     explicit LayersPanel(bool embedded = false, QWidget* parent = nullptr);
 
-    void setLayers(const std::vector<Layer>& layers, int activeId);
+    // Cascade tree: parent groups (source images, not in the frame) each with
+    // their child layers (mediaId == parent's). mediaImages = per-media source
+    // for parent thumbnails.
+    void setTree(const std::vector<ParentGroup>& parents,
+                 const std::vector<Layer>& layers, int activeId,
+                 const QHash<int, QImage>& mediaImages);
+    void setLayers(const std::vector<Layer>& layers, int activeId);   // legacy flat
     void setSourceImage(const QImage& source);
     void setBackground(const QColor& background, float opacity);
     void requestAddLayer();   // external "+" trigger (embedded header lives in ControlsPanel)
 
 signals:
+    // Child (layer) signals
     void visibilityToggled(int layerId, bool visible);
     void layerSelected(int layerId);
     void layerRenamed(int layerId, const QString& name);
@@ -51,6 +60,14 @@ signals:
     void blendModeChanged(int layerId, BlendMode mode);
     void addLayerRequested();
     void reorderRequested(int layerId, int insertIndex);
+    // Parent (group) signals
+    void addChildRequested(int mediaId);
+    void parentReordered(int mediaId, int insertIndex);
+    void groupVisibilityToggled(int mediaId, bool visible);
+    void collapseToggled(int mediaId, bool collapsed);
+    void duplicateParentRequested(int mediaId);
+    void deleteParentRequested(int mediaId);
+    void parentRenamed(int mediaId, const QString& name);
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
@@ -59,24 +76,29 @@ protected:
 private:
     void setExpandedUi(bool expanded);
     void refreshRows();          // in-place if structure matches, else rebuild
-    void rebuildRows();
+    void buildTree();            // embedded: parent groups + nested children
     void updateRowsInPlace();
     void syncFooter();
     void reposition();
     QPixmap thumbFor(const Layer& layer) const;
+    QPixmap parentThumb(int mediaId) const;
 
-    bool               m_embedded = false;
-    std::vector<Layer> m_layers;
+    bool                     m_embedded = false;
+    std::vector<Layer>       m_layers;
+    std::vector<ParentGroup> m_parents;
+    QHash<int, QImage>       m_mediaImages;   // mediaId → small source for thumbs
     int                m_activeId = -1;
-    QImage             m_smallSource;   // downscaled source for row thumbs
+    QImage             m_smallSource;   // downscaled source for row thumbs (legacy)
     QColor             m_background    = QColor(0x0A,0x0A,0x0A);
     float              m_bgOpacity     = 1.0f;
 
     QWidget*         m_expandedBox  = nullptr;
     QPushButton*     m_collapsedBtn = nullptr;
     QWidget*         m_rowsScroll   = nullptr;   // embedded: scroll host for rows
-    RowsArea*        m_rowsArea     = nullptr;
-    QList<LayerRow*> m_rows;
+    RowsArea*         m_rowsArea     = nullptr;
+    QList<LayerRow*>  m_rows;
+    QList<ParentRow*> m_parentRows;
+    QString           m_treeSig;     // structure signature → rebuild vs in-place
     NoWheelComboBox* m_blendCombo   = nullptr;
     TrashButton*     m_trashBtn     = nullptr;
     bool             m_isExpanded   = true;

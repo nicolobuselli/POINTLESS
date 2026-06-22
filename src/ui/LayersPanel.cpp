@@ -29,6 +29,7 @@ namespace {
 constexpr int  kPanelWidth = 240;
 constexpr int  kMargin     = 12;
 const char*    kLayerMime  = "application/x-ultraditherer-layer";
+const char*    kParentMime = "application/x-ultraditherer-parent";
 
 void repolish(QWidget* w)
 {
@@ -112,6 +113,13 @@ public:
 
     void setDeletable(bool d) { m_deletable = d; }
 
+    // Indent a child row so the tree connector has room on its left.
+    void setIndent(int leftPx)
+    {
+        if (auto* l = qobject_cast<QHBoxLayout*>(layout()))
+            l->setContentsMargins(leftPx, Ui::px(2), 0, Ui::px(2));
+    }
+
     LayerRow(int layerId, QWidget* parent = nullptr)
         : QFrame(parent), m_id(layerId)
     {
@@ -145,13 +153,22 @@ public:
         m_name->setAttribute(Qt::WA_TransparentForMouseEvents);
         pl->addWidget(m_name, 1);
 
-        hl->addWidget(m_pill, 1);
-
-        m_nameEdit = new QLineEdit(m_pill);
+        // Inline rename editor shares the name's layout slot (one is hidden at a
+        // time), so it never overlaps the thumbnail. Transparent + borderless +
+        // label-sized so it blends into the row (the generic QLineEdit rule's
+        // border + 48px min-height would otherwise clip it).
+        m_nameEdit = new QLineEdit;
         m_nameEdit->setObjectName("layerNameEdit");
         m_nameEdit->setFrame(false);
         m_nameEdit->setVisible(false);
-        m_nameEdit->setAlignment(m_name->alignment());
+        m_nameEdit->setStyleSheet(QString(
+            "background:transparent; border:none; padding:0; margin:0; min-height:0;"
+            " color:#FFFFFF; font-size:%1px; font-weight:500;"
+            " selection-background-color:#FD5A1F;").arg(Ui::px(18)));
+        pl->addWidget(m_nameEdit, 1);
+
+        hl->addWidget(m_pill, 1);
+
         connect(m_nameEdit, &QLineEdit::editingFinished, this, [this]() {
             finishNameEditing();
         });
@@ -248,7 +265,6 @@ private:
         if (m_editingName) return;
         m_editingName = true;
         m_nameEdit->setText(m_name->text());
-        m_nameEdit->setGeometry(m_name->geometry());
         m_name->hide();
         m_nameEdit->show();
         m_nameEdit->setFocus(Qt::MouseFocusReason);
@@ -292,10 +308,27 @@ private:
 //  RowsArea — hosts the rows; accepts drops for reordering
 // ============================================================
 
+// Tree indent / connector geometry (Figma px).
+namespace tree {
+    inline int indent()   { return Ui::px(30); }   // child left inset
+    inline int trunkX()   { return Ui::px(14); }   // vertical connector x
+}
+
 class RowsArea : public QWidget
 {
 public:
-    std::function<void(int, int)> onReorder;   // layerId, insertIndex
+    // One visible row, in top→bottom order, with the metadata the area needs to
+    // draw connectors and resolve drops.
+    struct Row {
+        QWidget* w             = nullptr;
+        bool     isParent      = false;
+        int      mediaId       = -1;   // parent: own; child: its parent's
+        int      layerId       = -1;   // child only
+    };
+
+    std::function<void(int, int)> onChildReorder;    // layerId, insertIndex
+    std::function<void(int, int)> onParentReorder;   // mediaId, insertIndex
+    std::function<void(int)>      onAddChild;         // mediaId
 
     explicit RowsArea(QWidget* parent = nullptr)
         : QWidget(parent)
@@ -303,103 +336,373 @@ public:
         setAcceptDrops(true);
         m_layout = new QVBoxLayout(this);
         m_layout->setContentsMargins(0, 0, 0, 0);
-        m_layout->setSpacing(6);
+        m_layout->setSpacing(Ui::px(6));
     }
 
     QVBoxLayout* rowsLayout() const { return m_layout; }
+    void setModel(const QVector<Row>& rows) { m_model = rows; update(); }
+    void clearModel() { m_model.clear(); }
 
 protected:
     void dragEnterEvent(QDragEnterEvent* e) override
     {
-        if (e->mimeData()->hasFormat(kLayerMime))
+        if (e->mimeData()->hasFormat(kLayerMime) || e->mimeData()->hasFormat(kParentMime))
             e->acceptProposedAction();
     }
 
     void dragMoveEvent(QDragMoveEvent* e) override
     {
-        if (!e->mimeData()->hasFormat(kLayerMime)) return;
-        const int idx = insertIndexAt(e->position().toPoint());
-        const int y   = indicatorYFor(idx);
-        if (y != m_indicatorY) {
-            m_indicatorY = y;
-            update();
-        }
+        const QPoint pos = e->position().toPoint();
+        if (e->mimeData()->hasFormat(kLayerMime)) {
+            m_addChildMedia = -1;
+            m_indicatorY = childIndicatorY(childInsertIndexAt(pos));
+        } else if (e->mimeData()->hasFormat(kParentMime)) {
+            const int hoverMedia = childZoneMediaAt(pos);
+            if (hoverMedia >= 0) {            // over a group's children area → add child
+                m_addChildMedia = hoverMedia;
+                m_indicatorY = -1;
+            } else {                          // between groups → reorder
+                m_addChildMedia = -1;
+                m_indicatorY = parentIndicatorY(parentInsertIndexAt(pos));
+            }
+        } else return;
+        update();
         e->acceptProposedAction();
     }
 
-    void dragLeaveEvent(QDragLeaveEvent*) override
-    {
-        m_indicatorY = -1;
-        update();
-    }
+    void dragLeaveEvent(QDragLeaveEvent*) override { clearDnd(); }
 
     void dropEvent(QDropEvent* e) override
     {
-        m_indicatorY = -1;
-        update();
-        const int id  = e->mimeData()->data(kLayerMime).toInt();
-        const int idx = insertIndexAt(e->position().toPoint());
-        if (onReorder) onReorder(id, idx);
+        const QPoint pos = e->position().toPoint();
+        if (e->mimeData()->hasFormat(kLayerMime)) {
+            const int id = e->mimeData()->data(kLayerMime).toInt();
+            if (onChildReorder) onChildReorder(id, childInsertIndexAt(pos));
+        } else if (e->mimeData()->hasFormat(kParentMime)) {
+            const int mid = e->mimeData()->data(kParentMime).toInt();
+            const int zone = childZoneMediaAt(pos);
+            if (zone >= 0 && zone != mid) { if (onAddChild) onAddChild(zone); }
+            else if (onParentReorder)     onParentReorder(mid, parentInsertIndexAt(pos));
+        }
+        clearDnd();
         e->acceptProposedAction();
     }
 
     void paintEvent(QPaintEvent*) override
     {
-        if (m_indicatorY < 0) return;
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        p.setPen(Qt::NoPen);
-        p.setBrush(QColor("#FD5A1F"));
-        p.drawRoundedRect(QRectF(2, m_indicatorY - 1.5, width() - 4, 3), 1.5, 1.5);
+
+        // Tree connector lines: from under each expanded parent down to its
+        // children, with a horizontal stub into each child.
+        QPen line(QColor("#5D5D5D"));
+        line.setWidthF(1.2);
+        p.setPen(line);
+        for (int i = 0; i < m_model.size(); ++i) {
+            if (!m_model[i].isParent) continue;
+            const QRect pr = m_model[i].w->geometry();
+            const qreal x  = pr.left() + tree::trunkX();
+            qreal lastY = -1;
+            for (int j = i + 1; j < m_model.size() && !m_model[j].isParent; ++j) {
+                const QRect cr = m_model[j].w->geometry();
+                const qreal cy = cr.center().y();
+                // Child content is indented (cr.left() is the full-width row edge);
+                // the branch must reach toward the child's thumbnail, to the right.
+                const qreal childX = cr.left() + tree::indent() - Ui::px(6);
+                p.drawLine(QPointF(x, cy), QPointF(childX, cy));   // horizontal branch →
+                lastY = cy;
+            }
+            if (lastY > 0)
+                p.drawLine(QPointF(x, pr.bottom()), QPointF(x, lastY));   // vertical trunk ↓
+        }
+
+        // Add-child highlight (whole group)
+        if (m_addChildMedia >= 0) {
+            const QRect r = groupRect(m_addChildMedia);
+            if (r.isValid()) {
+                p.setPen(Qt::NoPen);
+                QColor c("#FD5A1F"); c.setAlpha(40);
+                p.setBrush(c);
+                p.drawRoundedRect(r.adjusted(1, 1, -1, -1), Ui::px(8), Ui::px(8));
+            }
+        }
+        // Reorder indicator line
+        if (m_indicatorY >= 0) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor("#FD5A1F"));
+            p.drawRoundedRect(QRectF(2, m_indicatorY - 1.5, width() - 4, 3), 1.5, 1.5);
+        }
     }
 
 private:
-    int rowCount() const
-    {
-        int n = 0;
-        for (int i = 0; i < m_layout->count(); ++i)
-            if (m_layout->itemAt(i)->widget()) ++n;
-        return n;
-    }
+    void clearDnd() { m_indicatorY = -1; m_addChildMedia = -1; update(); }
 
-    int insertIndexAt(const QPoint& pos) const
+    // Children insert index = number of child rows whose centre is above pos.y.
+    int childInsertIndexAt(const QPoint& pos) const
     {
         int idx = 0;
-        for (int i = 0; i < m_layout->count(); ++i) {
-            QWidget* w = m_layout->itemAt(i)->widget();
-            if (!w) continue;
-            if (pos.y() < w->geometry().center().y()) return idx;
+        for (const Row& r : m_model) {
+            if (r.isParent) continue;
+            if (pos.y() < r.w->geometry().center().y()) return idx;
             ++idx;
         }
         return idx;
     }
 
-    QWidget* rowWidgetAt(int index) const
+    int parentInsertIndexAt(const QPoint& pos) const
     {
         int idx = 0;
-        for (int i = 0; i < m_layout->count(); ++i) {
-            QWidget* w = m_layout->itemAt(i)->widget();
-            if (!w) continue;
-            if (idx == index) return w;
+        for (const Row& r : m_model) {
+            if (!r.isParent) continue;
+            if (pos.y() < r.w->geometry().center().y()) return idx;
             ++idx;
         }
-        return nullptr;
+        return idx;
     }
 
-    int indicatorYFor(int index) const
+    // If pos is over a parent's body (its row or the children beneath it, before
+    // the next parent), return that parent's mediaId; else -1.
+    int childZoneMediaAt(const QPoint& pos) const
     {
-        const int n = rowCount();
-        if (n == 0) return 2;
-        if (index >= n) {
-            QWidget* last = rowWidgetAt(n - 1);
-            return last ? last->geometry().bottom() + 3 : height() - 2;
+        int curMedia = -1; int curTop = 0;
+        for (int i = 0; i < m_model.size(); ++i) {
+            const QRect g = m_model[i].w->geometry();
+            if (m_model[i].isParent) {
+                // Reorder near the top edge of a parent header (a thin band).
+                if (pos.y() < g.top() + Ui::px(8)) return -1;
+                curMedia = m_model[i].mediaId;
+            }
+            curTop = g.bottom();
+            const bool last = (i + 1 >= m_model.size());
+            const int nextTop = last ? height() : m_model[i + 1].w->geometry().top();
+            if (pos.y() >= g.top() && pos.y() < nextTop) return curMedia;
         }
-        QWidget* w = rowWidgetAt(index);
-        return w ? qMax(2, w->geometry().top() - 3) : 0;
+        return curMedia;
     }
 
-    QVBoxLayout* m_layout      = nullptr;
-    int          m_indicatorY  = -1;
+    QRect groupRect(int mediaId) const
+    {
+        QRect r;
+        bool active = false;
+        for (int i = 0; i < m_model.size(); ++i) {
+            if (m_model[i].isParent) active = (m_model[i].mediaId == mediaId);
+            if (active && m_model[i].mediaId == mediaId)
+                r = r.isNull() ? m_model[i].w->geometry()
+                               : r.united(m_model[i].w->geometry());
+        }
+        return r;
+    }
+
+    int childIndicatorY(int childIdx) const
+    {
+        int seen = 0;
+        const Row* last = nullptr;
+        for (const Row& r : m_model) {
+            if (r.isParent) continue;
+            if (seen == childIdx) return qMax(2, r.w->geometry().top() - 3);
+            last = &r; ++seen;
+        }
+        return last ? last->w->geometry().bottom() + 3 : 2;
+    }
+
+    int parentIndicatorY(int parentIdx) const
+    {
+        int seen = 0;
+        const Row* last = nullptr;
+        for (const Row& r : m_model) {
+            if (!r.isParent) continue;
+            if (seen == parentIdx) return qMax(2, r.w->geometry().top() - 3);
+            last = &r; ++seen;
+        }
+        return last ? last->w->geometry().bottom() + 3 : 2;
+    }
+
+    QVBoxLayout*  m_layout       = nullptr;
+    QVector<Row>  m_model;
+    int           m_indicatorY   = -1;
+    int           m_addChildMedia = -1;
+};
+
+// ============================================================
+//  ParentRow — a source image (group header); not in the frame
+// ============================================================
+
+class ParentRow : public QFrame
+{
+public:
+    std::function<void()>               onSelected;
+    std::function<void(bool)>           onCollapse;       // collapsed?
+    std::function<void(bool)>           onGroupVisible;   // visible?
+    std::function<void()>               onAddChild;
+    std::function<void()>               onDuplicate;
+    std::function<void()>               onDelete;
+    std::function<void(const QString&)> onRenamed;
+
+    ParentRow(int mediaId, QWidget* parent = nullptr)
+        : QFrame(parent), m_mediaId(mediaId)
+    {
+        // Outer row is transparent; the bordered "box" wraps chevron+thumb+name
+        // and stops before the eye, which sits in a 70px gutter (like child rows).
+        setObjectName("parentRowOuter");
+        setCursor(Qt::PointingHandCursor);
+        setFixedHeight(Ui::px(52));
+
+        auto* hl = new QHBoxLayout(this);
+        hl->setContentsMargins(0, Ui::px(2), 0, Ui::px(2));
+        hl->setSpacing(0);
+
+        m_box = new QFrame(this);
+        m_box->setObjectName("parentRow");
+        auto* bl = new QHBoxLayout(m_box);
+        bl->setContentsMargins(Ui::px(6), Ui::px(4), Ui::px(12), Ui::px(4));
+        bl->setSpacing(Ui::px(6));
+
+        m_chevron = new ChevronButton(ChevronButton::Down);
+        m_chevron->setFixedSize(Ui::px(18), Ui::px(34));
+        m_chevron->setCursor(Qt::PointingHandCursor);
+        connect(m_chevron, &QPushButton::clicked, this, [this]() {
+            m_collapsed = !m_collapsed;
+            m_chevron->setDirection(m_collapsed ? ChevronButton::Right : ChevronButton::Down);
+            if (onCollapse) onCollapse(m_collapsed);
+        });
+        bl->addWidget(m_chevron);
+
+        m_thumb = new QLabel;
+        m_thumb->setFixedSize(Ui::px(42), Ui::px(30));
+        m_thumb->setAttribute(Qt::WA_TransparentForMouseEvents);
+        bl->addWidget(m_thumb);
+
+        m_name = new QLabel;
+        m_name->setObjectName("layerName");
+        m_name->setAttribute(Qt::WA_TransparentForMouseEvents);
+        bl->addWidget(m_name, 1);
+
+        m_nameEdit = new QLineEdit;
+        m_nameEdit->setObjectName("layerNameEdit");
+        m_nameEdit->setFrame(false);
+        m_nameEdit->setVisible(false);
+        m_nameEdit->setStyleSheet(QString(
+            "background:transparent; border:none; padding:0; margin:0; min-height:0;"
+            " color:#E3E3E3; font-size:%1px; font-weight:500;"
+            " selection-background-color:#FD5A1F;").arg(Ui::px(18)));
+        connect(m_nameEdit, &QLineEdit::editingFinished, this, [this]() { finishRename(); });
+        bl->addWidget(m_nameEdit, 1);
+
+        hl->addWidget(m_box, 1);
+
+        m_eye = new QPushButton;
+        m_eye->setObjectName("eyeBtn");
+        m_eye->setFixedSize(Ui::px(30), Ui::px(30));
+        m_eye->setCursor(Qt::PointingHandCursor);
+        m_eye->setIconSize(QSize(Ui::px(20), Ui::px(20)));
+        auto* eyeWrap = new QWidget(this);
+        eyeWrap->setFixedWidth(Ui::px(70));
+        auto* ew = new QHBoxLayout(eyeWrap);
+        ew->setContentsMargins(0, 0, 0, 0);
+        ew->addWidget(m_eye, 0, Qt::AlignCenter);
+        hl->addWidget(eyeWrap);
+        connect(m_eye, &QPushButton::clicked, this, [this]() {
+            setGroupVisible(!m_visible);
+            if (onGroupVisible) onGroupVisible(m_visible);
+        });
+    }
+
+    int  mediaId() const { return m_mediaId; }
+    void setThumb(const QPixmap& px) { m_thumb->setPixmap(px); }
+    void setName(const QString& n)   { m_name->setText(n); }
+    void setCollapsed(bool c)
+    {
+        m_collapsed = c;
+        m_chevron->setDirection(c ? ChevronButton::Right : ChevronButton::Down);
+    }
+    void setGroupVisible(bool on)
+    {
+        m_visible = on;
+        m_eye->setIcon(QIcon(on ? ":/icons/eye_open.svg" : ":/icons/eye_closed.svg"));
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent* e) override
+    {
+        if (e->button() == Qt::LeftButton && !m_editing) {
+            m_pressPos = e->pos();
+            if (onSelected) onSelected();
+        }
+        QFrame::mousePressEvent(e);
+    }
+    void mouseMoveEvent(QMouseEvent* e) override
+    {
+        if (m_editing) return;
+        if (!(e->buttons() & Qt::LeftButton)) return;
+        if ((e->pos() - m_pressPos).manhattanLength() < QApplication::startDragDistance())
+            return;
+        auto* mime = new QMimeData;
+        mime->setData(kParentMime, QByteArray::number(m_mediaId));
+        auto* drag = new QDrag(this);
+        drag->setMimeData(mime);
+        drag->setPixmap(grab());
+        drag->setHotSpot(m_pressPos);
+        drag->exec(Qt::MoveAction);
+    }
+    void mouseDoubleClickEvent(QMouseEvent* e) override
+    {
+        if (e->button() == Qt::LeftButton && m_box->geometry().contains(e->pos())) {
+            beginRename();
+            e->accept();
+            return;
+        }
+        QFrame::mouseDoubleClickEvent(e);
+    }
+    void contextMenuEvent(QContextMenuEvent* e) override
+    {
+        QMenu menu(this);
+        QAction* add = menu.addAction("Add child (in frame)");
+        QAction* ren = menu.addAction("Rename");
+        QAction* dup = menu.addAction("Duplicate image");
+        menu.addSeparator();
+        QAction* del = menu.addAction("Delete image");
+        QAction* chosen = menu.exec(e->globalPos());
+        if      (chosen == add && onAddChild)  onAddChild();
+        else if (chosen == ren)                beginRename();
+        else if (chosen == dup && onDuplicate) onDuplicate();
+        else if (chosen == del && onDelete)    onDelete();
+    }
+
+private:
+    void beginRename()
+    {
+        if (m_editing) return;
+        m_editing = true;
+        m_nameEdit->setText(m_name->text());
+        m_name->hide();
+        m_nameEdit->show();
+        m_nameEdit->setFocus(Qt::MouseFocusReason);
+        m_nameEdit->selectAll();
+    }
+    void finishRename()
+    {
+        if (!m_editing) return;
+        m_editing = false;
+        const QString text = m_nameEdit->text().trimmed();
+        if (!text.isEmpty() && text != m_name->text()) {
+            setName(text);
+            if (onRenamed) onRenamed(text);
+        }
+        m_nameEdit->hide();
+        m_name->show();
+    }
+
+    int            m_mediaId;
+    bool           m_collapsed = false;
+    bool           m_visible   = true;
+    bool           m_editing   = false;
+    QFrame*        m_box       = nullptr;
+    ChevronButton* m_chevron   = nullptr;
+    QLabel*        m_thumb     = nullptr;
+    QLabel*        m_name      = nullptr;
+    QLineEdit*     m_nameEdit  = nullptr;
+    QPushButton*   m_eye       = nullptr;
+    QPoint         m_pressPos;
 };
 
 // ============================================================
@@ -475,7 +778,9 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         m_rowsScroll = scroll;
 
         m_rowsArea = new RowsArea;
-        m_rowsArea->onReorder = [this](int id, int idx) { emit reorderRequested(id, idx); };
+        m_rowsArea->onChildReorder  = [this](int id,  int idx) { emit reorderRequested(id, idx); };
+        m_rowsArea->onParentReorder = [this](int mid, int idx) { emit parentReordered(mid, idx); };
+        m_rowsArea->onAddChild      = [this](int mid)          { emit addChildRequested(mid); };
         // Left margin aligns the thumbnail with the section titles (40px); the
         // row's own 70px eye gutter sits flush against the right content edge.
         m_rowsArea->rowsLayout()->setContentsMargins(Ui::px(32), Ui::px(14), 0, Ui::px(2));
@@ -527,7 +832,9 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         vl->addWidget(m_headerWidget);
 
         m_rowsArea = new RowsArea;
-        m_rowsArea->onReorder = [this](int id, int idx) { emit reorderRequested(id, idx); };
+        m_rowsArea->onChildReorder  = [this](int id,  int idx) { emit reorderRequested(id, idx); };
+        m_rowsArea->onParentReorder = [this](int mid, int idx) { emit parentReordered(mid, idx); };
+        m_rowsArea->onAddChild      = [this](int mid)          { emit addChildRequested(mid); };
         vl->addWidget(m_rowsArea);
 
         auto* footer = new QHBoxLayout;
@@ -599,8 +906,23 @@ void LayersPanel::setExpandedUi(bool expanded)
     }
 }
 
+void LayersPanel::setTree(const std::vector<ParentGroup>& parents,
+                          const std::vector<Layer>& layers, int activeId,
+                          const QHash<int, QImage>& mediaImages)
+{
+    m_parents     = parents;
+    m_layers      = layers;
+    m_activeId    = activeId;
+    m_mediaImages = mediaImages;
+    refreshRows();
+    syncFooter();
+    reposition();
+}
+
 void LayersPanel::setLayers(const std::vector<Layer>& layers, int activeId)
 {
+    m_parents.clear();
+    m_mediaImages.clear();
     m_layers   = layers;
     m_activeId = activeId;
     refreshRows();
@@ -608,29 +930,36 @@ void LayersPanel::setLayers(const std::vector<Layer>& layers, int activeId)
     reposition();
 }
 
-// Refresh the row thumbs/state in place when the layer set is structurally the
-// same; only rebuild widgets when layers were added/removed/reordered. Keeping
-// the widgets alive avoids killing a row mid-gesture and prevents the paint
-// artifacts from churning widgets on every frame-dimension tick.
+// A signature of the tree's structure (groups, order, collapse, child ids). When
+// it's unchanged we update thumbs/state in place; otherwise we rebuild widgets.
+// Rebuilding only on structural change avoids killing a row mid-gesture and
+// stops paint churn on the periodic live-thumb refresh.
+static QString treeSignature(const std::vector<ParentGroup>& parents,
+                             const std::vector<Layer>& layers)
+{
+    QString s;
+    for (const auto& p : parents)
+        s += QString("P%1%2;").arg(p.mediaId).arg(p.collapsed ? 'c' : 'o');
+    for (const auto& l : layers)
+        s += QString("L%1@%2;").arg(l.id).arg(l.mediaId);
+    return s;
+}
+
 void LayersPanel::refreshRows()
 {
-    bool sameStructure = (int(m_rows.size()) == int(m_layers.size()));
-    for (int i = 0; sameStructure && i < int(m_layers.size()); ++i)
-        if (m_rows[i]->layerId() != m_layers[i].id) sameStructure = false;
-
-    if (sameStructure)
+    const QString sig = treeSignature(m_parents, m_layers);
+    if (sig == m_treeSig && !m_rows.isEmpty())
         updateRowsInPlace();
-    else
-        rebuildRows();
+    else { m_treeSig = sig; buildTree(); }
 }
 
 void LayersPanel::setSourceImage(const QImage& source)
 {
-    // Small working copy: row thumbs apply per-layer adjustments to it.
+    // Legacy single-source fallback (used when no per-media images are supplied).
     m_smallSource = source.isNull()
         ? QImage()
-        : source.scaled(92, 64, Qt::KeepAspectRatioByExpanding,
-                        Qt::SmoothTransformation);
+        : source.scaled(92, 64, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    m_treeSig.clear();   // force rebuild so thumbs refresh
     refreshRows();
     syncFooter();
     reposition();
@@ -638,64 +967,107 @@ void LayersPanel::setSourceImage(const QImage& source)
 
 void LayersPanel::setBackground(const QColor& background, float opacity)
 {
+    // Store only — the following setTree() re-renders thumbs (in place) with it.
     m_background = background;
     m_bgOpacity = opacity;
-    refreshRows();
-    syncFooter();
-    reposition();
 }
 
 QPixmap LayersPanel::thumbFor(const Layer& layer) const
 {
-    const QImage ref = m_smallSource.isNull()
-        ? QImage()
-        : RenderWorker::renderLayer(m_smallSource, layer);
-    return roundedThumb(ref, QSize(Ui::px(46), Ui::px(32)), Ui::px(5), m_background, m_bgOpacity);
+    QImage src = m_mediaImages.value(layer.mediaId);
+    if (src.isNull()) src = m_smallSource;
+    const QImage ref = src.isNull() ? QImage() : RenderWorker::renderLayer(src, layer);
+    return roundedThumb(ref, QSize(Ui::px(44), Ui::px(30)), Ui::px(5), m_background, m_bgOpacity);
 }
 
-void LayersPanel::rebuildRows()
+QPixmap LayersPanel::parentThumb(int mediaId) const
 {
-    // Clear the whole layout (rows + any trailing stretch).
+    return roundedThumb(m_mediaImages.value(mediaId), QSize(Ui::px(42), Ui::px(30)),
+                        Ui::px(5), m_background, m_bgOpacity);
+}
+
+void LayersPanel::buildTree()
+{
     QVBoxLayout* lay = m_rowsArea->rowsLayout();
     while (QLayoutItem* it = lay->takeAt(0)) {
         if (QWidget* w = it->widget()) { w->hide(); w->deleteLater(); }
         delete it;
     }
     m_rows.clear();
+    m_parentRows.clear();
+    QVector<RowsArea::Row> model;
 
-    for (const Layer& layer : m_layers) {
+    auto addChildRow = [&](const Layer& layer) {
         auto* row = new LayerRow(layer.id);
         row->setName(layer.name);
         row->setThumb(thumbFor(layer));
         row->setLayerVisible(layer.visible);
         row->setSelected(layer.id == m_activeId);
-
+        row->setIndent(tree::indent());
         const int id = layer.id;
-        row->setDeletable(layer.kind != LayerKind::Original);
-        row->onSelected   = [this, id]()               { emit layerSelected(id); };
-        row->onEyeToggled = [this, id](bool on)        { emit visibilityToggled(id, on); };
-        row->onRenamed    = [this, id](const QString& name) { emit layerRenamed(id, name); };
-        row->onDeleteRequested = [this, id]()          { emit deleteRequested(id); };
-
-        m_rowsArea->rowsLayout()->addWidget(row);
+        row->onSelected        = [this, id]()                { emit layerSelected(id); };
+        row->onEyeToggled      = [this, id](bool on)         { emit visibilityToggled(id, on); };
+        row->onRenamed         = [this, id](const QString& n){ emit layerRenamed(id, n); };
+        row->onDeleteRequested = [this, id]()                { emit deleteRequested(id); };
+        lay->addWidget(row);
         m_rows.append(row);
+        model.push_back({ row, false, layer.mediaId, id });
+    };
+
+    if (m_parents.empty()) {
+        // Legacy flat list (no groups supplied).
+        for (const Layer& l : m_layers) addChildRow(l);
+    } else {
+        for (const ParentGroup& g : m_parents) {
+            auto* prow = new ParentRow(g.mediaId);
+            prow->setName(g.name);
+            prow->setThumb(parentThumb(g.mediaId));
+            prow->setCollapsed(g.collapsed);
+            prow->setGroupVisible(g.groupVisible);
+            const int mid = g.mediaId;
+            prow->onCollapse     = [this, mid](bool c)  { emit collapseToggled(mid, c); };
+            prow->onGroupVisible = [this, mid](bool v)  { emit groupVisibilityToggled(mid, v); };
+            prow->onAddChild     = [this, mid]()        { emit addChildRequested(mid); };
+            prow->onDuplicate    = [this, mid]()        { emit duplicateParentRequested(mid); };
+            prow->onDelete       = [this, mid]()        { emit deleteParentRequested(mid); };
+            prow->onRenamed      = [this, mid](const QString& n) { emit parentRenamed(mid, n); };
+            lay->addWidget(prow);
+            m_parentRows.append(prow);
+            model.push_back({ prow, true, mid, -1 });
+
+            if (!g.collapsed)
+                for (const Layer& l : m_layers)
+                    if (l.mediaId == g.mediaId) addChildRow(l);
+        }
     }
 
-    // Anchor rows to the top so the first layers sit together near the header
-    // and new ones stack above, pushing the list down (then scroll).
-    if (m_embedded)
-        m_rowsArea->rowsLayout()->addStretch(1);
+    if (m_embedded) lay->addStretch(1);
+    m_rowsArea->setModel(model);
 }
 
 void LayersPanel::updateRowsInPlace()
 {
-    for (int i = 0; i < int(m_layers.size()); ++i) {
-        const Layer& layer = m_layers[i];
-        LayerRow* row = m_rows[i];
+    int ci = 0;
+    auto updateChild = [&](const Layer& layer) {
+        if (ci >= m_rows.size()) return;
+        LayerRow* row = m_rows[ci++];
         row->setName(layer.name);
         row->setThumb(thumbFor(layer));
         row->setLayerVisible(layer.visible);
         row->setSelected(layer.id == m_activeId);
+    };
+    if (m_parents.empty()) {
+        for (const Layer& l : m_layers) updateChild(l);
+    } else {
+        for (const ParentGroup& g : m_parents)
+            if (!g.collapsed)
+                for (const Layer& l : m_layers)
+                    if (l.mediaId == g.mediaId) updateChild(l);
+    }
+    for (int i = 0; i < m_parentRows.size() && i < int(m_parents.size()); ++i) {
+        m_parentRows[i]->setName(m_parents[i].name);
+        m_parentRows[i]->setThumb(parentThumb(m_parents[i].mediaId));
+        m_parentRows[i]->setGroupVisible(m_parents[i].groupVisible);
     }
 }
 

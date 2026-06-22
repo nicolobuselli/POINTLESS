@@ -480,11 +480,31 @@ inline std::vector<Layer> defaultLayers()
 }
 
 // ============================================================
+//  Parent groups (cascade): a parent is a source image (a media
+//  entry) that does NOT itself appear in the frame. Its children
+//  are the rendering Layers whose mediaId == this group's mediaId.
+//  Order in SessionParams::parents = top→bottom group order.
+// ============================================================
+
+struct ParentGroup {
+    int     mediaId      = -1;
+    QString name;
+    bool    collapsed    = false;   // children hidden in the panel (UI only)
+    bool    groupVisible = true;    // master visibility for all children in the frame
+};
+inline bool operator==(const ParentGroup& a, const ParentGroup& b) {
+    return a.mediaId == b.mediaId && a.name == b.name
+        && a.collapsed == b.collapsed && a.groupVisible == b.groupVisible;
+}
+inline bool operator!=(const ParentGroup& a, const ParentGroup& b) { return !(a == b); }
+
+// ============================================================
 //  Whole document state (used for rendering and undo/redo)
 // ============================================================
 
 struct SessionParams {
-    std::vector<Layer> layers = defaultLayers();   // UI order: 0 = top
+    std::vector<Layer>       layers  = defaultLayers();   // children, UI order: 0 = top
+    std::vector<ParentGroup> parents;                     // source groups, top→bottom
     int                activeLayerId = 2;          // layer edited by the panels
     int                nextLayerId   = 3;          // id counter for new layers
 
@@ -495,10 +515,16 @@ struct SessionParams {
     int    frameH = 1080;
 };
 
+inline int findParentByMedia(const std::vector<ParentGroup>& parents, int mediaId) {
+    for (int i = 0; i < int(parents.size()); ++i)
+        if (parents[i].mediaId == mediaId) return i;
+    return -1;
+}
+
 // activeLayerId is deliberately ignored: selection alone is not an
 // undoable change.
 inline bool operator==(const SessionParams& a, const SessionParams& b) {
-    return a.layers == b.layers && a.nextLayerId == b.nextLayerId
+    return a.layers == b.layers && a.parents == b.parents && a.nextLayerId == b.nextLayerId
         && a.background == b.background && a.backgroundOpacity == b.backgroundOpacity
         && a.frameW == b.frameW && a.frameH == b.frameH;
 }

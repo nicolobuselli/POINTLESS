@@ -330,8 +330,9 @@ ControlsPanel::ControlsPanel(QWidget* parent)
     split->addWidget(paramsPane);
     split->setStretchFactor(0, 0);
     split->setStretchFactor(1, 1);
-    // Default: Layers shows ~4 rows, Transform + Parameters take the rest.
-    split->setSizes({ Ui::px(4 * 52 + 3 * 6 + 58), Ui::px(900) });
+    // Default: Layers gets generous room (~7 rows incl. parent groups), pushing
+    // Transform lower; the user can still drag the divider.
+    split->setSizes({ Ui::px(7 * 52 + 6 * 6 + 90), Ui::px(760) });
     outer->addWidget(split, 1);
 }
 

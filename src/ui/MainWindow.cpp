@@ -27,6 +27,7 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QTemporaryDir>
+#include <algorithm>
 
 namespace {
 constexpr int kMaxUndoSteps   = 100;
@@ -215,6 +216,13 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_layersPanel, &LayersPanel::blendModeChanged,  this, &MainWindow::onLayerBlendChanged);
     connect(m_layersPanel, &LayersPanel::addLayerRequested, this, &MainWindow::onAddLayerRequested);
     connect(m_layersPanel, &LayersPanel::reorderRequested,  this, &MainWindow::onLayerReordered);
+    connect(m_layersPanel, &LayersPanel::addChildRequested,       this, &MainWindow::onAddChildRequested);
+    connect(m_layersPanel, &LayersPanel::parentReordered,         this, &MainWindow::onParentReordered);
+    connect(m_layersPanel, &LayersPanel::groupVisibilityToggled,  this, &MainWindow::onGroupVisibilityToggled);
+    connect(m_layersPanel, &LayersPanel::collapseToggled,         this, &MainWindow::onCollapseToggled);
+    connect(m_layersPanel, &LayersPanel::duplicateParentRequested,this, &MainWindow::onDuplicateParentRequested);
+    connect(m_layersPanel, &LayersPanel::deleteParentRequested,   this, &MainWindow::onDeleteParentRequested);
+    connect(m_layersPanel, &LayersPanel::parentRenamed,           this, &MainWindow::onParentRenamed);
 
     connect(m_worker, &RenderWorker::renderComplete, this, &MainWindow::onRenderComplete);
     connect(m_worker, &RenderWorker::renderStarted, this, [this](bool isPreview) {
@@ -416,6 +424,81 @@ const Layer* MainWindow::activeLayer() const
     return (idx >= 0) ? &st.layers[idx] : nullptr;
 }
 
+// ── Cascade helpers ─────────────────────────────────────────────────────────
+
+int MainWindow::addParentMedia(SessionImage& board, const MediaClip& clip)
+{
+    const int mid = board.nextMediaId++;
+    board.media.insert(mid, clip);
+    ParentGroup g;
+    g.mediaId = mid;
+    g.name    = clip.name;
+    board.state.parents.push_back(g);
+    return mid;
+}
+
+Layer MainWindow::makeChildLayer(SessionParams& st, int mediaId, LayerKind kind,
+                                 QSize native) const
+{
+    Layer l;
+    l.id      = st.nextLayerId++;
+    l.kind    = kind;
+    l.mediaId = mediaId;
+    l.name    = uniqueLayerName(st, kind);
+    l.visible = true;
+    l.pinned  = true;          // user-created children persist across mode switches
+    if (native.isValid() && native.width() > 0 && native.height() > 0)
+        l.transform = fitTransform(native.width(), native.height(), st.frameW, st.frameH);
+    return l;
+}
+
+// Keep children grouped by their parent's order (stable within a group), so the
+// composite/tree order stays "all of parents[0]'s children, then parents[1]'s…".
+void MainWindow::regroupLayers(SessionParams& st) const
+{
+    std::stable_sort(st.layers.begin(), st.layers.end(),
+        [&st](const Layer& a, const Layer& b) {
+            return findParentByMedia(st.parents, a.mediaId)
+                 < findParentByMedia(st.parents, b.mediaId);
+        });
+}
+
+void MainWindow::syncBoardSource(SessionImage& board) const
+{
+    if (board.state.parents.empty()) { board.source = QImage(); board.frames.clear(); return; }
+    const auto it = board.media.find(board.state.parents.front().mediaId);
+    if (it != board.media.end()) { board.source = it->image; board.frames = it->frames; }
+}
+
+bool MainWindow::groupVisibleFor(const SessionParams& st, int mediaId) const
+{
+    const int pi = findParentByMedia(st.parents, mediaId);
+    return pi < 0 ? true : st.parents[pi].groupVisible;
+}
+
+// A child only appears in the frame if it's visible AND its parent group is.
+SessionParams MainWindow::bakeGroupVisibility(SessionParams p) const
+{
+    for (Layer& l : p.layers)
+        if (!groupVisibleFor(p, l.mediaId)) l.visible = false;
+    return p;
+}
+
+void MainWindow::commitStructuralChange()
+{
+    if (m_current < 0) return;
+    m_playCacheValid = false;
+    auto& st = m_images[m_current].state;
+    regroupLayers(st);
+    if (findLayerById(st.layers, st.activeLayerId) < 0)
+        st.activeLayerId = st.layers.empty() ? -1 : st.layers.front().id;
+    syncBoardSource(m_images[m_current]);
+    applyParams(st);
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
+}
+
 // Panels → state: writes the panel values into the active layer.
 SessionParams MainWindow::collectParams() const
 {
@@ -464,11 +547,22 @@ void MainWindow::applyParams(const SessionParams& p)
 void MainWindow::syncLayersPanel()
 {
     if (m_current < 0) return;
-    auto& st = m_images[m_current].state;
+    SessionImage& board = m_images[m_current];
+    auto& st = board.state;
     if (findLayerById(st.layers, st.activeLayerId) < 0 && !st.layers.empty())
         st.activeLayerId = st.layers[0].id;
+
+    // Small source per media for parent + child thumbnails.
+    QHash<int, QImage> mediaImages;
+    for (const ParentGroup& g : st.parents) {
+        const auto it = board.media.find(g.mediaId);
+        if (it == board.media.end() || it->image.isNull()) continue;
+        mediaImages.insert(g.mediaId,
+            it->image.scaled(92, 64, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+    }
+
     m_layersPanel->setBackground(st.background, st.backgroundOpacity);
-    m_layersPanel->setLayers(st.layers, st.activeLayerId);
+    m_layersPanel->setTree(st.parents, st.layers, st.activeLayerId, mediaImages);
 }
 
 void MainWindow::onParamsChanged()
@@ -603,9 +697,9 @@ bool MainWindow::buildPlayCache()
         QImage src = img.source;
         if (!img.frames.isEmpty())
             src = img.frames[qBound(0, frame - f0, img.frames.size() - 1)];
-        const SessionParams p = img.anim.hasAnimation()
+        const SessionParams p = bakeGroupVisibility(img.anim.hasAnimation()
             ? paramsAtFrame(img.state, img.anim, frame)
-            : img.state;
+            : img.state);
         m_playCache.append(RenderWorker::renderPreview(src, p, RenderWorker::FAST_MAX_PX,
                                                        layerSourcesAt(img, frame)));
     }
@@ -668,27 +762,21 @@ void MainWindow::onModeSelected(RenderMode m)
     auto& st = m_images[m_current].state;
     const LayerKind kind = layerKindForMode(m);
 
-    const Layer* act = activeLayer();
-    if (act && act->kind == kind) {
-        applyParams(st);   // restore tab checked state
-        return;
-    }
+    // The mode tabs change the ACTIVE child's treatment in place, keeping its
+    // parent (mediaId), transform and adjustments. The layer carries a settings
+    // struct for every kind, so switching just picks which one renders.
+    Layer* act = activeLayer();
+    if (!act) return;
+    if (act->kind == kind) { applyParams(st); return; }
 
-    // Topmost existing layer of that kind, or a brand new one.
-    int idx = -1;
-    for (int i = 0; i < int(st.layers.size()); ++i)
-        if (st.layers[i].kind == kind) { idx = i; break; }
+    const bool wasAutoName = (act->name == layerKindName(act->kind));
+    act->kind = kind;
+    if (wasAutoName) act->name = uniqueLayerName(st, kind);
 
-    if (idx < 0) {
-        Layer nl;
-        nl.kind = kind;
-        nl.id   = st.nextLayerId++;
-        nl.name = uniqueLayerName(st, kind);
-        st.layers.insert(st.layers.begin(), nl);
-        idx = 0;
-    }
-
-    selectLayerInternal(st.layers[idx].id, true);
+    applyParams(st);
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
 }
 
 void MainWindow::onLayerVisibilityToggled(int layerId, bool visible)
@@ -730,19 +818,15 @@ void MainWindow::onLayerDeleteRequested(int layerId)
     auto& st = m_images[m_current].state;
 
     const int idx = findLayerById(st.layers, layerId);
-    if (idx < 0 || st.layers[idx].kind == LayerKind::Original) return;
+    if (idx < 0) return;
 
+    // Deleting a child leaves its parent group in place (a parent with no
+    // children is just a source not currently in the frame).
     const bool wasActive = (st.activeLayerId == layerId);
     st.layers.erase(st.layers.begin() + idx);
 
-    if (wasActive && !st.layers.empty()) {
-        // Follow the topmost remaining mode layer; fall back to the top.
-        int ni = 0;
-        for (int i = 0; i < int(st.layers.size()); ++i)
-            if (st.layers[i].kind != LayerKind::Original) { ni = i; break; }
-        selectLayerInternal(st.layers[ni].id, true);
-        return;
-    }
+    if (wasActive && !st.layers.empty())
+        selectLayerInternal(st.layers[qMin(idx, int(st.layers.size()) - 1)].id, true);
 
     syncLayersPanel();
     scheduleRender();
@@ -809,21 +893,18 @@ void MainWindow::onAddLayerRequested()
     auto& st = m_images[m_current].state;
 
     const Layer* act = activeLayer();
-    Layer nl;
-    int insertAt = 0;
-    if (act && act->kind != LayerKind::Original) {
-        nl = *act;   // duplicate the selected layer, settings included
-        insertAt = findLayerById(st.layers, act->id);
-    } else {
-        nl.kind = layerKindForMode(m_right->mode());
-    }
+    if (!act) return;                 // need a parent to attach the new child to
+
+    Layer nl = *act;                  // duplicate the active child (settings + parent)
     nl.id      = st.nextLayerId++;
     nl.name    = uniqueLayerName(st, nl.kind);
     nl.visible = true;
-    nl.pinned  = false;
+    nl.pinned  = true;
 
+    const int insertAt = findLayerById(st.layers, act->id);
     st.layers.insert(st.layers.begin() + qMax(0, insertAt), nl);
     st.activeLayerId = nl.id;
+    regroupLayers(st);
 
     applyParams(st);
     syncLayersPanel();
@@ -844,10 +925,136 @@ void MainWindow::onLayerReordered(int layerId, int insertIndex)
     if (insertIndex > from) --insertIndex;
     insertIndex = qBound(0, insertIndex, int(layers.size()));
     layers.insert(layers.begin() + insertIndex, moved);
+    regroupLayers(m_images[m_current].state);   // keep composite order == tree order
 
     syncLayersPanel();
     scheduleRender();
     m_undoTimer.start();
+}
+
+// ── Cascade operations (driven by the layer tree) ───────────────────────────
+
+void MainWindow::onAddChildRequested(int mediaId)
+{
+    if (m_current < 0) return;
+    SessionImage& board = m_images[m_current];
+    auto& st = board.state;
+    if (findParentByMedia(st.parents, mediaId) < 0) return;
+
+    QSize native;
+    const auto it = board.media.find(mediaId);
+    if (it != board.media.end()) native = it->image.size();
+
+    // New children start as Original (raw); the user picks a mode after.
+    Layer child = makeChildLayer(st, mediaId, layerKindForMode(m_right->mode()), native);
+    st.layers.insert(st.layers.begin(), child);
+    st.activeLayerId = child.id;
+    commitStructuralChange();
+}
+
+void MainWindow::onParentReordered(int mediaId, int insertIndex)
+{
+    if (m_current < 0) return;
+    auto& parents = m_images[m_current].state.parents;
+    const int from = findParentByMedia(parents, mediaId);
+    if (from < 0) return;
+
+    const ParentGroup g = parents[from];
+    parents.erase(parents.begin() + from);
+    if (insertIndex > from) --insertIndex;
+    insertIndex = qBound(0, insertIndex, int(parents.size()));
+    parents.insert(parents.begin() + insertIndex, g);
+    commitStructuralChange();
+}
+
+void MainWindow::onGroupVisibilityToggled(int mediaId, bool visible)
+{
+    if (m_current < 0) return;
+    auto& parents = m_images[m_current].state.parents;
+    const int pi = findParentByMedia(parents, mediaId);
+    if (pi < 0) return;
+    parents[pi].groupVisible = visible;
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+void MainWindow::onCollapseToggled(int mediaId, bool collapsed)
+{
+    if (m_current < 0) return;
+    auto& parents = m_images[m_current].state.parents;
+    const int pi = findParentByMedia(parents, mediaId);
+    if (pi < 0) return;
+    parents[pi].collapsed = collapsed;
+    syncLayersPanel();   // UI only — no render
+}
+
+void MainWindow::onParentRenamed(int mediaId, const QString& name)
+{
+    if (m_current < 0) return;
+    auto& parents = m_images[m_current].state.parents;
+    const int pi = findParentByMedia(parents, mediaId);
+    if (pi < 0) return;
+    parents[pi].name = name;
+    syncLayersPanel();
+    m_undoTimer.start();
+}
+
+void MainWindow::onDuplicateParentRequested(int mediaId)
+{
+    if (m_current < 0) return;
+    SessionImage& board = m_images[m_current];
+    auto& st = board.state;
+    const int pi = findParentByMedia(st.parents, mediaId);
+    const auto mit = board.media.find(mediaId);
+    if (pi < 0 || mit == board.media.end()) return;
+
+    const int newMid = board.nextMediaId++;
+    board.media.insert(newMid, mit.value());           // implicitly shares pixels
+    ParentGroup g = st.parents[pi];
+    g.mediaId = newMid;
+    g.name    = g.name + " copy";
+    st.parents.insert(st.parents.begin() + pi + 1, g);
+
+    // Copy this parent's children onto the new group (new ids, same settings).
+    std::vector<Layer> copies;
+    for (const Layer& l : st.layers)
+        if (l.mediaId == mediaId) {
+            Layer c = l;
+            c.id      = st.nextLayerId++;
+            c.mediaId = newMid;
+            copies.push_back(c);
+        }
+    for (const Layer& c : copies) st.layers.push_back(c);
+    if (!copies.empty()) st.activeLayerId = copies.front().id;
+    commitStructuralChange();
+}
+
+void MainWindow::onDeleteParentRequested(int mediaId)
+{
+    if (m_current < 0) return;
+    SessionImage& board = m_images[m_current];
+    auto& st = board.state;
+    const int pi = findParentByMedia(st.parents, mediaId);
+    if (pi < 0) return;
+
+    st.layers.erase(std::remove_if(st.layers.begin(), st.layers.end(),
+                    [mediaId](const Layer& l){ return l.mediaId == mediaId; }),
+                    st.layers.end());
+    st.parents.erase(st.parents.begin() + pi);
+    board.media.remove(mediaId);
+
+    if (st.parents.empty()) {
+        // Last image gone → drop this board; land on another or the empty prompt.
+        const int idx = m_current;
+        m_filmstrip->removeThumb(idx);
+        m_images.removeAt(idx);
+        if (m_images.isEmpty()) switchToImage(-1);
+        else                    switchToImage(qMin(idx, m_images.size() - 1));
+        m_undoTimer.start();
+        return;
+    }
+    commitStructuralChange();
 }
 
 void MainWindow::scheduleRender(bool previewOnly)
@@ -869,10 +1076,11 @@ void MainWindow::scheduleRender(bool previewOnly)
         source = img.frames[fi];
     }
 
-    // Parameters: bake the animation at the current playhead.
-    const SessionParams params = img.anim.hasAnimation()
+    // Parameters: bake the animation at the current playhead, then fold each
+    // parent group's master visibility into its children.
+    const SessionParams params = bakeGroupVisibility(img.anim.hasAnimation()
         ? paramsAtFrame(img.state, img.anim, img.anim.playhead)
-        : img.state;
+        : img.state);
 
     // Render the live preview at the size it's actually shown on screen, so the
     // fast pass already matches the (downscaled) final — no jarring quality jump.
@@ -1044,64 +1252,55 @@ void MainWindow::addImages(const QStringList& paths)
         return true;
     };
 
-    bool appended = false;
+    bool changed = false;
+    bool createdBoard = false;
     for (const QString& path : paths) {
         MediaClip clip;
         if (!loadClip(path, clip)) continue;
 
-        if (m_images.isEmpty()) {
-            // First media defines the board: base source + default treatment layers.
+        // Every image is uniform: a parent (source, not in the frame) with one
+        // default child (Original/raw, so it shows immediately). Drop more images
+        // → more parents on the SAME board, composited together.
+        if (m_current < 0) {
             SessionImage si;
-            si.name   = clip.name;
-            si.source = clip.image;
-            si.frames = clip.frames;
-            si.state  = SessionParams{};   // frame defaults to 1080×1080
-            // Fit the imported image into the frame (contain), centred.
-            const LayerTransform ft = fitTransform(si.source.width(), si.source.height(),
-                                                   si.state.frameW, si.state.frameH);
-            for (Layer& l : si.state.layers) l.transform = ft;
-            if (!clip.frames.isEmpty()) {
-                si.anim.frameStart = 0;
-                si.anim.frameEnd   = clip.frames.size() - 1;
-                si.anim.fps        = qBound(1, qRound(clip.fps), 240);
-            }
+            si.name = clip.name;
+            si.state = SessionParams{};
+            si.state.layers.clear();        // children added below
+            si.state.parents.clear();
             si.undoStack.append({ si.state, si.anim });
             si.undoIndex = 0;
             m_images.append(si);
-            m_filmstrip->addThumb(si.source, si.name);
-            switchToImage(0);
-        } else {
-            // Additional media → a new layer on the board (composited on top).
-            SessionImage& board = m_images[0];
-            const int mid = board.nextMediaId++;
-            board.media.insert(mid, clip);
-
-            Layer nl;
-            nl.id        = board.state.nextLayerId++;
-            nl.kind      = LayerKind::Original;
-            nl.name      = clip.name;
-            nl.mediaId   = mid;
-            nl.visible   = true;
-            nl.transform = fitTransform(clip.image.width(), clip.image.height(),
-                                        board.state.frameW, board.state.frameH);
-            board.state.layers.insert(board.state.layers.begin(), nl);
-            board.state.activeLayerId = nl.id;
-
-            if (!clip.frames.isEmpty() && board.anim.frameEnd <= 1) {
-                board.anim.frameStart = 0;
-                board.anim.frameEnd   = clip.frames.size() - 1;
-                board.anim.fps        = qBound(1, qRound(clip.fps), 240);
-            }
-            appended = true;
+            m_filmstrip->addThumb(clip.image, clip.name);
+            m_current   = m_images.size() - 1;
+            createdBoard = true;
         }
+
+        SessionImage& board = m_images[m_current];
+        const int mid   = addParentMedia(board, clip);
+        Layer     child = makeChildLayer(board.state, mid, layerKindForMode(m_right->mode()), clip.image.size());
+        board.state.layers.insert(board.state.layers.begin(), child);   // new group on top
+        regroupLayers(board.state);
+        board.state.activeLayerId = child.id;
+        syncBoardSource(board);
+
+        if (!clip.frames.isEmpty() && board.anim.frameEnd <= 1) {
+            board.anim.frameStart = 0;
+            board.anim.frameEnd   = clip.frames.size() - 1;
+            board.anim.fps        = qBound(1, qRound(clip.fps), 240);
+        }
+        changed = true;
     }
 
-    if (appended) {
+    if (changed) {
         m_playCacheValid = false;
-        applyParams(m_images[0].state);
-        syncLayersPanel();
-        syncTimeline();
-        scheduleRender();
+        if (createdBoard) {
+            switchToImage(m_current);   // full init of panels/preview/timeline
+        } else {
+            applyParams(m_images[m_current].state);
+            syncLayersPanel();
+            syncTimeline();
+            scheduleRender();
+        }
         m_undoTimer.start();
     }
 }
@@ -1122,15 +1321,21 @@ void MainWindow::importSequence(const QStringList& paths)
     }
 
     SessionImage si;
-    si.name   = QString("sequence (%1)").arg(frames.size());
-    si.frames = frames;
-    si.source = frames.first();
-    si.state  = (m_current >= 0) ? collectParams() : SessionParams{};
-    {
-        const LayerTransform ft = fitTransform(si.source.width(), si.source.height(),
-                                               si.state.frameW, si.state.frameH);
-        for (Layer& l : si.state.layers) l.transform = ft;
-    }
+    si.name  = QString("sequence (%1)").arg(frames.size());
+    si.state = SessionParams{};
+    si.state.layers.clear();
+    si.state.parents.clear();
+
+    MediaClip clip;
+    clip.name   = si.name;
+    clip.image  = frames.first();
+    clip.frames = frames;
+    const int mid   = addParentMedia(si, clip);
+    Layer     child = makeChildLayer(si.state, mid, layerKindForMode(m_right->mode()), clip.image.size());
+    si.state.layers.push_back(child);
+    si.state.activeLayerId = child.id;
+    syncBoardSource(si);
+
     si.anim.frameStart = 0;
     si.anim.frameEnd   = frames.size() - 1;
     si.anim.playhead   = 0;
@@ -1322,9 +1527,9 @@ void MainWindow::exportSequence(const QString& baseName)
             const int fi = qBound(0, frame - f0, img.frames.size() - 1);
             src = img.frames[fi];
         }
-        const SessionParams p = img.anim.hasAnimation()
+        const SessionParams p = bakeGroupVisibility(img.anim.hasAnimation()
             ? paramsAtFrame(img.state, img.anim, frame)
-            : img.state;
+            : img.state);
 
         const QImage canvas = RenderWorker::renderDocument(src, p, layerSourcesAt(img, frame));
         const QString fn = QString("%1/%2_%3.png")
@@ -1373,9 +1578,9 @@ void MainWindow::exportVideoMp4(const QString& baseName)
         QImage src = img.source;
         if (!img.frames.isEmpty())
             src = img.frames[qBound(0, frame - f0, img.frames.size() - 1)];
-        const SessionParams p = img.anim.hasAnimation()
+        const SessionParams p = bakeGroupVisibility(img.anim.hasAnimation()
             ? paramsAtFrame(img.state, img.anim, frame)
-            : img.state;
+            : img.state);
 
         QImage canvas = RenderWorker::renderDocument(src, p, layerSourcesAt(img, frame));
         // mp4 (yuv420p) has no alpha — flatten on an opaque background.

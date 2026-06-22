@@ -591,6 +591,19 @@ QPushButton#layersToggleBtn:pressed {
     background-color: #5E92E0;
 }
 
+/* Parent (source image) row in the cascade tree — a subtle outlined box. */
+#parentRowOuter {
+    background: transparent;
+}
+#parentRow {
+    background-color: #2A2A2A;
+    border: 1px solid #3B3B3B;
+    border-radius: s(10)px;
+}
+#parentRow:hover {
+    border-color: #5D5D5D;
+}
+
 #layerName {
     background: transparent;
     color: #B2B2B2;
