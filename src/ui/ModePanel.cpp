@@ -9,6 +9,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
+#include <QFontMetrics>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QFrame>
@@ -50,6 +51,28 @@ QIcon shapePreviewIcon(const QString& path, int sidePx)
     p.end();
     return QIcon(QPixmap::fromImage(img));
 }
+
+// QLabel that shows its text elided with "…" to fit the available width, and
+// never forces the row wider (Ignored h-policy) — so a long file name can't
+// push neighbours past the column gutter.
+class ElidedLabel : public QLabel
+{
+public:
+    explicit ElidedLabel(QWidget* parent = nullptr) : QLabel(parent)
+    {
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        setMinimumWidth(0);
+    }
+    void setFullText(const QString& t) { m_full = t; updateElide(); }
+protected:
+    void resizeEvent(QResizeEvent* e) override { QLabel::resizeEvent(e); updateElide(); }
+private:
+    void updateElide()
+    {
+        QLabel::setText(QFontMetrics(font()).elidedText(m_full, Qt::ElideRight, width()));
+    }
+    QString m_full;
+};
 
 struct BlendItem { BlendMode mode; const char* name; bool groupStart; };
 const BlendItem kBlend[] = {
@@ -319,10 +342,14 @@ private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
     struct ShapeSlot {
-        QWidget*         widget   = nullptr;
-        NoWheelComboBox* combo    = nullptr;
-        QPushButton*     minusBtn = nullptr;
-        QPushButton*     svgBtn   = nullptr;
+        QWidget*         widget     = nullptr;
+        NoWheelComboBox* combo      = nullptr;
+        QPushButton*     minusBtn   = nullptr;
+        QWidget*         svgRow     = nullptr;   // whole Custom-SVG row (toggled)
+        QFrame*          svgNameBox = nullptr;   // left box: preview + name
+        QLabel*          svgPreview = nullptr;
+        ElidedLabel*     svgName    = nullptr;
+        QPushButton*     svgBtn     = nullptr;   // "Choose SVG" / "Change SVG"
         QString          svgPath;
     };
 
@@ -341,23 +368,27 @@ private:
         m_shapeSlots.clear();
     }
 
-    // Custom-SVG button: a live preview of the symbol once loaded (no name,
-    // which would truncate), or the upload prompt when empty.
-    void styleSvgButton(QPushButton* b, const QString& path)
+    // Custom-SVG row state:
+    //  · no file  → a single full-width accent "Choose SVG" button.
+    //  · loaded   → left box (symbol preview + name) + accent "Change SVG".
+    void updateSvgRow(ShapeSlot& slot)
     {
-        if (path.isEmpty()) {
-            b->setIcon(QIcon(":/icons/upload.svg"));
-            b->setIconSize(QSize(Ui::px(16), Ui::px(16)));
-            b->setText("  Upload SVG");
-            b->setProperty("preview", false);
+        const bool has = !slot.svgPath.isEmpty();
+        slot.svgNameBox->setVisible(has);
+        if (has) {
+            slot.svgPreview->setPixmap(
+                shapePreviewIcon(slot.svgPath, Ui::px(22)).pixmap(Ui::px(22), Ui::px(22)));
+            slot.svgName->setFullText(QFileInfo(slot.svgPath).completeBaseName());
+            slot.svgBtn->setText("Change SVG");
+            // Size to the text so it's never clipped; the name box takes the rest.
+            slot.svgBtn->setMinimumWidth(0);
+            slot.svgBtn->setMaximumWidth(QWIDGETSIZE_MAX);
+            slot.svgBtn->setFixedWidth(slot.svgBtn->sizeHint().width() + Ui::px(6));
         } else {
-            b->setIcon(shapePreviewIcon(path, Ui::px(26)));
-            b->setIconSize(QSize(Ui::px(26), Ui::px(26)));
-            b->setText(QString());
-            b->setProperty("preview", true);
+            slot.svgBtn->setText("Choose SVG");
+            slot.svgBtn->setMinimumWidth(0);
+            slot.svgBtn->setMaximumWidth(QWIDGETSIZE_MAX);   // span the row
         }
-        b->style()->unpolish(b);
-        b->style()->polish(b);
     }
 
     void addShapeSlot(HalftoneShape shape, const QString& svgPath, bool silent)
@@ -397,16 +428,41 @@ private:
         rowl->addWidget(gut);
         ov->addLayout(rowl);
 
-        // SVG upload / preview row (also reserves the gutter so it lines up).
-        auto* sr = new QHBoxLayout;
+        // SVG row: a left preview+name box and an accent action button. Aligns
+        // with the combo above (stops at the same box gutter, not the symbol one).
+        slot.svgRow = new QWidget;
+        auto* sr = new QHBoxLayout(slot.svgRow);
         sr->setContentsMargins(0, 0, gutterComp, 0);
+        sr->setSpacing(Ui::px(8));
+
+        slot.svgNameBox = new QFrame;
+        slot.svgNameBox->setObjectName("dragSpinBox");          // dark box + border
+        slot.svgNameBox->setFixedHeight(Ui::px(48));            // == combos / other boxes
+        auto* nbl = new QHBoxLayout(slot.svgNameBox);
+        nbl->setContentsMargins(Ui::px(10), 0, Ui::px(10), 0);
+        nbl->setSpacing(Ui::px(8));
+        slot.svgPreview = new QLabel;
+        slot.svgPreview->setFixedSize(Ui::px(22), Ui::px(22));
+        slot.svgPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
+        nbl->addWidget(slot.svgPreview);
+        slot.svgName = new ElidedLabel;
+        slot.svgName->setStyleSheet("background:transparent; color:#E3E3E3;");
+        slot.svgName->setAttribute(Qt::WA_TransparentForMouseEvents);
+        nbl->addWidget(slot.svgName, 1);
+        sr->addWidget(slot.svgNameBox, 1);
+
         slot.svgBtn = new QPushButton;
-        slot.svgBtn->setObjectName("uploadBtn");
-        slot.svgBtn->setFixedHeight(Ui::px(40));
-        styleSvgButton(slot.svgBtn, svgPath);
-        slot.svgBtn->setVisible(shape == HalftoneShape::CustomSVG);
-        sr->addWidget(slot.svgBtn);
-        ov->addLayout(sr);
+        slot.svgBtn->setObjectName("accentBtn");                // orange (colour via QSS)
+        slot.svgBtn->setCursor(Qt::PointingHandCursor);
+        // Pin the height to match the name box: #accentBtn carries a literal
+        // min-height:40px (unscaled) that would otherwise mis-size it.
+        slot.svgBtn->setStyleSheet(QString("min-height:%1px; max-height:%1px;").arg(Ui::px(48)));
+        slot.svgBtn->setFixedHeight(Ui::px(48));
+        sr->addWidget(slot.svgBtn, 1);
+
+        updateSvgRow(slot);
+        slot.svgRow->setVisible(shape == HalftoneShape::CustomSVG);
+        ov->addWidget(slot.svgRow);
 
         m_shapeSlots.append(slot);
         m_shapesLayout->addWidget(slot.widget);
@@ -414,18 +470,18 @@ private:
 
         QWidget*         w      = slot.widget;
         NoWheelComboBox* combo  = slot.combo;
+        QWidget*         svgRow = slot.svgRow;
         QPushButton*     svgBtn = slot.svgBtn;
-        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, svgBtn](int idx) {
-            svgBtn->setVisible(idx == int(HalftoneShape::CustomSVG));
+        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, svgRow](int idx) {
+            svgRow->setVisible(idx == int(HalftoneShape::CustomSVG));
             fire();
         });
         connect(slot.minusBtn, &QPushButton::clicked, this, [this, w]() { removeShapeSlot(w); });
-        connect(svgBtn, &QPushButton::clicked, this, [this, w, svgBtn]() {
+        connect(svgBtn, &QPushButton::clicked, this, [this, w]() {
             const QString p = QFileDialog::getOpenFileName(this, "Load SVG", "", "SVG files (*.svg)");
             if (p.isEmpty()) return;
             for (auto& s : m_shapeSlots)
-                if (s.widget == w) { s.svgPath = p; break; }
-            styleSvgButton(svgBtn, p);
+                if (s.widget == w) { s.svgPath = p; updateSvgRow(s); break; }
             fire();
         });
 

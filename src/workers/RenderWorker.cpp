@@ -162,7 +162,7 @@ static QImage placeOnFrame(const QImage& layerImg, const LayerTransform& tf, QSi
     QTransform m;
     m.translate(cx, cy);
     m.rotate(tf.rotation);
-    m.scale(s, s);
+    m.scale(s * (tf.flipH ? -1.0 : 1.0), s * (tf.flipV ? -1.0 : 1.0));
     m.translate(-layerImg.width() * 0.5, -layerImg.height() * 0.5);
     p.setTransform(m);
     p.drawImage(0, 0, layerImg);

@@ -21,5 +21,9 @@
         <file alias="icons/tl_key.svg">../assets/icons/tl_key.svg</file>
         <file alias="icons/tl_play.svg">../assets/icons/tl_play.svg</file>
         <file alias="icons/favorite.svg">../assets/icons/favorite.svg</file>
+        <file alias="icons/rotation.svg">../assets/icons/rotation.svg</file>
+        <file alias="icons/rotate90.svg">../assets/icons/rotate90.svg</file>
+        <file alias="icons/mirror_x.svg">../assets/icons/mirror_x.svg</file>
+        <file alias="icons/mirror_y.svg">../assets/icons/mirror_y.svg</file>
 </qresource>
 </RCC>

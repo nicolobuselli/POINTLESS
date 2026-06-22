@@ -3,6 +3,9 @@
 #include <QWidget>
 #include <QImage>
 #include <QPoint>
+#include <QPointF>
+#include <QPolygonF>
+#include "../core/Params.h"
 
 /**
  * PreviewWidget
@@ -25,6 +28,15 @@ public:
     void setShowOriginal(bool show);
     void setPanMode(bool enabled);
 
+    // Active layer placement for the on-canvas transform handles. layerNative is
+    // the layer's pixel size at 100% scale; frame is the composited canvas size.
+    void setActiveTransform(const LayerTransform& tf, QSize layerNative,
+                            QSize frame, bool transformable);
+
+signals:
+    void filesDropped(const QStringList& paths);
+    void transformChanged(const LayerTransform& t);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -34,9 +46,6 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
-
-signals:
-    void filesDropped(const QStringList& paths);
 
 private:
     QImage  m_image;
@@ -54,4 +63,25 @@ private:
     Qt::MouseButton m_dragButton = Qt::NoButton;
     void    updateScaled();
     const QImage& currentSource() const;
+
+    // ── On-canvas transform handles for the active layer ──────────
+    enum class TfDrag { None, Move, Scale, Rotate };
+    LayerTransform m_tf;
+    QSize          m_layerNative;
+    QSize          m_frame;
+    bool           m_transformable = false;
+    bool           m_handlesActive = false;
+    TfDrag         m_tfDrag        = TfDrag::None;
+    LayerTransform m_tfStart;          // transform at drag start
+    QPointF        m_grabOffset;       // Move: centre - grab point (frame space)
+    double         m_startDist  = 1.0; // Scale: |corner - centre| at start
+    double         m_startAngle = 0.0; // Rotate: angle(grab - centre) at start
+
+    double  imageScale() const;        // frame px → widget px factor (0 if none)
+    QPointF imageOrigin() const;       // top-left of m_scaled in widget coords
+    QPointF frameToWidget(QPointF f) const;
+    QPointF widgetToFrame(QPointF w) const;
+    QPointF layerCentreFrame() const;
+    QPolygonF layerQuadFrame() const;  // 4 corners in frame space
+    void    paintHandles(QPainter& p);
 };

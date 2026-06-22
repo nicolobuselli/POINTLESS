@@ -2,6 +2,7 @@
 
 #include <QMainWindow>
 #include <QImage>
+#include <QSize>
 #include <QString>
 #include <QTimer>
 #include <QElapsedTimer>
@@ -50,6 +51,7 @@ private slots:
     void onLayerRenamed(int layerId, const QString& name);
     void onLayerDeleteRequested(int layerId);
     void onLayerBlendChanged(int layerId, BlendMode mode);
+    void onLayerTransformChanged(const LayerTransform& t);
     void onAddLayerRequested();
     void onLayerReordered(int layerId, int insertIndex);
     void undo();
@@ -83,6 +85,8 @@ private:
     void applyParams(const SessionParams& p);
     Layer* activeLayer();
     const Layer* activeLayer() const;
+    QSize activeLayerNativeSize() const;   // layer pixel size at 100% scale
+    void  pushPreviewTransform();          // feed active transform to the preview overlay
     void selectLayerInternal(int layerId, bool makeVisible);
     QString uniqueLayerName(const SessionParams& p, LayerKind kind) const;
     void syncLayersPanel();

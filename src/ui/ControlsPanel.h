@@ -9,6 +9,8 @@ class AdjustmentsPanel;
 class LayersPanel;
 class DragSpinBox;
 class QLineEdit;
+class QSlider;
+class QPushButton;
 
 /**
  * ControlsPanel (left column)
@@ -37,18 +39,35 @@ public:
     // Frame dimensions (the canvas all layers are composited onto).
     void setFrameSize(int w, int h);                    // silent
 
+    // Active layer placement on the frame (X/Y in px from centre, scale %, rotation °).
+    void setTransform(const LayerTransform& t);         // silent
+
 signals:
     void adjustmentsChanged();
     void resetRequested();
     void fileRenamed(const QString& name);
     void frameSizeChanged(int w, int h);
+    void transformChanged(const LayerTransform& t);
 
 private:
+    void  emitTransform();
+    void  setScale(float scalePct);     // silent — moves slider + box
+    float currentScalePct() const;      // reads the box (falls back to slider)
+
     LayersPanel*      m_layers    = nullptr;
     QLineEdit*        m_fileTitle = nullptr;
     AdjustmentsPanel* m_adjust    = nullptr;
     DragSpinBox*      m_frameW    = nullptr;
     DragSpinBox*      m_frameH    = nullptr;
+    DragSpinBox*      m_tfX       = nullptr;
+    DragSpinBox*      m_tfY       = nullptr;
+    DragSpinBox*      m_tfRot     = nullptr;
+    QSlider*          m_tfScaleSlider = nullptr;
+    QLineEdit*        m_tfScaleEdit   = nullptr;
+    QPushButton*      m_flipH     = nullptr;   // mirror about y axis (left/right)
+    QPushButton*      m_flipV     = nullptr;   // mirror about x axis (top/bottom)
+    int               m_curFrameW = 1080;
+    int               m_curFrameH = 1080;
 
     bool m_updating = false;
 };

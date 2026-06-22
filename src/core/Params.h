@@ -410,10 +410,13 @@ struct LayerTransform {
     float yPct     = 0.0f;     // -1..1 — vertical centre offset
     float scalePct = 100.0f;   // uniform scale (100 = native pixels)
     float rotation = 0.0f;     // 0..360 deg
+    bool  flipH    = false;    // mirror about the vertical (y) axis — left/right
+    bool  flipV    = false;    // mirror about the horizontal (x) axis — top/bottom
 };
 inline bool operator==(const LayerTransform& a, const LayerTransform& b) {
     return a.xPct == b.xPct && a.yPct == b.yPct
-        && a.scalePct == b.scalePct && a.rotation == b.rotation;
+        && a.scalePct == b.scalePct && a.rotation == b.rotation
+        && a.flipH == b.flipH && a.flipV == b.flipV;
 }
 
 // Scale a layer so it fits entirely inside the frame (contain), keeping aspect.

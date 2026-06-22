@@ -162,9 +162,12 @@ MainWindow::MainWindow(QWidget* parent)
         m_images[m_current].state.frameH = h;
         m_playCacheValid = false;
         syncLayersPanel();      // row thumbs follow the frame
+        pushPreviewTransform(); // overlay follows the frame
         scheduleRender();
         m_undoTimer.start();
     });
+    connect(m_left,    &ControlsPanel::transformChanged, this, &MainWindow::onLayerTransformChanged);
+    connect(m_preview, &PreviewWidget::transformChanged, this, &MainWindow::onLayerTransformChanged);
     connect(m_right, &ModePanel::paramsChanged,             this, &MainWindow::onParamsChanged);
     connect(m_right, &ModePanel::tonalChanged,              this, &MainWindow::onParamsChanged);
     connect(m_right, &ModePanel::backgroundChanged,         this, &MainWindow::onParamsChanged);
@@ -449,6 +452,8 @@ void MainWindow::applyParams(const SessionParams& p)
     m_left->setAdjustments(l.adjustments);
     m_left->setFrameSize(p.frameW > 0 ? p.frameW : 1080,
                          p.frameH > 0 ? p.frameH : 1080);
+    m_left->setTransform(l.transform);   // boxes follow the active layer
+    pushPreviewTransform();              // overlay follows the active layer
 
     // Fill (tonal), Fusion and enabled-state are handled by setFromLayer;
     // background is shared and set explicitly.
@@ -756,6 +761,48 @@ void MainWindow::onLayerBlendChanged(int layerId, BlendMode mode)
     m_undoTimer.start();
 }
 
+void MainWindow::onLayerTransformChanged(const LayerTransform& t)
+{
+    if (m_current < 0) return;
+    Layer* l = activeLayer();
+    if (!l || l->transform == t) return;
+
+    l->transform = t;
+    m_playCacheValid = false;
+    m_left->setTransform(t);   // keep the numeric boxes in sync (silent)
+    pushPreviewTransform();
+    scheduleRender();         // centre preview updates live
+    m_previewTimer.start();   // layer thumbs catch up once the drag settles
+    m_undoTimer.start();
+}
+
+QSize MainWindow::activeLayerNativeSize() const
+{
+    if (m_current < 0) return {};
+    const Layer* l = activeLayer();
+    if (!l) return {};
+    const SessionImage& img = m_images[m_current];
+    if (l->mediaId >= 0) {
+        const auto it = img.media.find(l->mediaId);
+        if (it != img.media.end()) {
+            const MediaClip& m = it.value();
+            if (!m.frames.isEmpty()) return m.frames.front().size();
+            if (!m.image.isNull())   return m.image.size();
+        }
+    }
+    return img.source.size();
+}
+
+void MainWindow::pushPreviewTransform()
+{
+    const Layer* l = activeLayer();
+    const QSize native = activeLayerNativeSize();
+    const auto& st = (m_current >= 0) ? m_images[m_current].state : SessionParams{};
+    m_preview->setActiveTransform(l ? l->transform : LayerTransform{},
+                                  native, QSize(st.frameW, st.frameH),
+                                  l != nullptr && !native.isEmpty());
+}
+
 void MainWindow::onAddLayerRequested()
 {
     if (m_current < 0) return;
@@ -875,6 +922,7 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
             l ? l->adjustments : Adjustments{}));
     }
     updateDisplayedPreview();
+    pushPreviewTransform();
     m_preview->setStatus(isPreview ? "Preview (full render pending…)" : "Done");
 }
 
