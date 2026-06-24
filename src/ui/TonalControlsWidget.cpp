@@ -3,6 +3,7 @@
 #include "../core/PaletteStore.h"
 
 #include <QHBoxLayout>
+#include <QSpacerItem>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -406,6 +407,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
         pl->addWidget(m_paletteLabel);
 
         auto* row = new QHBoxLayout;
+        m_paletteRow = row;
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(0);   // gaps added explicitly so right-edges line up
 
@@ -431,7 +433,8 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
         }
         connect(m_paletteHeader, &QPushButton::clicked, this, [this]() { openPalettePopup(); });
         row->addWidget(m_paletteHeader, 1);
-        row->addSpacing(Ui::px(8));   // gap between palette and count
+        m_leadGap = new QSpacerItem(Ui::px(8), 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+        row->addItem(m_leadGap);   // gap between palette and count
 
         m_modeCombo = new NoWheelComboBox;
         m_modeCombo->addItem("Image colors");
@@ -443,7 +446,8 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
         // Count box stops at the 70px box-gutter; the favourite sits in the
         // symbol gutter, right-aligned with the section toggles (spacer + fav
         // = kGutterComp).
-        row->addSpacing(kGutterComp - kFavW);
+        m_favGap = new QSpacerItem(kGutterComp - kFavW, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+        row->addItem(m_favGap);
 
         m_favBtn = new QPushButton;
         m_favBtn->setObjectName("favBtn");
@@ -589,14 +593,23 @@ void TonalControlsWidget::rebuildRows()
     if (m_paletteLabel)  m_paletteLabel->setVisible(!imageColors);
     if (m_paletteHeader) m_paletteHeader->setVisible(!imageColors);
     if (m_favBtn)        m_favBtn->setVisible(!imageColors);
+    // With the header + favourite hidden, the combo spans the row. Drop the
+    // leading gap and widen the trailing one by the (now absent) favourite width
+    // so the combo's right edge still lands on the 70px gutter.
+    const int kFavW = 24, kGutterComp = Ui::px(46);
     if (imageColors) {
         m_modeCombo->setMinimumWidth(Ui::px(150));
         m_modeCombo->setMaximumWidth(QWIDGETSIZE_MAX);
         m_modeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        if (m_leadGap) m_leadGap->changeSize(0, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+        if (m_favGap)  m_favGap->changeSize(kGutterComp, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
     } else {
         m_modeCombo->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         m_modeCombo->setFixedWidth(Ui::px(150));
+        if (m_leadGap) m_leadGap->changeSize(Ui::px(8), 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+        if (m_favGap)  m_favGap->changeSize(kGutterComp - kFavW, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
     }
+    if (m_paletteRow) m_paletteRow->invalidate();
     m_rowsContainer->setVisible(tonesActive);
     if (m_saveSection) m_saveSection->setVisible(tonesActive);
     if (m_generateBtn) m_generateBtn->setVisible(tonesActive);

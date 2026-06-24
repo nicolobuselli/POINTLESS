@@ -12,6 +12,8 @@
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QHBoxLayout;
+class QSpacerItem;
 class SwatchStrip;
 class ChevronButton;
 class PalettePopup;
@@ -90,6 +92,11 @@ private:
     // Color count + random generator (shared row)
     NoWheelComboBox* m_modeCombo   = nullptr;
     QPushButton*     m_generateBtn = nullptr;
+    // Gaps around the combo in the palette row; resized in Image-colors mode so
+    // the combo (which then spans the row) still lines up with the 70px gutter.
+    QHBoxLayout*     m_paletteRow  = nullptr;
+    QSpacerItem*     m_leadGap     = nullptr;   // header → combo
+    QSpacerItem*     m_favGap      = nullptr;   // combo → favourite
 
     // Extract-from-image (full-width row); palette dithering is enabled
     // automatically when extracting.

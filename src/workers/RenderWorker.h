@@ -41,6 +41,12 @@ public:
     // (which is downscaled to the same size), making the swap near-invisible.
     void setInteractivePreviewPx(int px) { m_interactivePx = qBound(256, px, 2000); }
 
+    // Supersample the full pass when the user has zoomed in, so the (vector)
+    // symbols are rendered at the displayed resolution instead of upscaling a
+    // frame-sized raster. 1.0 = render at frame resolution. Capped in launchFull.
+    void setFullQualityScale(float s) { m_fullQualityScale = qBound(1.0f, s, 6.0f); }
+    static constexpr int FULL_QUALITY_MAX_PX = 4096;   // budget cap for the full pass
+
     static constexpr int FAST_MAX_PX        = 600;   // preview res for the playback cache
     static constexpr int INTERACTIVE_MAX_PX = 900;   // default live drag preview cap
     static constexpr int FULL_DELAY_MS      = 120;   // ms idle before full render
@@ -64,6 +70,18 @@ public:
     // One layer rendered on a transparent canvas (layer's own adjusted size).
     static QImage renderLayer(const QImage& source, const Layer& layer);
 
+    // Vector export: write the document to an SVG. Halftone/Ascii/Dither layers
+    // with a Normal blend are emitted as real shapes (dither cells are merged);
+    // other layers (non-Normal blend, Original) are rasterised + embedded so the
+    // result still matches. Returns false if the frame size can't be resolved.
+    static bool renderDocumentToSvg(const QString& path, const QImage& source,
+                                    const SessionParams& params,
+                                    const QHash<int, QImage>& layerSrc = {});
+    // Rough upper bound on the vector elements an SVG export would contain, for
+    // the "heavy render" warning (dots + glyphs + un-merged dither cells).
+    static int estimateSvgElements(const QImage& source, const SessionParams& params,
+                                   const QHash<int, QImage>& layerSrc = {});
+
 signals:
     void renderComplete(QImage result, bool isPreview);
     void renderStarted(bool isPreview);
@@ -81,7 +99,8 @@ private:
     SessionParams     m_latestParams;
     QHash<int,QImage> m_layerSrc;    // per-layer media for the current frame
 
-    int m_interactivePx = INTERACTIVE_MAX_PX;
+    int   m_interactivePx     = INTERACTIVE_MAX_PX;
+    float m_fullQualityScale  = 1.0f;   // zoom-driven supersample for the full pass
 
     QFutureWatcher<QImage> m_fastWatcher;
     QFutureWatcher<QImage> m_fullWatcher;

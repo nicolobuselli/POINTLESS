@@ -3,6 +3,8 @@
 #include "Params.h"
 #include <QImage>
 
+class QPainter;
+
 /**
  * DitherRenderer
  *
@@ -34,6 +36,13 @@ class DitherRenderer
 {
 public:
     static QImage render(const QImage& input, const DitherSettings& s);
+
+    // SVG-friendly output: merge the dithered cell grid into the fewest
+    // axis-aligned rectangles (greedy maximal rects over equal-colour, opaque
+    // cells) and paint them into `out`, scaled so the grid fills targetW×targetH.
+    // Far fewer nodes than one rect per cell. Returns the rect count drawn.
+    static int paintMergedRects(const QImage& input, const DitherSettings& s,
+                                QPainter& out, double targetW, double targetH);
 
 private:
     static bool isOrdered  (DitherAlgorithm a);

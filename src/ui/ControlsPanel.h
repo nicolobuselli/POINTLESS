@@ -36,6 +36,9 @@ public:
     void        setAdjustments(const Adjustments& a);   // silent
     void        setSourceImage(const QImage& img);
 
+    // Hide the "+" (add layer) when there's no image to add a layer to.
+    void setAddLayerVisible(bool on);
+
     // Frame dimensions (the canvas all layers are composited onto).
     void setFrameSize(int w, int h);                    // silent
 
@@ -54,8 +57,9 @@ private:
     void  setScale(float scalePct);     // silent — moves slider + box
     float currentScalePct() const;      // reads the box (falls back to slider)
 
-    LayersPanel*      m_layers    = nullptr;
-    QLineEdit*        m_fileTitle = nullptr;
+    LayersPanel*      m_layers      = nullptr;
+    QPushButton*      m_addLayerBtn = nullptr;
+    QLineEdit*        m_fileTitle   = nullptr;
     AdjustmentsPanel* m_adjust    = nullptr;
     DragSpinBox*      m_frameW    = nullptr;
     DragSpinBox*      m_frameH    = nullptr;

@@ -3,6 +3,8 @@
 
 #include <QPainter>
 #include <QPainterPath>
+#include <QTransform>
+#include <QHash>
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
@@ -443,6 +445,86 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
     }
 
     return out;
+}
+
+// Greedy maximal-rectangle merge of the dithered cell grid → fillRect per
+// merged block. Adjacent cells sharing a full edge and the exact same RGBA are
+// fused, so a flat region becomes one big rect instead of hundreds.
+int DitherRenderer::paintMergedRects(const QImage& input, const DitherSettings& s,
+                                     QPainter& out, double targetW, double targetH)
+{
+    if (input.isNull()) return 0;
+
+    // Build the quantised grid at cell resolution (the small image, before the
+    // block upscale render() does), so each pixel here is exactly one cell.
+    const int ps = qBound(1, s.pixelSize, 32);
+    QImage work = input;
+    if (ps > 1)
+        work = input.scaled(qMax(1, input.width() / ps), qMax(1, input.height() / ps),
+                            Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    work = work.convertToFormat(QImage::Format_ARGB32);
+
+    QImage grid(work.size(), QImage::Format_ARGB32);
+    grid.fill(Qt::transparent);
+    if      (isThreshold(s.algorithm)) renderThreshold   (work, grid, s);
+    else if (isOrdered  (s.algorithm)) renderOrdered     (work, grid, s);
+    else if (isHybrid   (s.algorithm)) renderDotDiffusion(work, grid, s);
+    else                               renderDiffusion    (work, grid, s);
+
+    const int W = grid.width(), H = grid.height();
+    if (W == 0 || H == 0) return 0;
+    const double cw = targetW / W, ch = targetH / H;
+    const float  op = qBound(0.0f, s.opacity, 1.0f);
+
+    std::vector<char> used(size_t(W) * H, 0);
+    auto px = [&](int x, int y) { return reinterpret_cast<const QRgb*>(grid.constScanLine(y))[x]; };
+
+    // Merge into maximal rects (in cell coords), collected per colour, then
+    // simplify each colour's path to the outline of the union region — internal
+    // rectangle edges are dropped, so a colour becomes one clean silhouette
+    // (with holes) instead of a grid of abutting rectangles.
+    QHash<QRgb, QPainterPath> byColor;
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            if (used[size_t(y) * W + x]) continue;
+            const QRgb c = px(x, y);
+            if (qAlpha(c) == 0) { used[size_t(y) * W + x] = 1; continue; }   // empty cell
+
+            int x2 = x;                                   // extend right
+            while (x2 + 1 < W && !used[size_t(y) * W + x2 + 1] && px(x2 + 1, y) == c) ++x2;
+
+            int y2 = y;                                   // extend down (full-width match)
+            bool ok = true;
+            while (ok && y2 + 1 < H) {
+                for (int xx = x; xx <= x2; ++xx)
+                    if (used[size_t(y2 + 1) * W + xx] || px(xx, y2 + 1) != c) { ok = false; break; }
+                if (ok) ++y2;
+            }
+
+            for (int yy = y; yy <= y2; ++yy)
+                for (int xx = x; xx <= x2; ++xx) used[size_t(yy) * W + xx] = 1;
+
+            byColor[c].addRect(QRectF(x, y, x2 - x + 1, y2 - y + 1));   // cell units
+        }
+    }
+
+    QTransform toTarget;
+    toTarget.scale(cw, ch);   // cell units → target pixels (applied after simplify)
+
+    out.save();
+    out.setRenderHint(QPainter::Antialiasing, false);
+    out.setPen(Qt::NoPen);
+    for (auto it = byColor.begin(); it != byColor.end(); ++it) {
+        QColor col = QColor::fromRgba(it.key());
+        if (op < 1.0f) col.setAlphaF(col.alphaF() * op);
+        // simplified(): unite abutting/overlapping subpaths into the region's
+        // outline, removing the internal seams the editor was drawing.
+        const QPainterPath outline = it.value().simplified();
+        out.setBrush(col);
+        out.drawPath(toTarget.map(outline));
+    }
+    out.restore();
+    return byColor.size();
 }
 
 // ============================================================

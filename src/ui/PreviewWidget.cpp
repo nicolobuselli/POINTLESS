@@ -206,11 +206,13 @@ void PreviewWidget::wheelEvent(QWheelEvent* event)
     }
 
     const double factorStep = (delta > 0) ? 1.12 : 1.0 / 1.12;
+    const double prev = m_zoomFactor;
     m_zoomFactor = qBound(0.2, m_zoomFactor * factorStep, 8.0);
     updateScaled();
     update();
 
     setToolTip(QString("Zoom %1%").arg(int(m_zoomFactor * 100.0)));
+    if (!qFuzzyCompare(prev, m_zoomFactor)) emit zoomChanged();
     event->accept();
 }
 

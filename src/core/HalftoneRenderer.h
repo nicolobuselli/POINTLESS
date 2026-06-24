@@ -25,6 +25,14 @@ public:
 
     void render(const QImage& input, QPainter& output, const HalftoneSettings& params);
 
+    // Paint the dots straight onto `output` as vector paths (no parallel band
+    // rasters), so an SVG export keeps real shapes. Same geometry as render().
+    void renderVector(const QImage& input, QPainter& output, const HalftoneSettings& params);
+
+    // Upper bound on the dots this would draw (grid sample count), for the
+    // export "heavy render" estimate — cheap, ignores tone culling.
+    static int estimateDotCount(const QImage& input, const HalftoneSettings& params);
+
 private:
     struct TileJob {
         const QImage*                  inputRGB;

@@ -57,6 +57,37 @@ void HalftoneRenderer::render(const QImage& input, QPainter& output,
     output.restore();
 }
 
+// Vector path: one job covering the whole image, painted straight onto `output`
+// (no band rasters) so the dots stay as SVG shapes.
+void HalftoneRenderer::renderVector(const QImage& input, QPainter& output,
+                                    const HalftoneSettings& params)
+{
+    if (input.isNull()) return;
+    const int imgW = input.width();
+    const int imgH = input.height();
+
+    const QImage inputRGB = (input.format() == QImage::Format_RGB32)
+                           ? input
+                           : input.convertToFormat(QImage::Format_RGB32);
+
+    const std::vector<GridSample> samples =
+        GridGenerator::generate(params.grid, imgW, imgH);
+    if (samples.empty()) return;
+
+    output.save();
+    output.setRenderHint(QPainter::Antialiasing, true);
+    TileJob job{ &inputRGB, &params, &samples, nullptr,
+                 /*bandTop*/ 0, /*bandH*/ imgH, imgW, imgH };
+    paintDots(output, job);
+    output.restore();
+}
+
+int HalftoneRenderer::estimateDotCount(const QImage& input, const HalftoneSettings& params)
+{
+    if (input.isNull()) return 0;
+    return int(GridGenerator::generate(params.grid, input.width(), input.height()).size());
+}
+
 // ---------------------------------------------------------------------------
 // Per-tile rendering
 // ---------------------------------------------------------------------------

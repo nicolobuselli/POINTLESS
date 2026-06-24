@@ -28,6 +28,10 @@ public:
     void setShowOriginal(bool show);
     void setPanMode(bool enabled);
 
+    // Current zoom (1.0 = fit). The UI re-renders at higher resolution when
+    // zoomed in, so the vector symbols stay crisp instead of upscaling a raster.
+    double zoomFactor() const { return m_zoomFactor; }
+
     // Active layer placement for the on-canvas transform handles. layerNative is
     // the layer's pixel size at 100% scale; frame is the composited canvas size.
     void setActiveTransform(const LayerTransform& tf, QSize layerNative,
@@ -36,6 +40,7 @@ public:
 signals:
     void filesDropped(const QStringList& paths);
     void transformChanged(const LayerTransform& t);
+    void zoomChanged();   // user zoomed; UI may re-render at the new resolution
 
 protected:
     void paintEvent(QPaintEvent* event) override;

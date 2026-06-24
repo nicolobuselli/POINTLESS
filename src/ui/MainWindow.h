@@ -125,6 +125,7 @@ private:
     void autoKeyChanged(const SessionParams& before, const SessionParams& after);
     void exportSequence(const QString& baseName);
     void exportVideoMp4(const QString& baseName);
+    void exportSvg(const QString& baseName);
     void updateDisplayedPreview();
     void updatePreviewInteractionState();
 
@@ -151,6 +152,7 @@ private:
     bool   m_spaceDown = false;
     QTimer m_undoTimer;
     QTimer m_previewTimer;   // debounce live preview until param edits settle
+    QTimer m_zoomRenderTimer; // debounce re-render at higher res after zooming
 
     QTimer          m_playTimer;
     bool            m_autoKey = false;

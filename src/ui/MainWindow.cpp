@@ -36,8 +36,27 @@ constexpr int kUndoDebounceMs = 400;
 bool isVideoFile(const QString& path)
 {
     static const QStringList vids = { "mp4", "mov", "avi", "mkv", "webm",
-                                      "m4v", "wmv", "mpg", "mpeg" };
+                                      "m4v", "wmv", "mpg", "mpeg", "gif" };
     return vids.contains(QFileInfo(path).suffix().toLower());
+}
+
+// True if the selection looks like a numbered image sequence (frame_0001.png,
+// frame_0002.png, …): >=3 still images whose names share one stem once the
+// trailing digits are stripped. ponytail: stem heuristic, tighten if it
+// misfires on oddly-named batches.
+bool looksLikeSequence(const QStringList& paths)
+{
+    if (paths.size() < 3) return false;
+    QString stem;
+    for (const QString& p : paths) {
+        if (isVideoFile(p)) return false;
+        QString base = QFileInfo(p).completeBaseName();
+        while (!base.isEmpty() && base.back().isDigit()) base.chop(1);
+        if (base.isEmpty()) return false;             // pure-number names: ambiguous
+        if (stem.isEmpty()) stem = base;
+        else if (base != stem) return false;
+    }
+    return true;
 }
 } // namespace
 
@@ -244,6 +263,14 @@ MainWindow::MainWindow(QWidget* parent)
         if (m_current < 0) return;
         syncLayersPanel();
     });
+
+    // Re-render at the zoomed resolution once the user stops scrolling, so the
+    // vector symbols sharpen up (the existing raster is shown upscaled meanwhile).
+    m_zoomRenderTimer.setSingleShot(true);
+    m_zoomRenderTimer.setInterval(150);
+    connect(&m_zoomRenderTimer, &QTimer::timeout, this, [this]() { scheduleRender(); });
+    connect(m_preview, &PreviewWidget::zoomChanged, this,
+            [this]() { m_zoomRenderTimer.start(); });
 
     // ── Shortcuts ────────────────────────────────────────────
     auto addShortcut = [this](const QKeySequence& seq, auto slot) {
@@ -664,6 +691,13 @@ void MainWindow::onPlayToggled(bool playing)
     } else {
         m_playing = false;
         m_playTimer.stop();
+        // Hold the frame we're showing as the fallback, or scheduleRender's
+        // m_lastRender reset briefly exposes the stale pre-playback preview.
+        if (!m_playCache.isEmpty()) {
+            const Animation& a = m_images[m_current].anim;
+            const int idx = qBound(0, a.playhead - a.frameStart, int(m_playCache.size()) - 1);
+            m_lastPreviewFrame = m_playCache[idx];
+        }
         scheduleRender();                        // full-resolution render of the current frame
     }
 }
@@ -1089,6 +1123,10 @@ void MainWindow::scheduleRender(bool previewOnly)
                                qRound(m_preview->height() * dpr));
     m_worker->setInteractivePreviewPx(previewPx);
 
+    // Zoomed in → render the full pass larger so the vector symbols stay crisp
+    // instead of upscaling a frame-sized raster (the worker caps the budget).
+    m_worker->setFullQualityScale(float(qMax(1.0, m_preview->zoomFactor())));
+
     m_worker->requestRender(source, params, /*fullPass=*/!previewOnly,
                             layerSourcesAt(img, img.anim.playhead));
 }
@@ -1225,6 +1263,16 @@ void MainWindow::copyToClipboard()
 
 void MainWindow::addImages(const QStringList& paths)
 {
+    // A numbered batch (frame_0001.png …) is almost always a video as frames —
+    // offer to import it as a single animated clip, like DaVinci's image sequence.
+    if (looksLikeSequence(paths)) {
+        const auto reply = QMessageBox::question(this, "Import sequence",
+            QString("These %1 files look like an image sequence.\n\n"
+                    "Import them as a single animated clip?").arg(paths.size()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+        if (reply == QMessageBox::Yes) { importSequence(paths); return; }
+    }
+
     // Load a file into a MediaClip (decoding video via ffmpeg).
     auto loadClip = [this](const QString& path, MediaClip& clip) -> bool {
         clip.name = path.startsWith(":/") ? "example" : QFileInfo(path).fileName();
@@ -1369,7 +1417,10 @@ void MainWindow::switchToImage(int index)
         m_playTimer.stop();
         m_playing = false;
         m_timeline->setAnimation(Animation{});
-        m_layersPanel->setVisible(false);
+        // Keep the (embedded) list widget in the layout — hiding it would drop
+        // its stretch slot and let the "Layers" header balloon. Just clear it.
+        m_layersPanel->setTree({}, {}, -1, {});
+        m_left->setAddLayerVisible(false);   // nothing to add a layer to
         return;
     }
     m_current = index;
@@ -1380,6 +1431,7 @@ void MainWindow::switchToImage(int index)
     m_left->setFileName(m_images[index].title);
     applyParams(m_images[index].state);
     m_filmstrip->setActive(index);
+    m_left->setAddLayerVisible(true);
     m_layersPanel->setVisible(true);
     m_layersPanel->setSourceImage(m_images[index].source);
     syncLayersPanel();
@@ -1467,6 +1519,10 @@ void MainWindow::onExport()
         exportVideoMp4(name);
         return;
     }
+    if (format == "svg") {
+        exportSvg(name);
+        return;
+    }
 
     QString filter;
     if      (format == "png") filter = "PNG Image (*.png)";
@@ -1495,6 +1551,46 @@ void MainWindow::onExport()
         return;
     }
 
+    m_preview->setStatus("Exported: " + savePath);
+}
+
+// Export the current frame as a vector SVG (halftone/ascii/dither → shapes).
+void MainWindow::exportSvg(const QString& baseName)
+{
+    if (m_current < 0) return;
+    const SessionImage& img = m_images[m_current];
+
+    QImage source = img.source;
+    if (!img.frames.isEmpty()) {
+        const int fi = qBound(0, img.anim.playhead - img.anim.frameStart, img.frames.size() - 1);
+        source = img.frames[fi];
+    }
+    const SessionParams params = bakeGroupVisibility(img.anim.hasAnimation()
+        ? paramsAtFrame(img.state, img.anim, img.anim.playhead)
+        : img.state);
+    const QHash<int, QImage> ls = layerSourcesAt(img, img.anim.playhead);
+
+    // Heavy-render guard: a fine grid / small dither cell can produce hundreds of
+    // thousands of shapes — a huge file that may lag or crash while writing.
+    const int elements = RenderWorker::estimateSvgElements(source, params, ls);
+    if (elements > 150000) {
+        const auto reply = QMessageBox::warning(this, "Heavy SVG export",
+            QString("This export contains roughly %1 vector shapes.\n\n"
+                    "The SVG may be very large and slow to open, and the app "
+                    "could lag or run out of memory while writing it.\n\nContinue?")
+                .arg(elements),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (reply != QMessageBox::Yes) return;
+    }
+
+    const QString savePath = QFileDialog::getSaveFileName(
+        this, "Export SVG", baseName + ".svg", "SVG Image (*.svg)");
+    if (savePath.isEmpty()) return;
+
+    if (!RenderWorker::renderDocumentToSvg(savePath, source, params, ls)) {
+        QMessageBox::critical(this, "Export Failed", "Could not write SVG:\n" + savePath);
+        return;
+    }
     m_preview->setStatus("Exported: " + savePath);
 }
 

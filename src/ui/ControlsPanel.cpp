@@ -108,6 +108,9 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         // of the current mode, or a duplicate of the active one).
         {
             auto* hdr = new QWidget;
+            // Title band: fixed height so an empty layer list lets the list area
+            // (stretch) absorb the slack — otherwise the header floats mid-pane.
+            hdr->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
             auto* hl = new QHBoxLayout(hdr);
             hl->setContentsMargins(Ui::px(40), Ui::px(12), 0, Ui::px(12));
             hl->setSpacing(0);
@@ -126,6 +129,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             add->setToolTip("Add layer");
             connect(add, &QPushButton::clicked, this, [this]() { m_layers->requestAddLayer(); });
             gl->addWidget(add, 0, Qt::AlignCenter);
+            m_addLayerBtn = add;
             hl->addWidget(gut);
             ll->addWidget(hdr);
         }
@@ -342,6 +346,11 @@ void ControlsPanel::setFileName(const QString& name)
     m_fileTitle->setText(name);          // empty → "add title…" placeholder
     m_fileTitle->setCursorPosition(0);
     m_updating = false;
+}
+
+void ControlsPanel::setAddLayerVisible(bool on)
+{
+    if (m_addLayerBtn) m_addLayerBtn->setVisible(on);
 }
 
 void ControlsPanel::setFrameSize(int w, int h)

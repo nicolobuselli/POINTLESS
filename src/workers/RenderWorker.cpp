@@ -6,7 +6,9 @@
 #include "../core/BlendCompositor.h"
 
 #include <QPainter>
+#include <QSvgGenerator>
 #include <QtConcurrent/QtConcurrent>
+#include <climits>
 #include <cmath>
 
 namespace {
@@ -100,6 +102,20 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
     }
 }
 
+// Transparency = "no image" = paper. Flatten onto white so the tone renderers
+// read empty areas as the lightest tone (no ink) — exactly like a white source
+// region — instead of solid black. Each mode then treats transparent the way it
+// treats white: halftone/ascii draw nothing there, dither lays down paper.
+static QImage flattenOntoWhite(const QImage& src)
+{
+    QImage out(src.size(), QImage::Format_ARGB32_Premultiplied);
+    out.fill(Qt::white);
+    QPainter p(&out);
+    p.drawImage(0, 0, src);
+    p.end();
+    return out;
+}
+
 QImage RenderWorker::renderLayer(const QImage& source, const Layer& layer)
 {
     // Every layer renders from its own embedded reference image.
@@ -108,9 +124,11 @@ QImage RenderWorker::renderLayer(const QImage& source, const Layer& layer)
     if (layer.kind == LayerKind::Original)
         return adjusted.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 
-    const QSize outSize = adjusted.size();
+    const QImage forRender = flattenOntoWhite(adjusted);
+    const QSize outSize = forRender.size();
     const float ss = symbolSupersampleFactor(layer, outSize);
 
+    QImage out;
     if (ss > 1.01f) {
         const int hiW = qMax(1, qRound(outSize.width() * ss));
         const int hiH = qMax(1, qRound(outSize.height() * ss));
@@ -122,20 +140,20 @@ QImage RenderWorker::renderLayer(const QImage& source, const Layer& layer)
         hp.setRenderHint(QPainter::Antialiasing, true);
         hp.setRenderHint(QPainter::TextAntialiasing, true);
         hp.scale(qreal(hiW) / outSize.width(), qreal(hiH) / outSize.height());
-        renderLayerInto(hp, adjusted, layer);
+        renderLayerInto(hp, forRender, layer);
         hp.end();
 
-        return hi.scaled(outSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        out = hi.scaled(outSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    } else {
+        out = QImage(outSize, QImage::Format_ARGB32_Premultiplied);
+        out.fill(Qt::transparent);
+
+        QPainter painter(&out);
+        renderLayerInto(painter, forRender, layer);
+        painter.end();
     }
 
-    QImage img(outSize, QImage::Format_ARGB32_Premultiplied);
-    img.fill(Qt::transparent);
-
-    QPainter painter(&img);
-    renderLayerInto(painter, adjusted, layer);
-    painter.end();
-
-    return img;
+    return out;
 }
 
 QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& params)
@@ -206,6 +224,139 @@ QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& p
 }
 
 // ---------------------------------------------------------------------------
+// SVG (vector) export
+// ---------------------------------------------------------------------------
+
+// The placement transform from placeOnFrame, as a matrix to set on the painter
+// (so the renderers draw straight into frame space — no intermediate raster).
+static QTransform layerMatrix(const LayerTransform& tf, QSize layerSize, QSize frame)
+{
+    const double s  = qMax(0.0001, double(tf.scalePct) / 100.0);
+    const double cx = frame.width()  * 0.5 + double(tf.xPct) * frame.width();
+    const double cy = frame.height() * 0.5 + double(tf.yPct) * frame.height();
+    QTransform m;
+    m.translate(cx, cy);
+    m.rotate(tf.rotation);
+    m.scale(s * (tf.flipH ? -1.0 : 1.0), s * (tf.flipV ? -1.0 : 1.0));
+    m.translate(-layerSize.width() * 0.5, -layerSize.height() * 0.5);
+    return m;
+}
+
+// True when the layer's fill is on (a removed fill paints nothing, matching
+// renderLayerInto). Original always paints.
+static bool layerFillEnabled(const Layer& l)
+{
+    switch (l.kind) {
+        case LayerKind::Halftone: return l.halftone.tonal.enabled;
+        case LayerKind::Dither:   return l.dither.tonal.enabled;
+        case LayerKind::Ascii:    return l.ascii.tonal.enabled;
+        case LayerKind::Original: return true;
+    }
+    return true;
+}
+
+bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source,
+                                       const SessionParams& params,
+                                       const QHash<int, QImage>& layerSrc)
+{
+    QSize frame = (params.frameW > 0 && params.frameH > 0)
+                ? QSize(params.frameW, params.frameH)
+                : (source.isNull() ? QSize() : source.size());
+    if (frame.isEmpty())
+        for (const Layer& l : params.layers) {
+            const QImage s = layerSrc.value(l.id);
+            if (!s.isNull()) { frame = s.size(); break; }
+        }
+    if (frame.isEmpty()) return false;
+
+    QSvgGenerator gen;
+    gen.setFileName(path);
+    gen.setSize(frame);
+    gen.setViewBox(QRect(QPoint(0, 0), frame));
+    gen.setTitle("ULTRA Ditherer");
+
+    QPainter p(&gen);
+
+    if (params.backgroundOpacity > 0.0f && params.background.alpha() > 0) {
+        QColor bg = params.background;
+        bg.setAlphaF(params.backgroundOpacity);
+        p.fillRect(QRect(QPoint(0, 0), frame), bg);
+    }
+
+    // Stored top→bottom; paint bottom→top.
+    for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
+        const Layer& layer = *it;
+        if (!layer.visible || !layerFillEnabled(layer)) continue;
+        const QImage src = layerSrc.contains(layer.id) ? layerSrc.value(layer.id) : source;
+        if (src.isNull()) continue;
+
+        // Blend modes and the Original photo can't be expressed as SVG vectors;
+        // rasterise those layers and embed them so the output still matches.
+        const bool vectorable = (layer.blend == BlendMode::Normal)
+                             && (layer.kind == LayerKind::Halftone
+                              || layer.kind == LayerKind::Dither
+                              || layer.kind == LayerKind::Ascii);
+        if (!vectorable) {
+            const QImage placed = placeOnFrame(renderLayer(src, layer), layer.transform, frame);
+            p.save();
+            p.resetTransform();
+            p.drawImage(0, 0, placed);
+            p.restore();
+            continue;
+        }
+
+        const QImage adjusted  = ImageAdjuster::apply(src, layer.adjustments);
+        const QImage forRender = flattenOntoWhite(adjusted);   // transparent = paper
+        const QSize  ls        = adjusted.size();
+
+        p.save();
+        p.setTransform(layerMatrix(layer.transform, ls, frame));
+        switch (layer.kind) {
+            case LayerKind::Halftone: { HalftoneRenderer r; r.renderVector(forRender, p, layer.halftone); break; }
+            case LayerKind::Ascii:    AsciiRenderer::render(forRender, p, layer.ascii); break;
+            case LayerKind::Dither:   DitherRenderer::paintMergedRects(forRender, layer.dither, p,
+                                                                       ls.width(), ls.height()); break;
+            default: break;
+        }
+        p.restore();
+    }
+
+    p.end();
+    return true;
+}
+
+int RenderWorker::estimateSvgElements(const QImage& source, const SessionParams& params,
+                                      const QHash<int, QImage>& layerSrc)
+{
+    long long total = 0;
+    for (const Layer& layer : params.layers) {
+        if (!layer.visible || !layerFillEnabled(layer)) continue;
+        if (layer.blend != BlendMode::Normal) continue;   // rasterised, not vector nodes
+        const QImage src = layerSrc.contains(layer.id) ? layerSrc.value(layer.id) : source;
+        if (src.isNull()) continue;
+        const QImage adjusted = ImageAdjuster::apply(src, layer.adjustments);
+        const int w = adjusted.width(), h = adjusted.height();
+        switch (layer.kind) {
+            case LayerKind::Halftone:
+                total += HalftoneRenderer::estimateDotCount(adjusted, layer.halftone);
+                break;
+            case LayerKind::Ascii: {
+                const int cell = qBound(3, layer.ascii.cellSize, 128);
+                total += (long long)(w / cell + 1) * (h / cell + 1);
+                break;
+            }
+            case LayerKind::Dither: {   // worst case = un-merged cells
+                const int ps = qBound(1, layer.dither.pixelSize, 32);
+                total += (long long)(w / ps + 1) * (h / ps + 1);
+                break;
+            }
+            default: break;
+        }
+    }
+    return int(qMin<long long>(total, INT_MAX));
+}
+
+// ---------------------------------------------------------------------------
 // RenderWorker
 // ---------------------------------------------------------------------------
 
@@ -244,7 +395,7 @@ void RenderWorker::requestRender(const QImage& source, const SessionParams& para
 // that draw their own clip shrink in step with the frame.
 static QHash<int, QImage> scaledLayerSrc(const QHash<int, QImage>& src, float scale)
 {
-    if (scale >= 0.999f) return src;
+    if (qAbs(scale - 1.0f) < 0.001f) return src;   // also rescale when scale > 1
     QHash<int, QImage> out;
     for (auto it = src.begin(); it != src.end(); ++it) {
         const QImage& im = it.value();
@@ -288,6 +439,9 @@ SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float 
     for (Layer& l : p.layers) {
         l.ascii.cellSize   = qMax(3, int(l.ascii.cellSize * scale));
         l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize * scale));
+        // Halftone dot pitch is a fixed pixel value: scale it with the image too,
+        // or dots stay full-size on the shrunk preview and look ~1/scale too big.
+        l.halftone.grid.spacing = qMax(2.0f, l.halftone.grid.spacing * scale);
         l.adjustments.sharpenRadius = qMax(1, qRound(l.adjustments.sharpenRadius * scale));
     }
     return p;
@@ -339,7 +493,21 @@ void RenderWorker::launchFull()
 
     QImage src = m_sourceImage;
     SessionParams p = m_latestParams;
-    const QHash<int,QImage> ls = m_layerSrc;
+    QHash<int,QImage> ls = m_layerSrc;
+
+    // Zoom-driven supersample: render the whole document larger so the vector
+    // symbols (halftone dots / ascii glyphs) are drawn at the displayed
+    // resolution instead of upscaling a frame-sized raster. Capped to a pixel
+    // budget so a deep zoom can't blow up memory / stall the export-grade pass.
+    const int frameMax = qMax(1, qMax(p.frameW, p.frameH));
+    const float ss = qMin(m_fullQualityScale, float(FULL_QUALITY_MAX_PX) / float(frameMax));
+    if (ss > 1.01f) {
+        src = m_sourceImage.scaled(qMax(1, qRound(m_sourceImage.width()  * ss)),
+                                   qMax(1, qRound(m_sourceImage.height() * ss)),
+                                   Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        p  = scaledForPreview(m_latestParams, ss);   // frame + per-pixel params up
+        ls = scaledLayerSrc(m_layerSrc, ss);          // per-layer media up
+    }
 
     emit renderStarted(false);
 
