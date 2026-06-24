@@ -607,7 +607,9 @@ CollapsibleSection::CollapsibleSection(const QString& title, QWidget* content,
     m_header = new QWidget;
     m_header->setCursor(Qt::PointingHandCursor);
     auto* hl = new QHBoxLayout(m_header);
-    hl->setContentsMargins(0, 0, 0, 0);
+    // Standard column gutter: title at 40, chevron/extras in the right gutter —
+    // matches PanelSection so Dither/Ascii headers line up with Halftone.
+    hl->setContentsMargins(Ui::px(40), 0, Ui::px(24), 0);
     hl->setSpacing(6);
 
     hl->addWidget(makeSectionTitle(title), 1);
@@ -621,8 +623,16 @@ CollapsibleSection::CollapsibleSection(const QString& title, QWidget* content,
     m_chevron = new ChevronButton(ChevronButton::Up);
     hl->addWidget(m_chevron);
 
+    // Wrap the content so its boxes get the standard 40/70 gutter (body margins
+    // identical to PanelSection). Toggling collapses the wrap, gutter included.
+    m_contentWrap = new QWidget;
+    auto* wl = new QVBoxLayout(m_contentWrap);
+    wl->setContentsMargins(Ui::px(40), Ui::px(2), Ui::px(70), Ui::px(14));
+    wl->setSpacing(0);
+    wl->addWidget(m_content);
+
     vl->addWidget(m_header);
-    vl->addWidget(m_content);
+    vl->addWidget(m_contentWrap);
 
     m_header->installEventFilter(this);
     connect(m_chevron, &QPushButton::clicked, this, [this]() {
@@ -633,7 +643,7 @@ CollapsibleSection::CollapsibleSection(const QString& title, QWidget* content,
 void CollapsibleSection::setExpanded(bool expanded)
 {
     m_expanded = expanded;
-    m_content->setVisible(expanded);
+    m_contentWrap->setVisible(expanded);
     m_chevron->setDirection(expanded ? ChevronButton::Up : ChevronButton::Down);
 }
 

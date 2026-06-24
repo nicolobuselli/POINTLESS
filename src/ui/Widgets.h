@@ -174,10 +174,11 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
-    QWidget*       m_header  = nullptr;
-    QWidget*       m_content = nullptr;
-    QWidget*       m_extras  = nullptr;
-    ChevronButton* m_chevron = nullptr;
+    QWidget*       m_header      = nullptr;
+    QWidget*       m_content     = nullptr;
+    QWidget*       m_contentWrap = nullptr;   // adds the standard column gutter
+    QWidget*       m_extras      = nullptr;
+    ChevronButton* m_chevron     = nullptr;
     bool           m_expanded = true;
 };
 
