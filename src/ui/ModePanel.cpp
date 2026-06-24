@@ -265,7 +265,7 @@ public:
             row->setContentsMargins(0, 0, 0, 0);
             row->setSpacing(Ui::px(12));
             m_opacity      = new DragSpinBox(":/icons/opacity.svg",       0, 100, 100, "%");
-            m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0,  50,   0, "");
+            m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0, 100,   0, "");
             m_opacity->onValueChanged      = [this](int) { fire(); };
             m_cornerRadius->onValueChanged = [this](int) { fire(); };
             row->addWidget(m_opacity, 1);
@@ -690,7 +690,7 @@ public:
             row->setContentsMargins(0, 0, 0, 0);
             row->setSpacing(6);
             m_opacity      = new DragSpinBox(":/icons/opacity.svg",       0, 100, 100, "%");
-            m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0,  50,   0, "");
+            m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0, 100,   0, "");
             m_opacity->onValueChanged      = [this](int) { fire(); };
             m_cornerRadius->onValueChanged = [this](int) { fire(); };
             row->addWidget(m_opacity, 1);

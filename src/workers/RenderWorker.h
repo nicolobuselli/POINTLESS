@@ -36,6 +36,11 @@ public:
     void requestRender(const QImage& source, const SessionParams& params,
                        bool fullPass = true, const QHash<int, QImage>& layerSrc = {});
 
+    // Full pass only (no fast preview pass): used for the zoom quality re-render,
+    // so the on-screen frame isn't replaced by a low-res preview on every scroll.
+    void requestFullRender(const QImage& source, const SessionParams& params,
+                           const QHash<int, QImage>& layerSrc = {});
+
     // Live drag preview resolution, set by the UI to the preview widget's
     // on-screen pixel size — so the fast pass already looks like the final
     // (which is downscaled to the same size), making the swap near-invisible.

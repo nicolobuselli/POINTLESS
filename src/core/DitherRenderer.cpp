@@ -308,6 +308,48 @@ bool DitherRenderer::isThreshold(DitherAlgorithm a)
     return a == DitherAlgorithm::Threshold;
 }
 
+// Round every corner of a rectilinear path with quadratic Béziers. Because the
+// curve is steered through the original vertex, convex AND concave corners round
+// alike — so inner notches get the same radius as outer edges.
+static QPainterPath roundCorners(const QPainterPath& in, qreal r)
+{
+    std::vector<std::vector<QPointF>> subs;
+    std::vector<QPointF> cur;
+    for (int i = 0; i < in.elementCount(); ++i) {
+        const QPainterPath::Element e = in.elementAt(i);
+        if (e.type == QPainterPath::MoveToElement) {
+            if (!cur.empty()) { subs.push_back(cur); cur.clear(); }
+            cur.push_back(QPointF(e.x, e.y));
+        } else if (e.type == QPainterPath::LineToElement) {
+            cur.push_back(QPointF(e.x, e.y));
+        }
+    }
+    if (!cur.empty()) subs.push_back(cur);
+
+    QPainterPath out;
+    out.setFillRule(in.fillRule());
+    for (std::vector<QPointF>& pts : subs) {
+        if (pts.size() > 1 && pts.front() == pts.back()) pts.pop_back();
+        const int n = int(pts.size());
+        if (n < 3) continue;
+        for (int i = 0; i < n; ++i) {
+            const QPointF P = pts[(i - 1 + n) % n];
+            const QPointF V = pts[i];
+            const QPointF N = pts[(i + 1) % n];
+            const QPointF dP = P - V; const qreal lP = std::hypot(dP.x(), dP.y());
+            const QPointF dN = N - V; const qreal lN = std::hypot(dN.x(), dN.y());
+            if (lP < 1e-3 || lN < 1e-3) continue;
+            const qreal rr    = qMin(r, qMin(lP, lN) * 0.5);
+            const QPointF in_ = V + dP / lP * rr;
+            const QPointF out_= V + dN / lN * rr;
+            if (i == 0) out.moveTo(in_); else out.lineTo(in_);
+            out.quadTo(V, out_);
+        }
+        out.closeSubpath();
+    }
+    return out;
+}
+
 QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
 {
     if (input.isNull()) return {};
@@ -368,65 +410,29 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
             painter.setPen(Qt::NoPen);
             const float cr = qMin(s.cornerRadius, float(ps) * 0.5f);
 
+            // Non-ink cells stay plain squares; ink cells merge into one region
+            // whose whole outline (outer + inner corners) is rounded together.
+            QPainterPath inkUnion;
+            QRgb inkArgb = 0;
             for (int row = 0; row < oh; ++row) {
                 const QRgb* line = reinterpret_cast<const QRgb*>(out.constScanLine(row));
                 for (int col = 0; col < ow; ++col) {
                     const QRgb px = line[col];
                     if (qAlpha(px) == 0) continue;
-
-                    painter.setBrush(QColor(px));
-                    const float x0 = float(col * ps);
-                    const float y0 = float(row * ps);
-                    const float x1 = x0 + ps;
-                    const float y1 = y0 + ps;
-
                     if (isInkCell(col, row)) {
-                        // Round only convex (outer) corners of the merged ink shape.
-                        const bool left  = isInkCell(col - 1, row);
-                        const bool right = isInkCell(col + 1, row);
-                        const bool up    = isInkCell(col,     row - 1);
-                        const bool down  = isInkCell(col,     row + 1);
-
-                        const bool roundTL = !left && !up;
-                        const bool roundTR = !right && !up;
-                        const bool roundBR = !right && !down;
-                        const bool roundBL = !left  && !down;
-
-                        QPainterPath path;
-                        path.moveTo(roundTL ? x0 + cr : x0, y0);
-
-                        if (roundTR) {
-                            path.lineTo(x1 - cr, y0);
-                            path.arcTo(x1 - 2*cr, y0, 2*cr, 2*cr, 90, -90);
-                        } else {
-                            path.lineTo(x1, y0);
-                        }
-                        if (roundBR) {
-                            path.lineTo(x1, y1 - cr);
-                            path.arcTo(x1 - 2*cr, y1 - 2*cr, 2*cr, 2*cr, 0, -90);
-                        } else {
-                            path.lineTo(x1, y1);
-                        }
-                        if (roundBL) {
-                            path.lineTo(x0 + cr, y1);
-                            path.arcTo(x0, y1 - 2*cr, 2*cr, 2*cr, 270, -90);
-                        } else {
-                            path.lineTo(x0, y1);
-                        }
-                        if (roundTL) {
-                            path.lineTo(x0, y0 + cr);
-                            path.arcTo(x0, y0, 2*cr, 2*cr, 180, -90);
-                        } else {
-                            path.lineTo(x0, y0);
-                        }
-                        path.closeSubpath();
-                        painter.drawPath(path);
+                        inkUnion.addRect(col * ps, row * ps, ps, ps);
+                        inkArgb = px;
                     } else {
-                        // Non-ink colors: plain square, no rounding.
-                        painter.drawRect(QRectF(x0, y0, float(ps), float(ps)));
+                        painter.setBrush(QColor(px));
+                        painter.drawRect(QRectF(col * ps, row * ps, float(ps), float(ps)));
                     }
                 }
             }
+            if (hasInk && !inkUnion.isEmpty()) {
+                painter.setBrush(QColor::fromRgba(inkArgb));
+                painter.drawPath(roundCorners(inkUnion.simplified(), cr));
+            }
+            painter.end();
             out = finalOut;
         } else {
             out = out.scaled(input.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);

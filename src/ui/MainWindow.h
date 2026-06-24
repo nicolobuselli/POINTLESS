@@ -109,7 +109,8 @@ private:
     void selectLayerInternal(int layerId, bool makeVisible);
     QString uniqueLayerName(const SessionParams& p, LayerKind kind) const;
     void syncLayersPanel();
-    void scheduleRender(bool previewOnly = false);
+    void scheduleRender(bool previewOnly = false, bool qualityOnly = false);
+    float zoomQualityScale() const;   // full-pass supersample for the current zoom
     QHash<int, QImage> layerSourcesAt(const SessionImage& img, int frame) const;
     void pushUndoSnapshot();
     void addImages(const QStringList& paths);

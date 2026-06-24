@@ -185,8 +185,12 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         auto emitTf = [this](int) { if (!m_updating) emitTransform(); };
 
         // ── Position (X / Y px from frame centre) ──
-        bl->addWidget(makeParamLabel("Position"));
+        // label+row stacked tight (px2) — same label→control gap as Scale.
         {
+            auto* grp = new QVBoxLayout;
+            grp->setContentsMargins(0, 0, 0, 0);
+            grp->setSpacing(Ui::px(2));
+            { auto* l = makeParamLabel("Position"); l->setObjectName("sliderLabel"); grp->addWidget(l); }
             auto* posRow = new QHBoxLayout;
             posRow->setContentsMargins(0, 0, 0, 0);
             posRow->setSpacing(Ui::px(12));
@@ -198,11 +202,16 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             m_tfY->onValueChanged = emitTf;
             posRow->addWidget(m_tfX, 1);
             posRow->addWidget(m_tfY, 1);
-            bl->addLayout(posRow);
+            grp->addLayout(posRow);
+            bl->addLayout(grp);
         }
 
         // ── Rotation (angle box + a box of quick-transform buttons) ──
-        bl->addWidget(makeParamLabel("Rotation"));
+        // label+row stacked tight (px2) — same label→control gap as Scale.
+        auto* rotGrp = new QVBoxLayout;
+        rotGrp->setContentsMargins(0, 0, 0, 0);
+        rotGrp->setSpacing(Ui::px(2));
+        { auto* l = makeParamLabel("Rotation"); l->setObjectName("sliderLabel"); rotGrp->addWidget(l); }
         {
             auto* rotRow = new QHBoxLayout;
             rotRow->setContentsMargins(0, 0, 0, 0);
@@ -251,36 +260,44 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             connect(m_flipV, &QPushButton::toggled, this, [this](bool) { if (!m_updating) emitTransform(); });
 
             rotRow->addWidget(quick, 1);
-            bl->addLayout(rotRow);
+            rotGrp->addLayout(rotRow);
+            bl->addLayout(rotGrp);
         }
 
         // ── Scale (log slider 0.1×..10×, centred at 1×, + free-form box) ──
-        bl->addWidget(makeParamLabel("Scale"));
+        // Mirror SliderRow: label+slider stacked tight on the left, box (58×46)
+        // centred over the whole block on the right — so it matches Parameters.
         {
             auto* scRow = new QHBoxLayout;
             scRow->setContentsMargins(0, 0, 0, 0);
             scRow->setSpacing(Ui::px(12));
 
+            auto* leftCol = new QVBoxLayout;
+            leftCol->setContentsMargins(0, 0, 0, 0);
+            leftCol->setSpacing(Ui::px(2));
+            { auto* l = makeParamLabel("Scale"); l->setObjectName("sliderLabel"); leftCol->addWidget(l); }
+
             m_tfScaleSlider = new NoWheelSlider(Qt::Horizontal);
             m_tfScaleSlider->setRange(0, kScaleSliderMax);
             m_tfScaleSlider->setValue(kScaleSliderMax / 2);   // 1.0×
             m_tfScaleSlider->setFixedHeight(Ui::px(30));
+            leftCol->addWidget(m_tfScaleSlider);
 
             m_tfScaleEdit = new QLineEdit("1");
             m_tfScaleEdit->setObjectName("dragSpinBox");   // box bg/border/hover
             m_tfScaleEdit->setAlignment(Qt::AlignCenter);
-            m_tfScaleEdit->setFixedSize(Ui::px(58), Ui::px(48));   // == other transform boxes
+            m_tfScaleEdit->setFixedSize(Ui::px(58), Ui::px(46));   // == Parameters cell
             // Match the DragSpinBox value text and pin the height so the generic
             // QLineEdit rule (different colour/size + min-height) can't reshape it.
             m_tfScaleEdit->setStyleSheet(QString(
                 "color:#A6A6A6; font-size:%1px; font-weight:500; padding:0;"
                 " min-height:%2px; max-height:%2px;")
-                .arg(Ui::px(19)).arg(Ui::px(48)));
+                .arg(Ui::px(19)).arg(Ui::px(46)));
             auto* val = new QDoubleValidator(0.001, 1000.0, 3, m_tfScaleEdit);
             val->setNotation(QDoubleValidator::StandardNotation);
             m_tfScaleEdit->setValidator(val);
 
-            scRow->addWidget(m_tfScaleSlider, 1);
+            scRow->addLayout(leftCol, 1);
             scRow->addWidget(m_tfScaleEdit, 0, Qt::AlignVCenter);
             bl->addLayout(scRow);
 

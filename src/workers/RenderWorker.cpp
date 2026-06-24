@@ -391,6 +391,15 @@ void RenderWorker::requestRender(const QImage& source, const SessionParams& para
     else          m_fullTimer.stop();
 }
 
+void RenderWorker::requestFullRender(const QImage& source, const SessionParams& params,
+                                     const QHash<int, QImage>& layerSrc)
+{
+    m_sourceImage  = source;
+    m_latestParams = params;
+    m_layerSrc     = layerSrc;
+    m_fullTimer.start();   // full pass only; no launchFast(), so nothing flashes
+}
+
 // Downscale every per-layer media image by `scale` (preview only), so layers
 // that draw their own clip shrink in step with the frame.
 static QHash<int, QImage> scaledLayerSrc(const QHash<int, QImage>& src, float scale)

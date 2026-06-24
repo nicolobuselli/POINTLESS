@@ -268,7 +268,12 @@ MainWindow::MainWindow(QWidget* parent)
     // vector symbols sharpen up (the existing raster is shown upscaled meanwhile).
     m_zoomRenderTimer.setSingleShot(true);
     m_zoomRenderTimer.setInterval(150);
-    connect(&m_zoomRenderTimer, &QTimer::timeout, this, [this]() { scheduleRender(); });
+    connect(&m_zoomRenderTimer, &QTimer::timeout, this, [this]() {
+        // Nothing to gain (zoomed out, or a dither layer that mustn't re-process)
+        // and a full frame is already shown → keep it, don't re-render.
+        if (zoomQualityScale() <= 1.01f && !m_lastRender.isNull()) return;
+        scheduleRender(/*previewOnly=*/false, /*qualityOnly=*/true);
+    });
     connect(m_preview, &PreviewWidget::zoomChanged, this,
             [this]() { m_zoomRenderTimer.start(); });
 
@@ -1091,14 +1096,27 @@ void MainWindow::onDeleteParentRequested(int mediaId)
     commitStructuralChange();
 }
 
-void MainWindow::scheduleRender(bool previewOnly)
+// Supersample factor for the full pass at the current zoom. 1.0 = render at the
+// native frame resolution (preview just upscales it).
+float MainWindow::zoomQualityScale() const
+{
+    // ponytail: never supersample on zoom. Re-rendering on every scroll was
+    // distracting in every mode (and for raster dither it shifted the cell
+    // grid). The on-screen raster is just upscaled instead.
+    return 1.0f;
+}
+
+void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
 {
     if (m_current < 0) return;
 
     // The previous full render is now stale: invalidate it so the fast preview
     // pass (which lands within a few ms) is shown immediately instead of being
     // masked by the old full frame until the 350ms full pass catches up.
-    m_lastRender = {};
+    // Exception: a zoom re-render (qualityOnly) keeps the current frame on screen
+    // and just upscales it, then swaps in the sharper render when it's ready — so
+    // scrolling the zoom doesn't flash back to a low-res preview on every tick.
+    if (!qualityOnly) m_lastRender = {};
 
     const SessionImage& img = m_images[m_current];
 
@@ -1125,10 +1143,15 @@ void MainWindow::scheduleRender(bool previewOnly)
 
     // Zoomed in → render the full pass larger so the vector symbols stay crisp
     // instead of upscaling a frame-sized raster (the worker caps the budget).
-    m_worker->setFullQualityScale(float(qMax(1.0, m_preview->zoomFactor())));
+    // Skipped for dither (would change the pixel processing — see helper).
+    m_worker->setFullQualityScale(zoomQualityScale());
 
-    m_worker->requestRender(source, params, /*fullPass=*/!previewOnly,
-                            layerSourcesAt(img, img.anim.playhead));
+    const QHash<int, QImage> ls = layerSourcesAt(img, img.anim.playhead);
+    if (qualityOnly)
+        // Full pass only — no fast preview pass to flash/jitter during zoom.
+        m_worker->requestFullRender(source, params, ls);
+    else
+        m_worker->requestRender(source, params, /*fullPass=*/!previewOnly, ls);
 }
 
 // Resolve, for each media layer, the image it draws at `frame` (a clip indexes
