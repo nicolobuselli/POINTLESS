@@ -323,7 +323,10 @@ enum class DitherAlgorithm {
     // ── Hybrid ───────────────────────────────────────────────────
     DotDiffusion        = 12,  // Class-matrix ordered + error diffusion
     // ── Tone ──────────────────────────────────────────────────────
-    Threshold           = 13   // Hard B/W cut by a threshold (no dithering)
+    Threshold           = 13,  // Hard B/W cut by a threshold (no dithering)
+    // ── Error Diffusion (extended; tables/refs from libdither) ────
+    Ostromoukhov        = 14,  // Variable-coefficient error diffusion
+    Riemersma           = 15   // Error diffusion along a Hilbert curve
 };
 
 struct DitherSettings {

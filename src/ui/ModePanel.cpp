@@ -554,6 +554,10 @@ const AlgoEntry kAlgoEntries[] = {
         "12-tap 3-row kernel. Wide diffusion yields exceptional tonal accuracy at the cost of speed." },
     { DitherAlgorithm::Stucki,              "Stucki",
         "JJN variant with adjusted weights. Cleaner shadow detail, slightly sharper edges." },
+    { DitherAlgorithm::Ostromoukhov,        "Ostromoukhov",
+        "Variable-coefficient diffusion: weights adapt to each tone. Very clean, even gradients with few artifacts. (tables from libdither)" },
+    { DitherAlgorithm::Riemersma,           "Riemersma",
+        "Diffuses error along a Hilbert space-filling curve. Distinctive, locally-clustered grain with no directional banding. (method from libdither)" },
     { DitherAlgorithm::Bayer,               nullptr,               "Ordered Dithering" }, // header
     { DitherAlgorithm::Bayer,               "Bayer",
         "Recursive threshold matrix. Crisp geometric cross-hatch pattern; scales to any matrix size." },

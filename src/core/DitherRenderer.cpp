@@ -1,5 +1,6 @@
 #include "DitherRenderer.h"
 #include "ColorMath.h"
+#include "DitherVarErrData.h"   // Ostromoukhov coefficient tables (ported from libdither)
 
 #include <QPainter>
 #include <QPainterPath>
@@ -323,10 +324,12 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
     QImage out(work.size(), QImage::Format_ARGB32);
     out.fill(Qt::transparent);
 
-    if      (isThreshold(s.algorithm)) renderThreshold   (work, out, s);
-    else if (isOrdered  (s.algorithm)) renderOrdered     (work, out, s);
-    else if (isHybrid   (s.algorithm)) renderDotDiffusion(work, out, s);
-    else                               renderDiffusion    (work, out, s);
+    if      (isThreshold(s.algorithm))                  renderThreshold   (work, out, s);
+    else if (isOrdered  (s.algorithm))                  renderOrdered     (work, out, s);
+    else if (isHybrid   (s.algorithm))                  renderDotDiffusion(work, out, s);
+    else if (s.algorithm == DitherAlgorithm::Ostromoukhov) renderVarErrDiff(work, out, s);
+    else if (s.algorithm == DitherAlgorithm::Riemersma)    renderRiemersma (work, out, s);
+    else                                                renderDiffusion    (work, out, s);
 
     if (ps > 1) {
         if (s.cornerRadius > 0.0f) {
@@ -466,9 +469,11 @@ int DitherRenderer::paintMergedRects(const QImage& input, const DitherSettings& 
 
     QImage grid(work.size(), QImage::Format_ARGB32);
     grid.fill(Qt::transparent);
-    if      (isThreshold(s.algorithm)) renderThreshold   (work, grid, s);
-    else if (isOrdered  (s.algorithm)) renderOrdered     (work, grid, s);
-    else if (isHybrid   (s.algorithm)) renderDotDiffusion(work, grid, s);
+    if      (isThreshold(s.algorithm))                  renderThreshold   (work, grid, s);
+    else if (isOrdered  (s.algorithm))                  renderOrdered     (work, grid, s);
+    else if (isHybrid   (s.algorithm))                  renderDotDiffusion(work, grid, s);
+    else if (s.algorithm == DitherAlgorithm::Ostromoukhov) renderVarErrDiff(work, grid, s);
+    else if (s.algorithm == DitherAlgorithm::Riemersma)    renderRiemersma (work, grid, s);
     else                               renderDiffusion    (work, grid, s);
 
     const int W = grid.width(), H = grid.height();
@@ -613,6 +618,173 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
                 fb[ni] += eb * taps[t].w;
             }
         }
+    }
+}
+
+// ============================================================
+//  Variable error diffusion (Ostromoukhov)
+//  Coefficients vary per input tone (tables ported from libdither);
+//  the diffusion loop is our own, over our colour/tonal pipeline.
+// ============================================================
+
+void DitherRenderer::renderVarErrDiff(const QImage& work, QImage& out,
+                                      const DitherSettings& s)
+{
+    const int w = work.width();
+    const int h = work.height();
+    if (w == 0 || h == 0) return;
+
+    const float strength    = qBound(0, s.strength, 100) / 100.0f;
+    const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
+    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
+    const auto  tones       = sortedTones(s.tonal.tones);
+    const int   nTones      = int(tones.size());
+    const int   L           = 2;
+
+    const std::vector<ColorMath::PaletteEntry> palette =
+        paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
+    const std::vector<ColorMath::PaletteEntry>* pal =
+        (paletteMode && !palette.empty()) ? &palette : nullptr;
+
+    float inkLumLin = 0.0f;
+    if (!imageColors && !paletteMode && nTones == 1)
+        inkLumLin = ColorMath::linearLuminance(tones[0].color.rgb());
+
+    std::vector<float> fr(size_t(w) * h), fg(size_t(w) * h), fb(size_t(w) * h);
+    for (int y = 0; y < h; ++y) {
+        const QRgb* line = reinterpret_cast<const QRgb*>(work.constScanLine(y));
+        for (int x = 0; x < w; ++x) {
+            QRgb p = line[x]; float a = qAlpha(p) / 255.0f; size_t i = size_t(y) * w + x;
+            fr[i] = ColorMath::srgbToLinear(qRed(p))   * a + (1.0f - a);
+            fg[i] = ColorMath::srgbToLinear(qGreen(p)) * a + (1.0f - a);
+            fb[i] = ColorMath::srgbToLinear(qBlue(p))  * a + (1.0f - a);
+        }
+    }
+
+    // Ostromoukhov neighbours (forward): (+1,0), (-1,+1), (0,+1); x mirrored on
+    // reverse rows. Per-pixel weights come from the tone-indexed coefficient table.
+    const int dxF[3] = { +1, -1, 0 };
+    const int dyF[3] = {  0, +1, 1 };
+
+    for (int row = 0; row < h; ++row) {
+        const bool rev = (row & 1) != 0;
+        for (int ci = 0; ci < w; ++ci) {
+            const int col = rev ? w - 1 - ci : ci;
+            const size_t i = size_t(row) * w + col;
+
+            float cr, cg, cb; QRgb outPx;
+            quantizePixel(fr[i], fg[i], fb[i], imageColors, tones, nTones, L, inkLumLin, pal,
+                          cr, cg, cb, outPx);
+            reinterpret_cast<QRgb*>(out.scanLine(row))[col] = outPx;
+
+            const float er = (fr[i] - cr) * strength;
+            const float eg = (fg[i] - cg) * strength;
+            const float eb = (fb[i] - cb) * strength;
+            if (er == 0.0f && eg == 0.0f && eb == 0.0f) continue;
+
+            const float luma = ColorMath::perceptualLumaFromLinear(fr[i], fg[i], fb[i]);
+            const int   idx  = qBound(0, int(luma * 255.0f + 0.5f), 255);
+            const int   div  = ostro::divs[idx];
+            if (div <= 0) continue;
+            const int*  cf   = &ostro::coefs[idx * 3];
+
+            for (int t = 0; t < 3; ++t) {
+                const int nc = col + (rev ? -dxF[t] : dxF[t]);
+                const int nr = row + dyF[t];
+                if (nc < 0 || nc >= w || nr < 0 || nr >= h) continue;
+                const float wgt = float(cf[t]) / float(div);
+                const size_t ni = size_t(nr) * w + nc;
+                fr[ni] += er * wgt; fg[ni] += eg * wgt; fb[ni] += eb * wgt;
+            }
+        }
+    }
+}
+
+// ============================================================
+//  Riemersma dithering
+//  Error diffused along a Hilbert space-filling curve with an
+//  exponentially-weighted error history (scheme from libdither;
+//  a standard Hilbert mapping replaces libdither's L-system).
+// ============================================================
+
+// Hilbert curve: distance d → (x,y) on a 2^k grid (Wikipedia reference impl).
+static void hilbertD2XY(int n, int d, int& x, int& y)
+{
+    x = 0; y = 0;
+    int t = d;
+    for (int s = 1; s < n; s *= 2) {
+        int rx = 1 & (t / 2);
+        int ry = 1 & (t ^ rx);
+        if (ry == 0) {
+            if (rx == 1) { x = s - 1 - x; y = s - 1 - y; }
+            int tmp = x; x = y; y = tmp;
+        }
+        x += s * rx; y += s * ry; t /= 4;
+    }
+}
+
+void DitherRenderer::renderRiemersma(const QImage& work, QImage& out,
+                                     const DitherSettings& s)
+{
+    const int w = work.width();
+    const int h = work.height();
+    if (w == 0 || h == 0) return;
+
+    const float strength    = qBound(0, s.strength, 100) / 100.0f;
+    const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
+    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
+    const auto  tones       = sortedTones(s.tonal.tones);
+    const int   nTones      = int(tones.size());
+    const int   L           = 2;
+
+    const std::vector<ColorMath::PaletteEntry> palette =
+        paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
+    const std::vector<ColorMath::PaletteEntry>* pal =
+        (paletteMode && !palette.empty()) ? &palette : nullptr;
+
+    float inkLumLin = 0.0f;
+    if (!imageColors && !paletteMode && nTones == 1)
+        inkLumLin = ColorMath::linearLuminance(tones[0].color.rgb());
+
+    std::vector<float> fr(size_t(w) * h), fg(size_t(w) * h), fb(size_t(w) * h);
+    for (int y = 0; y < h; ++y) {
+        const QRgb* line = reinterpret_cast<const QRgb*>(work.constScanLine(y));
+        for (int x = 0; x < w; ++x) {
+            QRgb p = line[x]; float a = qAlpha(p) / 255.0f; size_t i = size_t(y) * w + x;
+            fr[i] = ColorMath::srgbToLinear(qRed(p))   * a + (1.0f - a);
+            fg[i] = ColorMath::srgbToLinear(qGreen(p)) * a + (1.0f - a);
+            fb[i] = ColorMath::srgbToLinear(qBlue(p))  * a + (1.0f - a);
+        }
+    }
+
+    // Geometric error weights 1..max (oldest..newest); decision adds err/max.
+    constexpr int errLen = 16; constexpr double maxW = 16.0;
+    double weights[errLen];
+    { double m = std::exp(std::log(maxW) / double(errLen - 1)), v = 1.0;
+      for (int k = 0; k < errLen; ++k) { weights[k] = std::round(v); v *= m; } }
+    std::vector<float> qr(errLen, 0.0f), qg(errLen, 0.0f), qb(errLen, 0.0f);
+
+    int n = 1; while (n < w || n < h) n *= 2;
+
+    for (long long d = 0; d < (long long)n * n; ++d) {
+        int x, y; hilbertD2XY(n, int(d), x, y);
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        const size_t i = size_t(y) * w + x;
+
+        double ar = 0, ag = 0, ab = 0;
+        for (int k = 0; k < errLen; ++k) {
+            ar += qr[k] * weights[k]; ag += qg[k] * weights[k]; ab += qb[k] * weights[k];
+        }
+        float cr, cg, cb; QRgb outPx;
+        quantizePixel(fr[i] + float(ar / maxW), fg[i] + float(ag / maxW), fb[i] + float(ab / maxW),
+                      imageColors, tones, nTones, L, inkLumLin, pal, cr, cg, cb, outPx);
+        reinterpret_cast<QRgb*>(out.scanLine(y))[x] = outPx;
+
+        // Drop oldest, push this pixel's residual (input − chosen) as newest.
+        for (int k = 0; k < errLen - 1; ++k) { qr[k] = qr[k + 1]; qg[k] = qg[k + 1]; qb[k] = qb[k + 1]; }
+        qr[errLen - 1] = (fr[i] - cr) * strength;
+        qg[errLen - 1] = (fg[i] - cg) * strength;
+        qb[errLen - 1] = (fb[i] - cb) * strength;
     }
 }
 

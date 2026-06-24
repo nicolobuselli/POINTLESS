@@ -53,4 +53,6 @@ private:
     static void renderOrdered     (const QImage& work, QImage& out, const DitherSettings& s);
     static void renderDotDiffusion(const QImage& work, QImage& out, const DitherSettings& s);
     static void renderThreshold   (const QImage& work, QImage& out, const DitherSettings& s);
+    static void renderVarErrDiff  (const QImage& work, QImage& out, const DitherSettings& s);
+    static void renderRiemersma   (const QImage& work, QImage& out, const DitherSettings& s);
 };
