@@ -187,7 +187,17 @@ MainWindow::MainWindow(QWidget* parent)
         m_undoTimer.start();
     });
     connect(m_left,    &ControlsPanel::transformChanged, this, &MainWindow::onLayerTransformChanged);
-    connect(m_preview, &PreviewWidget::transformChanged, this, &MainWindow::onLayerTransformChanged);
+    connect(m_preview, &PreviewWidget::transformChanged, this, [this](const LayerTransform& t) {
+        m_transformDragging = true;          // canvas drag: render cheap previews only
+        onLayerTransformChanged(t);
+    });
+    connect(m_preview, &PreviewWidget::transformEditFinished, this, [this]() {
+        m_transformDragging = false;
+        scheduleRender();        // one full-quality pass now that the gesture is done
+        m_previewTimer.start();  // refresh layer thumbnails
+        m_undoTimer.start();
+    });
+    connect(m_preview, &PreviewWidget::selectionChanged, this, &MainWindow::onCanvasSelectionChanged);
     connect(m_right, &ModePanel::paramsChanged,             this, &MainWindow::onParamsChanged);
     connect(m_right, &ModePanel::tonalChanged,              this, &MainWindow::onParamsChanged);
     connect(m_right, &ModePanel::backgroundChanged,         this, &MainWindow::onParamsChanged);
@@ -197,7 +207,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_right, &ModePanel::modeSelected,              this, &MainWindow::onModeSelected);
     connect(m_right, &ModePanel::exportRequested,           this, &MainWindow::onExport);
 
-    connect(m_preview,   &PreviewWidget::filesDropped,           this, &MainWindow::onFilesDropped);
+    connect(m_preview,   &PreviewWidget::filesDropped,           this, &MainWindow::onFilesDroppedAsLayer);
     connect(m_preview,   &PreviewWidget::mediaDroppedAsLayer,     this, &MainWindow::onMediaDroppedAsLayer);
     connect(m_filmstrip, &FilmstripWidget::filesDropped,         this, &MainWindow::onFilesDropped);
     connect(m_filmstrip, &FilmstripWidget::addRequested,         this, &MainWindow::onAddRequested);
@@ -913,19 +923,20 @@ void MainWindow::onLayerTransformChanged(const LayerTransform& t)
     m_playCacheValid = false;
     m_left->setTransform(t);   // keep the numeric boxes in sync (silent)
     pushPreviewTransform();
-    scheduleRender();         // centre preview updates live
-    m_previewTimer.start();   // layer thumbs catch up once the drag settles
+    // During a live canvas drag, only the cheap interactive pass runs (the full
+    // pass is deferred to drag end) — re-rendering the whole document, and the
+    // layer thumbnails, on every mouse move is what made many-layer drags chaotic.
+    scheduleRender(/*previewOnly=*/m_transformDragging);
+    if (!m_transformDragging) m_previewTimer.start();   // thumbs catch up after edits
     m_undoTimer.start();
 }
 
-QSize MainWindow::activeLayerNativeSize() const
+QSize MainWindow::layerNativeSize(const Layer& l) const
 {
     if (m_current < 0) return {};
-    const Layer* l = activeLayer();
-    if (!l) return {};
     const SessionImage& img = m_images[m_current];
-    if (l->mediaId >= 0) {
-        const auto it = img.media.find(l->mediaId);
+    if (l.mediaId >= 0) {
+        const auto it = img.media.find(l.mediaId);
         if (it != img.media.end()) {
             const MediaClip& m = it.value();
             if (!m.frames.isEmpty()) return m.frames.front().size();
@@ -935,14 +946,61 @@ QSize MainWindow::activeLayerNativeSize() const
     return img.source.size();
 }
 
-void MainWindow::pushPreviewTransform()
+QSize MainWindow::activeLayerNativeSize() const
 {
     const Layer* l = activeLayer();
+    return l ? layerNativeSize(*l) : QSize();
+}
+
+void MainWindow::pushPreviewTransform()
+{
+    if (m_current < 0) {
+        m_preview->setCanvasLayers({}, {});
+        m_preview->setSelection({}, -1);
+        m_preview->setActiveTransform({}, {}, {}, false);
+        return;
+    }
+    auto& st = m_images[m_current].state;
+    const QSize frame(st.frameW, st.frameH);
+
+    // All visible, placeable layers for click/box selection (top-first = UI order).
+    QVector<PreviewWidget::CanvasLayer> items;
+    for (const Layer& l : st.layers) {
+        if (!l.visible) continue;
+        const QSize native = layerNativeSize(l);
+        if (native.isEmpty()) continue;
+        items.push_back({ l.id, l.transform, native });
+    }
+    m_preview->setCanvasLayers(items, frame);
+
+    // Canvas selection is independent of the active layer: nothing is selected
+    // by default, only an explicit click selects. Just drop stale ids here.
+    const int activeId = st.activeLayerId;
+    QSet<int> sel;
+    for (int id : m_selection)
+        if (findLayerById(st.layers, id) >= 0) sel.insert(id);
+    m_selection = sel;
+    m_preview->setSelection(sel, activeId);
+
+    const Layer* l = activeLayer();
     const QSize native = activeLayerNativeSize();
-    const auto& st = (m_current >= 0) ? m_images[m_current].state : SessionParams{};
     m_preview->setActiveTransform(l ? l->transform : LayerTransform{},
-                                  native, QSize(st.frameW, st.frameH),
-                                  l != nullptr && !native.isEmpty());
+                                  native, frame, l != nullptr && !native.isEmpty());
+}
+
+void MainWindow::onCanvasSelectionChanged(const QSet<int>& ids, int activeId)
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+    m_selection = ids;
+    // Selecting an image makes it the param-editing target too; deselecting
+    // (empty) leaves the active layer as-is so the panels stay usable.
+    if (activeId >= 0 && findLayerById(st.layers, activeId) >= 0)
+        st.activeLayerId = activeId;
+
+    applyParams(st);      // refresh panels + pushPreviewTransform (pushes selection)
+    syncLayersPanel();
+    scheduleRender();
 }
 
 void MainWindow::onAddLayerRequested()
@@ -1124,6 +1182,26 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
 {
     if (m_current < 0) return;
 
+    // No layers left → nothing to composite, but keep the (empty) frame on
+    // screen: show a background-filled canvas at the frame size. The worker bails
+    // on a null source, so without this the last frame and its now-empty
+    // selection box would linger.
+    if (m_images[m_current].state.layers.empty()) {
+        const auto& st = m_images[m_current].state;
+        const QSize frame(st.frameW > 0 ? st.frameW : 1080,
+                          st.frameH > 0 ? st.frameH : 1080);
+        QImage bgFrame(frame, QImage::Format_ARGB32_Premultiplied);
+        QColor bg = st.background;
+        bg.setAlphaF(st.backgroundOpacity);
+        bgFrame.fill(bg);
+        m_lastRender = bgFrame;
+        m_lastPreviewFrame = {};
+        m_selection.clear();
+        m_preview->setImage(bgFrame);
+        pushPreviewTransform();
+        return;
+    }
+
     // The previous full render is now stale: invalidate it so the fast preview
     // pass (which lands within a few ms) is shown immediately instead of being
     // masked by the old full frame until the 350ms full pass catches up.
@@ -1151,8 +1229,11 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
     // Render the live preview at the size it's actually shown on screen, so the
     // fast pass already matches the (downscaled) final — no jarring quality jump.
     const qreal dpr = m_preview->devicePixelRatioF();
-    const int previewPx = qMax(qRound(m_preview->width()  * dpr),
-                               qRound(m_preview->height() * dpr));
+    int previewPx = qMax(qRound(m_preview->width()  * dpr),
+                         qRound(m_preview->height() * dpr));
+    // While dragging a layer on the canvas, render smaller so each interactive
+    // pass is far cheaper (the full-res pass lands once the drag ends).
+    if (m_transformDragging) previewPx = qMax(360, previewPx / 2);
     m_worker->setInteractivePreviewPx(previewPx);
 
     // Zoomed in → render the full pass larger so the vector symbols stay crisp
@@ -1298,7 +1379,7 @@ void MainWindow::copyToClipboard()
 // Session images
 // ---------------------------------------------------------------------------
 
-void MainWindow::addImages(const QStringList& paths)
+QVector<int> MainWindow::addImages(const QStringList& paths)
 {
     // A numbered batch (frame_0001.png …) is almost always a video as frames —
     // offer to import it as a single animated clip, like DaVinci's image sequence.
@@ -1307,7 +1388,7 @@ void MainWindow::addImages(const QStringList& paths)
             QString("These %1 files look like an image sequence.\n\n"
                     "Import them as a single animated clip?").arg(paths.size()),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-        if (reply == QMessageBox::Yes) { importSequence(paths); return; }
+        if (reply == QMessageBox::Yes) { importSequence(paths); return {}; }
     }
 
     // Load a file into a MediaClip (decoding video via ffmpeg).
@@ -1343,16 +1424,17 @@ void MainWindow::addImages(const QStringList& paths)
     const int bi = ensureBoard();
     SessionImage& board = m_images[bi];
 
-    int lastMid = -1;
+    QVector<int> added;
     for (const QString& path : paths) {
         MediaClip clip;
         if (!loadClip(path, clip)) continue;
         const int mid = board.nextMediaId++;
         board.media.insert(mid, clip);
         m_filmstrip->addThumb(mid, clip.image, clip.name);
-        lastMid = mid;
+        added.append(mid);
     }
-    if (lastMid >= 0) m_filmstrip->setActive(lastMid);
+    if (!added.isEmpty()) m_filmstrip->setActive(added.last());
+    return added;
 }
 
 // Create the single composition board if it doesn't exist yet, and return its
@@ -1509,6 +1591,12 @@ void MainWindow::onAddRequested()
 void MainWindow::onFilesDropped(const QStringList& paths)
 {
     addImages(paths);
+}
+
+void MainWindow::onFilesDroppedAsLayer(const QStringList& paths)
+{
+    for (int mid : addImages(paths))
+        addLayerFromMedia(mid);
 }
 
 void MainWindow::onThumbSelected(int mediaId)

@@ -5,6 +5,9 @@
 #include <QPoint>
 #include <QPointF>
 #include <QPolygonF>
+#include <QRect>
+#include <QSet>
+#include <QVector>
 #include "../core/Params.h"
 
 /**
@@ -37,10 +40,18 @@ public:
     void setActiveTransform(const LayerTransform& tf, QSize layerNative,
                             QSize frame, bool transformable);
 
+    // One placeable layer's geometry, used for click/box selection and outlines.
+    struct CanvasLayer { int id; LayerTransform tf; QSize native; };
+    // All visible layers, top-most first (matches the layer stack order).
+    void setCanvasLayers(const QVector<CanvasLayer>& layers, QSize frame);
+    void setSelection(const QSet<int>& selected, int activeId);
+
 signals:
     void filesDropped(const QStringList& paths);
     void mediaDroppedAsLayer(int mediaId);   // a library thumbnail dropped on the canvas
     void transformChanged(const LayerTransform& t);
+    void transformEditFinished();   // a move/scale/rotate drag ended → do a full render
+    void selectionChanged(const QSet<int>& ids, int activeId);   // canvas click/box select
     void zoomChanged();   // user zoomed; UI may re-render at the new resolution
 
 protected:
@@ -76,18 +87,31 @@ private:
     QSize          m_layerNative;
     QSize          m_frame;
     bool           m_transformable = false;
-    bool           m_handlesActive = false;
     TfDrag         m_tfDrag        = TfDrag::None;
     LayerTransform m_tfStart;          // transform at drag start
     QPointF        m_grabOffset;       // Move: centre - grab point (frame space)
     double         m_startDist  = 1.0; // Scale: |corner - centre| at start
     double         m_startAngle = 0.0; // Rotate: angle(grab - centre) at start
 
+    // ── Selection (click / box) over all layers ───────────────────
+    QVector<CanvasLayer> m_canvasLayers;   // top-first
+    QSet<int>            m_selection;
+    int                  m_activeId = -1;
+    bool                 m_boxSelecting = false;
+    bool                 m_boxAdditive  = false;   // shift held → add to selection
+    QPoint               m_boxStart;
+    QPoint               m_boxCur;
+
     double  imageScale() const;        // frame px → widget px factor (0 if none)
     QPointF imageOrigin() const;       // top-left of m_scaled in widget coords
     QPointF frameToWidget(QPointF f) const;
     QPointF widgetToFrame(QPointF w) const;
     QPointF layerCentreFrame() const;
-    QPolygonF layerQuadFrame() const;  // 4 corners in frame space
+    QPolygonF layerQuadFrame() const;  // active layer: 4 corners in frame space
+    QPolygonF quadFrame(const LayerTransform& tf, QSize native) const;  // any layer
+    QPolygonF quadWidget(const LayerTransform& tf, QSize native) const;
+    bool      handlesVisible() const;  // single selected, transformable, editable
+    int       hitTest(QPointF widgetPos) const;   // top-most layer id under point, -1
+    const CanvasLayer* layerById(int id) const;
     void    paintHandles(QPainter& p);
 };

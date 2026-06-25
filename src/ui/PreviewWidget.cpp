@@ -13,6 +13,7 @@
 #include <QTransform>
 #include <QtMath>
 #include <QLineF>
+#include <QPainterPath>
 
 namespace {
 
@@ -116,7 +117,20 @@ void PreviewWidget::setActiveTransform(const LayerTransform& tf, QSize layerNati
     m_layerNative   = layerNative;
     m_frame         = frame;
     m_transformable = transformable && !layerNative.isEmpty() && !frame.isEmpty();
-    if (!m_transformable) m_handlesActive = false;
+    update();
+}
+
+void PreviewWidget::setCanvasLayers(const QVector<CanvasLayer>& layers, QSize frame)
+{
+    m_canvasLayers = layers;
+    if (!frame.isEmpty()) m_frame = frame;
+    update();
+}
+
+void PreviewWidget::setSelection(const QSet<int>& selected, int activeId)
+{
+    m_selection = selected;
+    m_activeId  = activeId;
     update();
 }
 
@@ -152,19 +166,54 @@ QPointF PreviewWidget::layerCentreFrame() const
                    m_frame.height() * 0.5 + double(m_tf.yPct) * m_frame.height());
 }
 
-QPolygonF PreviewWidget::layerQuadFrame() const
+QPolygonF PreviewWidget::quadFrame(const LayerTransform& tf, QSize native) const
 {
-    const double s     = qMax(0.0001, double(m_tf.scalePct) / 100.0);
-    const double halfW = m_layerNative.width()  * 0.5 * s;
-    const double halfH = m_layerNative.height() * 0.5 * s;
+    const double s     = qMax(0.0001, double(tf.scalePct) / 100.0);
+    const double halfW = native.width()  * 0.5 * s;
+    const double halfH = native.height() * 0.5 * s;
+    const QPointF c(m_frame.width()  * 0.5 + double(tf.xPct) * m_frame.width(),
+                    m_frame.height() * 0.5 + double(tf.yPct) * m_frame.height());
     QTransform m;
-    const QPointF c = layerCentreFrame();
     m.translate(c.x(), c.y());
-    m.rotate(m_tf.rotation);
+    m.rotate(tf.rotation);
     QPolygonF q;
     q << m.map(QPointF(-halfW, -halfH)) << m.map(QPointF(halfW, -halfH))
       << m.map(QPointF(halfW,  halfH)) << m.map(QPointF(-halfW, halfH));
     return q;
+}
+
+QPolygonF PreviewWidget::layerQuadFrame() const
+{
+    return quadFrame(m_tf, m_layerNative);
+}
+
+QPolygonF PreviewWidget::quadWidget(const LayerTransform& tf, QSize native) const
+{
+    QPolygonF qw;
+    for (const QPointF& f : quadFrame(tf, native)) qw << frameToWidget(f);
+    return qw;
+}
+
+bool PreviewWidget::handlesVisible() const
+{
+    return m_transformable && !m_panMode && !m_showOriginal
+        && m_selection.size() == 1 && m_selection.contains(m_activeId);
+}
+
+const PreviewWidget::CanvasLayer* PreviewWidget::layerById(int id) const
+{
+    for (const CanvasLayer& cl : m_canvasLayers)
+        if (cl.id == id) return &cl;
+    return nullptr;
+}
+
+int PreviewWidget::hitTest(QPointF widgetPos) const
+{
+    // m_canvasLayers is top-first → first match is the top-most layer.
+    for (const CanvasLayer& cl : m_canvasLayers)
+        if (quadWidget(cl.tf, cl.native).containsPoint(widgetPos, Qt::OddEvenFill))
+            return cl.id;
+    return -1;
 }
 
 const QImage& PreviewWidget::currentSource() const
@@ -230,27 +279,27 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    // Transform handles (left button, not in pan/original mode).
-    if (event->button() == Qt::LeftButton && m_transformable
-        && !m_panMode && !m_showOriginal && imageScale() > 0.0) {
+    // Selection + transform (left button, not in pan/original mode).
+    if (event->button() == Qt::LeftButton && !m_panMode && !m_showOriginal
+        && imageScale() > 0.0) {
         const QPointF pos = event->position();
-        QPolygonF qw;
-        for (const QPointF& f : layerQuadFrame()) qw << frameToWidget(f);
-        const QPointF centre = frameToWidget(layerCentreFrame());
+        const Qt::KeyboardModifiers mods = event->modifiers();
 
-        m_tfStart = m_tf;
-        const QPointF framePt = widgetToFrame(pos);
-        const QPointF c = layerCentreFrame();
+        // 1. Rotation/scale handles of the single active layer take priority.
+        if (handlesVisible()) {
+            QPolygonF qw;
+            for (const QPointF& f : layerQuadFrame()) qw << frameToWidget(f);
+            const QPointF centre = frameToWidget(layerCentreFrame());
+            m_tfStart = m_tf;
+            const QPointF framePt = widgetToFrame(pos);
+            const QPointF c = layerCentreFrame();
 
-        if (m_handlesActive) {
-            // Rotation handle
             if (QLineF(pos, rotationHandleWidget(qw, centre)).length() <= kRotHandleHit) {
                 m_tfDrag = TfDrag::Rotate;
                 m_startAngle = std::atan2(framePt.y() - c.y(), framePt.x() - c.x());
                 event->accept();
                 return;
             }
-            // Corner (scale) handles
             for (const QPointF& corner : qw) {
                 if (QLineF(pos, corner).length() <= kHandleHit) {
                     m_tfDrag = TfDrag::Scale;
@@ -261,23 +310,71 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
             }
         }
 
-        if (qw.containsPoint(pos, Qt::OddEvenFill)) {
-            m_handlesActive = true;
-            m_tfDrag = TfDrag::Move;
-            m_grabOffset = c - framePt;
-            setCursor(Qt::SizeAllCursor);
+        const int hit = hitTest(pos);   // top-most layer under the cursor
+
+        // Shift / Ctrl operate on the top-most layer under the cursor.
+        if (hit >= 0 && (mods & Qt::ShiftModifier)) {        // add to selection
+            QSet<int> sel = m_selection; sel.insert(hit);
+            emit selectionChanged(sel, hit);
+            event->accept();
+            return;
+        }
+        if (hit >= 0 && (mods & Qt::ControlModifier)) {      // remove from selection
+            QSet<int> sel = m_selection; sel.remove(hit);
+            const int act = sel.contains(m_activeId) ? m_activeId
+                          : (sel.isEmpty() ? -1 : *sel.begin());
+            emit selectionChanged(sel, act);
+            event->accept();
+            return;
+        }
+
+        // Plain click. If the cursor is over an already-selected layer, act on
+        // THAT one (so you can grab a selected image even when another sits on
+        // top of it) — preferring the active layer. Otherwise pick the top-most.
+        int target = -1;
+        if (m_selection.contains(m_activeId)
+            && quadWidget(m_tf, m_layerNative).containsPoint(pos, Qt::OddEvenFill)) {
+            target = m_activeId;
+        } else {
+            for (const CanvasLayer& cl : m_canvasLayers)   // top-first
+                if (m_selection.contains(cl.id)
+                    && quadWidget(cl.tf, cl.native).containsPoint(pos, Qt::OddEvenFill)) {
+                    target = cl.id;
+                    break;
+                }
+        }
+        const bool keepSelection = (target >= 0);   // clicked inside the selection
+        if (target < 0) target = hit;               // else grab the top-most layer
+
+        if (target >= 0) {
+            // Begin a move drag; set local geometry up front so the move is
+            // correct before MainWindow round-trips the selection back.
+            const CanvasLayer* cl = layerById(target);
+            if (cl) {
+                m_tf            = cl->tf;
+                m_layerNative   = cl->native;
+                m_transformable = !cl->native.isEmpty();
+                m_activeId      = target;
+                if (!keepSelection) m_selection = { target };
+                m_tfStart       = m_tf;
+                const QPointF framePt = widgetToFrame(pos);
+                m_grabOffset    = layerCentreFrame() - framePt;
+                m_tfDrag        = TfDrag::Move;
+                setCursor(Qt::SizeAllCursor);
+            }
+            emit selectionChanged(m_selection, target);
             update();
             event->accept();
             return;
         }
 
-        // Click on empty area dismisses the handles.
-        if (m_handlesActive) {
-            m_handlesActive = false;
-            update();
-            event->accept();
-            return;
-        }
+        // Empty area (outside every layer) → rubber-band box selection. A click
+        // with no drag clears the selection (handled on release).
+        m_boxSelecting = true;
+        m_boxAdditive  = (mods & Qt::ShiftModifier);
+        m_boxStart = m_boxCur = event->pos();
+        event->accept();
+        return;
     }
 
     QWidget::mousePressEvent(event);
@@ -320,6 +417,13 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
+    if (m_boxSelecting) {
+        m_boxCur = event->pos();
+        update();
+        event->accept();
+        return;
+    }
+
     if (m_dragging && event->buttons().testFlag(m_dragButton)) {
         const QPoint delta = event->pos() - m_lastDragPos;
         m_panOffset += delta;
@@ -336,6 +440,34 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
     if (m_tfDrag != TfDrag::None && event->button() == Qt::LeftButton) {
         m_tfDrag = TfDrag::None;
         setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        emit transformEditFinished();   // gesture over → MainWindow does a full render
+        event->accept();
+        return;
+    }
+
+    if (m_boxSelecting && event->button() == Qt::LeftButton) {
+        m_boxSelecting = false;
+        const QRect r = QRect(m_boxStart, m_boxCur).normalized();
+
+        if (r.width() < 3 && r.height() < 3) {
+            // No real drag → an empty-area click clears the selection.
+            if (!m_boxAdditive) emit selectionChanged(QSet<int>{}, -1);
+        } else {
+            // Drag left → "crossing": any layer that partially overlaps.
+            // Drag right → "window": only layers fully inside the box.
+            const bool crossing = m_boxCur.x() < m_boxStart.x();
+            QPainterPath rectPath; rectPath.addRect(QRectF(r));
+            QSet<int> sel = m_boxAdditive ? m_selection : QSet<int>{};
+            for (const CanvasLayer& cl : m_canvasLayers) {
+                QPainterPath pp; pp.addPolygon(quadWidget(cl.tf, cl.native)); pp.closeSubpath();
+                const bool inside = crossing ? rectPath.intersects(pp) : rectPath.contains(pp);
+                if (inside) sel.insert(cl.id);
+            }
+            const int act = sel.contains(m_activeId) ? m_activeId
+                          : (sel.isEmpty() ? -1 : *sel.begin());
+            emit selectionChanged(sel, act);
+        }
+        update();
         event->accept();
         return;
     }
@@ -400,8 +532,34 @@ void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
 
         p.drawImage(x, y, m_scaled);
 
-        if (m_transformable && m_handlesActive && !m_showOriginal && !m_panMode)
-            paintHandles(p);
+        if (!m_showOriginal && !m_panMode) {
+            const bool single = handlesVisible();
+            // Selection outlines for every selected layer (the single active one
+            // is drawn with full handles instead).
+            p.setRenderHint(QPainter::Antialiasing, true);
+            QPen selPen(QColor("#568AD9"));
+            selPen.setWidthF(1.4);
+            p.setPen(selPen);
+            p.setBrush(Qt::NoBrush);
+            for (const CanvasLayer& cl : m_canvasLayers) {
+                if (!m_selection.contains(cl.id)) continue;
+                if (single && cl.id == m_activeId) continue;
+                p.drawPolygon(quadWidget(cl.tf, cl.native));
+            }
+            if (single) paintHandles(p);
+        }
+
+        // Rubber-band box: dashed = crossing (drag left), solid = window (right).
+        if (m_boxSelecting) {
+            const QRect r = QRect(m_boxStart, m_boxCur).normalized();
+            const bool crossing = m_boxCur.x() < m_boxStart.x();
+            QPen boxPen(QColor("#E3E3E3"));
+            boxPen.setWidthF(1.0);
+            if (crossing) boxPen.setStyle(Qt::DashLine);
+            p.setPen(boxPen);
+            p.setBrush(QColor(227, 227, 227, 28));
+            p.drawRect(r);
+        }
     }
 
     // Status caption — bottom-left

@@ -8,6 +8,7 @@
 #include <QElapsedTimer>
 #include <QVector>
 #include <QHash>
+#include <QSet>
 #include <QKeyEvent>
 #include "../core/Params.h"
 #include "../core/Animation.h"
@@ -43,6 +44,7 @@ private slots:
     void onExport();
     void onAddRequested();
     void onFilesDropped(const QStringList& paths);
+    void onFilesDroppedAsLayer(const QStringList& paths);
     void onThumbSelected(int mediaId);        // library: single click → highlight
     void onThumbActivated(int mediaId);       // library: double click → add as layer
     void onThumbCloseRequested(int mediaId);  // library: ✕ → remove source
@@ -54,6 +56,7 @@ private slots:
     void onLayerDeleteRequested(int layerId);
     void onLayerBlendChanged(int layerId, BlendMode mode);
     void onLayerTransformChanged(const LayerTransform& t);
+    void onCanvasSelectionChanged(const QSet<int>& ids, int activeId);
     void onAddLayerRequested();
     void onLayerReordered(int layerId, int insertIndex);
     // Cascade (parent/child) operations driven by the layer tree.
@@ -107,7 +110,8 @@ private:
     SessionParams bakeGroupVisibility(SessionParams p) const;   // child.visible &&= group
     void  commitStructuralChange();                     // sync panel + render + undo
     QSize activeLayerNativeSize() const;   // layer pixel size at 100% scale
-    void  pushPreviewTransform();          // feed active transform to the preview overlay
+    QSize layerNativeSize(const Layer& l) const;   // any layer's 100%-scale size
+    void  pushPreviewTransform();          // feed active transform + selection to the preview
     void selectLayerInternal(int layerId, bool makeVisible);
     QString uniqueLayerName(const SessionParams& p, LayerKind kind) const;
     void syncLayersPanel();
@@ -115,7 +119,7 @@ private:
     float zoomQualityScale() const;   // full-pass supersample for the current zoom
     QHash<int, QImage> layerSourcesAt(const SessionImage& img, int frame) const;
     void pushUndoSnapshot();
-    void addImages(const QStringList& paths);   // load files into the library only
+    QVector<int> addImages(const QStringList& paths);   // load files into the library only; returns new media ids
     void addLayerFromMedia(int mediaId);        // place a library source as a layer
     int  ensureBoard();                         // make sure the single composition exists
     void importSequence(const QStringList& paths);
@@ -150,11 +154,13 @@ private:
 
     QVector<SessionImage> m_images;
     int                   m_current = -1;
+    QSet<int>             m_selection;   // canvas multi-selection (runtime, not undone)
 
     QImage m_lastRender;
     QImage m_lastPreviewFrame;
     bool   m_capsLockActive = false;
     bool   m_spaceDown = false;
+    bool   m_transformDragging = false;   // live on-canvas drag → cheap preview only
     QTimer m_undoTimer;
     QTimer m_previewTimer;   // debounce live preview until param edits settle
     QTimer m_zoomRenderTimer; // debounce re-render at higher res after zooming
