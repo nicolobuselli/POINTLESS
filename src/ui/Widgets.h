@@ -17,6 +17,10 @@
 //  Callback style (std::function) — no extra signals/moc needed.
 // ============================================================
 
+// Drag-and-drop payload for a library source (a board media id), used when a
+// filmstrip thumbnail is dragged onto the Layers panel or the preview canvas.
+inline constexpr char kMediaMime[] = "application/x-ultraditherer-media";
+
 class NoWheelSlider : public QSlider {
 public:
     explicit NoWheelSlider(Qt::Orientation o, QWidget* p = nullptr) : QSlider(o, p) {

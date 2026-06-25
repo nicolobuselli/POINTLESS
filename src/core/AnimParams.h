@@ -29,7 +29,7 @@ enum class ParamId {
     // Halftone (grid + own)
     HtGridSpacing, HtGridPointSpacing, HtGridRotation, HtGridDiameter,
     HtGridStretchFactor, HtGridStretchAngle, HtInputDpi, HtMultiThreshold,
-    HtGamma, HtJitter, HtOpacity, HtCornerRadius,
+    HtGamma, HtWeight, HtJitter, HtOpacity, HtCornerRadius,
     // Dither
     DiPixelSize, DiStrength, DiOpacity, DiCornerRadius, DiThreshold,
     // Ascii

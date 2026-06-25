@@ -39,6 +39,7 @@ public:
 
 signals:
     void filesDropped(const QStringList& paths);
+    void mediaDroppedAsLayer(int mediaId);   // a library thumbnail dropped on the canvas
     void transformChanged(const LayerTransform& t);
     void zoomChanged();   // user zoomed; UI may re-render at the new resolution
 

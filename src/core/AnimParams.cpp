@@ -24,7 +24,7 @@ const std::array<ParamDesc, int(ParamId::Count)> kDescs = {{
     { "Posterize",          2,   256,  true,  ParamScope::AllLayers },
     { "Threshold",          0,   255,  true,  ParamScope::AllLayers },
 
-    { "Spacing",            2,   200,  false, ParamScope::Halftone },
+    { "Spacing",            2,   500,  false, ParamScope::Halftone },
     { "Point spacing",      2,   200,  false, ParamScope::Halftone },
     { "Rotation",           0,   360,  false, ParamScope::Halftone },
     { "Diameter",         0.1,   3.0,  false, ParamScope::Halftone },
@@ -33,14 +33,15 @@ const std::array<ParamDesc, int(ParamId::Count)> kDescs = {{
     { "Input DPI",         18,   300,  true,  ParamScope::Halftone },
     { "Shape threshold",    0,   255,  true,  ParamScope::Halftone },
     { "Gamma",            0.1,   5.0,  false, ParamScope::Halftone },
+    { "Weight",             0,     1,  false, ParamScope::Halftone },
     { "Jitter",             0,     1,  false, ParamScope::Halftone },
     { "Opacity",            0,     1,  false, ParamScope::Halftone },
-    { "Corner radius",      0,    50,  false, ParamScope::Halftone },
+    { "Corner radius",      0,   100,  false, ParamScope::Halftone },
 
     { "Pixel size",         1,    16,  true,  ParamScope::Dither },
     { "Strength",           0,   100,  true,  ParamScope::Dither },
     { "Opacity",            0,     1,  false, ParamScope::Dither },
-    { "Corner radius",      0,    50,  false, ParamScope::Dither },
+    { "Corner radius",      0,   100,  false, ParamScope::Dither },
     { "Threshold",          0,   100,  true,  ParamScope::Dither },
 
     { "Cell size",          4,    48,  true,  ParamScope::Ascii },
@@ -121,6 +122,7 @@ double getParam(const Layer& l, ParamId id)
         case ParamId::HtInputDpi:          return l.halftone.inputDpi;
         case ParamId::HtMultiThreshold:    return l.halftone.multiThreshold;
         case ParamId::HtGamma:             return l.halftone.gamma;
+        case ParamId::HtWeight:            return l.halftone.weight;
         case ParamId::HtJitter:            return l.halftone.jitter;
         case ParamId::HtOpacity:           return l.halftone.opacity;
         case ParamId::HtCornerRadius:      return l.halftone.cornerRadius;
@@ -177,6 +179,7 @@ void setParam(Layer& l, ParamId id, double v)
         case ParamId::HtInputDpi:          l.halftone.inputDpi           = iv; break;
         case ParamId::HtMultiThreshold:    l.halftone.multiThreshold     = iv; break;
         case ParamId::HtGamma:             l.halftone.gamma              = fv; break;
+        case ParamId::HtWeight:            l.halftone.weight             = fv; break;
         case ParamId::HtJitter:            l.halftone.jitter             = fv; break;
         case ParamId::HtOpacity:           l.halftone.opacity            = fv; break;
         case ParamId::HtCornerRadius:      l.halftone.cornerRadius       = fv; break;

@@ -198,9 +198,11 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_right, &ModePanel::exportRequested,           this, &MainWindow::onExport);
 
     connect(m_preview,   &PreviewWidget::filesDropped,           this, &MainWindow::onFilesDropped);
+    connect(m_preview,   &PreviewWidget::mediaDroppedAsLayer,     this, &MainWindow::onMediaDroppedAsLayer);
     connect(m_filmstrip, &FilmstripWidget::filesDropped,         this, &MainWindow::onFilesDropped);
     connect(m_filmstrip, &FilmstripWidget::addRequested,         this, &MainWindow::onAddRequested);
     connect(m_filmstrip, &FilmstripWidget::thumbSelected,        this, &MainWindow::onThumbSelected);
+    connect(m_filmstrip, &FilmstripWidget::thumbActivated,       this, &MainWindow::onThumbActivated);
     connect(m_filmstrip, &FilmstripWidget::thumbCloseRequested,  this, &MainWindow::onThumbCloseRequested);
 
     // ── Timeline / animation ─────────────────────────────────
@@ -236,6 +238,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_layersPanel, &LayersPanel::addLayerRequested, this, &MainWindow::onAddLayerRequested);
     connect(m_layersPanel, &LayersPanel::reorderRequested,  this, &MainWindow::onLayerReordered);
     connect(m_layersPanel, &LayersPanel::addChildRequested,       this, &MainWindow::onAddChildRequested);
+    connect(m_layersPanel, &LayersPanel::mediaDroppedAsLayer,     this, &MainWindow::onMediaDroppedAsLayer);
     connect(m_layersPanel, &LayersPanel::parentReordered,         this, &MainWindow::onParentReordered);
     connect(m_layersPanel, &LayersPanel::groupVisibilityToggled,  this, &MainWindow::onGroupVisibilityToggled);
     connect(m_layersPanel, &LayersPanel::collapseToggled,         this, &MainWindow::onCollapseToggled);
@@ -293,7 +296,13 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     // ── Demo image ───────────────────────────────────────────
+    // Keep one image loaded for convenience: add it to the library and place it
+    // as a layer so there's something on screen without importing.
     addImages({ ":/example.jpg" });
+    if (m_current >= 0) {
+        const auto ids = m_images[m_current].media.keys();
+        if (!ids.isEmpty()) addLayerFromMedia(ids.first());
+    }
 }
 
 MainWindow::~MainWindow() = default;
@@ -859,14 +868,24 @@ void MainWindow::onLayerDeleteRequested(int layerId)
     const int idx = findLayerById(st.layers, layerId);
     if (idx < 0) return;
 
-    // Deleting a child leaves its parent group in place (a parent with no
-    // children is just a source not currently in the frame).
+    // Deleting a layer removes it from the composition; the source stays in the
+    // library (filmstrip) so it can be re-added. If this was the last layer of
+    // its group, drop the now-empty group too (the source remains in the library).
     const bool wasActive = (st.activeLayerId == layerId);
+    const int  mediaId   = st.layers[idx].mediaId;
     st.layers.erase(st.layers.begin() + idx);
+
+    const bool stillUsed = std::any_of(st.layers.begin(), st.layers.end(),
+        [mediaId](const Layer& l){ return l.mediaId == mediaId; });
+    if (!stillUsed) {
+        const int pi = findParentByMedia(st.parents, mediaId);
+        if (pi >= 0) st.parents.erase(st.parents.begin() + pi);
+    }
 
     if (wasActive && !st.layers.empty())
         selectLayerInternal(st.layers[qMin(idx, int(st.layers.size()) - 1)].id, true);
 
+    syncBoardSource(m_images[m_current]);
     syncLayersPanel();
     scheduleRender();
     m_undoTimer.start();
@@ -1077,22 +1096,17 @@ void MainWindow::onDeleteParentRequested(int mediaId)
     const int pi = findParentByMedia(st.parents, mediaId);
     if (pi < 0) return;
 
+    // Remove the source from the COMPOSITION (its layers + group), but keep it
+    // in the library (board.media + filmstrip) so it can be re-added. Use the
+    // filmstrip ✕ to remove it from the library entirely.
     st.layers.erase(std::remove_if(st.layers.begin(), st.layers.end(),
                     [mediaId](const Layer& l){ return l.mediaId == mediaId; }),
                     st.layers.end());
     st.parents.erase(st.parents.begin() + pi);
-    board.media.remove(mediaId);
 
-    if (st.parents.empty()) {
-        // Last image gone → drop this board; land on another or the empty prompt.
-        const int idx = m_current;
-        m_filmstrip->removeThumb(idx);
-        m_images.removeAt(idx);
-        if (m_images.isEmpty()) switchToImage(-1);
-        else                    switchToImage(qMin(idx, m_images.size() - 1));
-        m_undoTimer.start();
-        return;
-    }
+    if (findLayerById(st.layers, st.activeLayerId) < 0)
+        st.activeLayerId = st.layers.empty() ? -1 : st.layers.front().id;
+    syncBoardSource(board);
     commitStructuralChange();
 }
 
@@ -1323,57 +1337,79 @@ void MainWindow::addImages(const QStringList& paths)
         return true;
     };
 
-    bool changed = false;
-    bool createdBoard = false;
+    // Dropped/added files only enter the LIBRARY (board.media + a filmstrip
+    // thumbnail). They are not placed in the composition until the user
+    // double-clicks or drags a thumbnail onto the Layers panel / canvas.
+    const int bi = ensureBoard();
+    SessionImage& board = m_images[bi];
+
+    int lastMid = -1;
     for (const QString& path : paths) {
         MediaClip clip;
         if (!loadClip(path, clip)) continue;
+        const int mid = board.nextMediaId++;
+        board.media.insert(mid, clip);
+        m_filmstrip->addThumb(mid, clip.image, clip.name);
+        lastMid = mid;
+    }
+    if (lastMid >= 0) m_filmstrip->setActive(lastMid);
+}
 
-        // Every image is uniform: a parent (source, not in the frame) with one
-        // default child (Original/raw, so it shows immediately). Drop more images
-        // → more parents on the SAME board, composited together.
-        if (m_current < 0) {
-            SessionImage si;
-            si.name = clip.name;
-            si.state = SessionParams{};
-            si.state.layers.clear();        // children added below
-            si.state.parents.clear();
-            si.undoStack.append({ si.state, si.anim });
-            si.undoIndex = 0;
-            m_images.append(si);
-            m_filmstrip->addThumb(clip.image, clip.name);
-            m_current   = m_images.size() - 1;
-            createdBoard = true;
-        }
+// Create the single composition board if it doesn't exist yet, and return its
+// index. The board starts with an empty layer stack — sources live in the
+// library until placed.
+int MainWindow::ensureBoard()
+{
+    if (m_current >= 0) return m_current;
+    SessionImage si;
+    si.name  = "composition";
+    si.state = SessionParams{};
+    si.state.layers.clear();
+    si.state.parents.clear();
+    si.undoStack.append({ si.state, si.anim });
+    si.undoIndex = 0;
+    m_images.append(si);
+    m_current = m_images.size() - 1;
+    switchToImage(m_current);   // init panels/preview/timeline for the empty board
+    return m_current;
+}
 
-        SessionImage& board = m_images[m_current];
-        const int mid   = addParentMedia(board, clip);
-        Layer     child = makeChildLayer(board.state, mid, layerKindForMode(m_right->mode()), clip.image.size());
-        board.state.layers.insert(board.state.layers.begin(), child);   // new group on top
-        regroupLayers(board.state);
-        board.state.activeLayerId = child.id;
-        syncBoardSource(board);
+// Place a library source into the composition as a new layer (creating its
+// parent group the first time it's used).
+void MainWindow::addLayerFromMedia(int mediaId)
+{
+    const int bi = ensureBoard();
+    SessionImage& board = m_images[bi];
+    const auto it = board.media.find(mediaId);
+    if (it == board.media.end()) return;
+    const MediaClip clip = it.value();
+    auto& st = board.state;
 
-        if (!clip.frames.isEmpty() && board.anim.frameEnd <= 1) {
-            board.anim.frameStart = 0;
-            board.anim.frameEnd   = clip.frames.size() - 1;
-            board.anim.fps        = qBound(1, qRound(clip.fps), 240);
-        }
-        changed = true;
+    if (findParentByMedia(st.parents, mediaId) < 0) {
+        ParentGroup g;
+        g.mediaId = mediaId;
+        g.name    = clip.name;
+        st.parents.push_back(g);
     }
 
-    if (changed) {
-        m_playCacheValid = false;
-        if (createdBoard) {
-            switchToImage(m_current);   // full init of panels/preview/timeline
-        } else {
-            applyParams(m_images[m_current].state);
-            syncLayersPanel();
-            syncTimeline();
-            scheduleRender();
-        }
-        m_undoTimer.start();
+    Layer child = makeChildLayer(st, mediaId, layerKindForMode(m_right->mode()),
+                                 clip.image.size());
+    st.layers.insert(st.layers.begin(), child);
+    st.activeLayerId = child.id;
+
+    // A video source defines the timeline range when first placed.
+    if (!clip.frames.isEmpty() && board.anim.frameEnd <= 1) {
+        board.anim.frameStart = 0;
+        board.anim.frameEnd   = clip.frames.size() - 1;
+        board.anim.fps        = qBound(1, qRound(clip.fps), 240);
+        syncTimeline();
     }
+
+    syncBoardSource(board);
+    m_left->setSourceImage(board.source);
+    m_right->setSourceImage(board.source);
+    m_filmstrip->setActive(mediaId);
+    commitStructuralChange();
 }
 
 void MainWindow::importSequence(const QStringList& paths)
@@ -1391,31 +1427,21 @@ void MainWindow::importSequence(const QStringList& paths)
         return;
     }
 
-    SessionImage si;
-    si.name  = QString("sequence (%1)").arg(frames.size());
-    si.state = SessionParams{};
-    si.state.layers.clear();
-    si.state.parents.clear();
+    // A sequence is one video-like clip in the library; place it as a layer so
+    // it shows and defines the timeline range.
+    const int bi = ensureBoard();
+    SessionImage& board = m_images[bi];
 
     MediaClip clip;
-    clip.name   = si.name;
+    clip.name   = QString("sequence (%1)").arg(frames.size());
     clip.image  = frames.first();
     clip.frames = frames;
-    const int mid   = addParentMedia(si, clip);
-    Layer     child = makeChildLayer(si.state, mid, layerKindForMode(m_right->mode()), clip.image.size());
-    si.state.layers.push_back(child);
-    si.state.activeLayerId = child.id;
-    syncBoardSource(si);
+    clip.fps    = 24.0;
 
-    si.anim.frameStart = 0;
-    si.anim.frameEnd   = frames.size() - 1;
-    si.anim.playhead   = 0;
-    si.undoStack.append({ si.state, si.anim });
-    si.undoIndex = 0;
-
-    m_images.append(si);
-    m_filmstrip->addThumb(si.source, si.name);
-    switchToImage(m_images.size() - 1);
+    const int mid = board.nextMediaId++;
+    board.media.insert(mid, clip);
+    m_filmstrip->addThumb(mid, clip.image, clip.name);
+    addLayerFromMedia(mid);
 }
 
 void MainWindow::switchToImage(int index)
@@ -1485,35 +1511,50 @@ void MainWindow::onFilesDropped(const QStringList& paths)
     addImages(paths);
 }
 
-void MainWindow::onThumbSelected(int index)
+void MainWindow::onThumbSelected(int mediaId)
 {
-    if (index == m_current) return;
-    switchToImage(index);
+    // Library: single click just highlights the source. Use double-click or drag
+    // to place it as a layer.
+    m_filmstrip->setActive(mediaId);
 }
 
-void MainWindow::onThumbCloseRequested(int index)
+void MainWindow::onThumbActivated(int mediaId)
 {
-    if (index < 0 || index >= m_images.size()) return;
+    addLayerFromMedia(mediaId);
+}
 
-    const auto reply = QMessageBox::question(
-        this,
-        "Are you sure?",
-        "All the progress will be lost",
-        QMessageBox::Yes | QMessageBox::No,
-        QMessageBox::No);
-    if (reply != QMessageBox::Yes) return;
+void MainWindow::onMediaDroppedAsLayer(int mediaId)
+{
+    addLayerFromMedia(mediaId);
+}
 
-    m_filmstrip->removeThumb(index);
-    m_images.removeAt(index);
+void MainWindow::onThumbCloseRequested(int mediaId)
+{
+    if (m_current < 0) return;
+    SessionImage& board = m_images[m_current];
+    auto& st = board.state;
 
-    if (m_images.isEmpty()) {
-        switchToImage(-1);
-    } else if (index == m_current) {
-        switchToImage(qMin(index, m_images.size() - 1));
-    } else {
-        if (index < m_current) --m_current;
-        m_filmstrip->setActive(m_current);
+    const bool inUse = std::any_of(st.layers.begin(), st.layers.end(),
+        [mediaId](const Layer& l){ return l.mediaId == mediaId; });
+    if (inUse) {
+        const auto reply = QMessageBox::question(this, "Remove from library",
+            "This source is used by one or more layers.\n\nRemove it and its layers?",
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (reply != QMessageBox::Yes) return;
     }
+
+    st.layers.erase(std::remove_if(st.layers.begin(), st.layers.end(),
+                    [mediaId](const Layer& l){ return l.mediaId == mediaId; }),
+                    st.layers.end());
+    const int pi = findParentByMedia(st.parents, mediaId);
+    if (pi >= 0) st.parents.erase(st.parents.begin() + pi);
+    board.media.remove(mediaId);
+    m_filmstrip->removeThumb(mediaId);
+
+    if (findLayerById(st.layers, st.activeLayerId) < 0)
+        st.activeLayerId = st.layers.empty() ? -1 : st.layers.front().id;
+    syncBoardSource(board);
+    commitStructuralChange();
 }
 
 // ---------------------------------------------------------------------------

@@ -10,11 +10,12 @@ class FilmstripThumb;
 class ChevronButton;
 
 /**
- * FilmstripWidget (bottom bar)
+ * FilmstripWidget (bottom bar) — the source LIBRARY.
  *
- * Orange "add" button + horizontally scrollable thumbnails of every
- * image loaded in the session. Click a thumbnail to switch, hover ✕
- * to close it. Accepts image drops.
+ * Orange "add" button + horizontally scrollable thumbnails, one per library
+ * source (identified by a media id). Single click selects, double click adds
+ * it as a layer, dragging a thumbnail onto the Layers panel / canvas adds it
+ * as a layer, hover ✕ removes it from the library. Accepts image file drops.
  */
 class FilmstripWidget : public QWidget
 {
@@ -23,16 +24,17 @@ class FilmstripWidget : public QWidget
 public:
     explicit FilmstripWidget(QWidget* parent = nullptr);
 
-    int  addThumb(const QImage& source, const QString& name);
-    void removeThumb(int index);
-    void setActive(int index);
+    void addThumb(int mediaId, const QImage& source, const QString& name);
+    void removeThumb(int mediaId);
+    void setActive(int mediaId);
     int  count() const { return m_thumbs.size(); }
 
 signals:
     void addRequested();
     void filesDropped(const QStringList& paths);
-    void thumbSelected(int index);
-    void thumbCloseRequested(int index);
+    void thumbSelected(int mediaId);    // single click
+    void thumbActivated(int mediaId);   // double click → add as layer
+    void thumbCloseRequested(int mediaId);
 
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;

@@ -312,7 +312,29 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
         p.save();
         p.setTransform(layerMatrix(layer.transform, ls, frame));
         switch (layer.kind) {
-            case LayerKind::Halftone: { HalftoneRenderer r; r.renderVector(forRender, p, layer.halftone); break; }
+            case LayerKind::Halftone: {
+                // Match the raster path's inputDpi supersampling, or the grid
+                // comes out ~dpi/72× coarser (much less dense) than the preview.
+                const HalftoneSettings& hs = layer.halftone;
+                float scale = qBound(18, hs.inputDpi, 300) / 72.0f;
+                const int maxDim = qMax(forRender.width(), forRender.height());
+                if (maxDim * scale > 6000.0f) scale = 6000.0f / maxDim;
+                if (maxDim * scale < 16.0f)   scale = 16.0f / maxDim;
+                HalftoneRenderer r;
+                if (qAbs(scale - 1.0f) < 0.02f) {
+                    r.renderVector(forRender, p, hs);
+                } else {
+                    QImage work = forRender.scaled(qMax(8, qRound(forRender.width()  * scale)),
+                                                   qMax(8, qRound(forRender.height() * scale)),
+                                                   Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                    p.save();
+                    p.scale(qreal(forRender.width())  / work.width(),
+                            qreal(forRender.height()) / work.height());
+                    r.renderVector(work, p, hs);
+                    p.restore();
+                }
+                break;
+            }
             case LayerKind::Ascii:    AsciiRenderer::render(forRender, p, layer.ascii); break;
             case LayerKind::Dither:   DitherRenderer::paintMergedRects(forRender, layer.dither, p,
                                                                        ls.width(), ls.height()); break;
@@ -337,9 +359,16 @@ int RenderWorker::estimateSvgElements(const QImage& source, const SessionParams&
         const QImage adjusted = ImageAdjuster::apply(src, layer.adjustments);
         const int w = adjusted.width(), h = adjusted.height();
         switch (layer.kind) {
-            case LayerKind::Halftone:
-                total += HalftoneRenderer::estimateDotCount(adjusted, layer.halftone);
+            case LayerKind::Halftone: {
+                // Dots scale with the supersampled area (see renderDocumentToSvg).
+                float scale = qBound(18, layer.halftone.inputDpi, 300) / 72.0f;
+                const int maxDim = qMax(w, h);
+                if (maxDim * scale > 6000.0f) scale = 6000.0f / maxDim;
+                if (maxDim * scale < 16.0f)   scale = 16.0f / maxDim;
+                total += (long long)(HalftoneRenderer::estimateDotCount(adjusted, layer.halftone)
+                                     * double(scale) * double(scale));
                 break;
+            }
             case LayerKind::Ascii: {
                 const int cell = qBound(3, layer.ascii.cellSize, 128);
                 total += (long long)(w / cell + 1) * (h / cell + 1);

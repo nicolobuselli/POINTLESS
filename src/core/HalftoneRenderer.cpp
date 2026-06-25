@@ -139,8 +139,10 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
         const float lumPerc  = ColorMath::linearToSrgb8(lumLin) / 255.0f;
         const float darkness = 1.0f - lumLin;
         const float cov      = std::pow(darkness, invGamma);
-        const float r        = baseR * std::sqrt(cov);   // dot area ∝ ink coverage
-        if (r < 0.5f) continue;
+        if (baseR * std::sqrt(cov) < 0.5f) continue;     // cull empty cells by true coverage
+        // weight lifts every visible symbol toward full size; at 1.0 all are equal.
+        const float covW     = cov + params.weight * (1.0f - cov);
+        const float r        = baseR * std::sqrt(covW);  // dot area ∝ ink coverage
 
         HalftoneShape shape   = shapesVec.empty() ? HalftoneShape::Circle : shapesVec[0].shape;
         QString       svgPath = shapesVec.empty() ? QString()             : shapesVec[0].svgPath;
@@ -228,16 +230,48 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
 // Shape builders
 // ---------------------------------------------------------------------------
 
-QPainterPath HalftoneRenderer::buildTriangle(float cx, float cy, float r)
+// Build a closed polygon through `pts`, rounding each corner with a quadratic
+// bezier whose control point is the original vertex. The radius is clamped per
+// corner to half of the shorter adjacent edge so it never self-overlaps.
+QPainterPath HalftoneRenderer::roundedPolygon(const QVector<QPointF>& pts, float radius)
 {
+    const int n = pts.size();
     QPainterPath p;
-    constexpr float k2pi3 = 2.0f * static_cast<float>(M_PI) / 3.0f;
-    float a0 = -static_cast<float>(M_PI_2);
-    p.moveTo(cx + r * std::cos(a0),          cy + r * std::sin(a0));
-    p.lineTo(cx + r * std::cos(a0 + k2pi3),  cy + r * std::sin(a0 + k2pi3));
-    p.lineTo(cx + r * std::cos(a0 + 2*k2pi3), cy + r * std::sin(a0 + 2*k2pi3));
+    if (n < 3) return p;
+    if (radius <= 0.0f) {
+        p.moveTo(pts[0]);
+        for (int i = 1; i < n; ++i) p.lineTo(pts[i]);
+        p.closeSubpath();
+        return p;
+    }
+    for (int i = 0; i < n; ++i) {
+        const QPointF curr = pts[i];
+        const QPointF prev = pts[(i - 1 + n) % n];
+        const QPointF next = pts[(i + 1) % n];
+        const QPointF v1 = prev - curr, v2 = next - curr;
+        const double  l1 = std::hypot(v1.x(), v1.y());
+        const double  l2 = std::hypot(v2.x(), v2.y());
+        if (l1 < 1e-3 || l2 < 1e-3) continue;
+        const double  r = qMin<double>(radius, qMin(l1, l2) * 0.5);
+        const QPointF p1 = curr + v1 * (r / l1);   // enter corner along prev edge
+        const QPointF p2 = curr + v2 * (r / l2);   // leave corner along next edge
+        if (i == 0) p.moveTo(p1);
+        else        p.lineTo(p1);
+        p.quadTo(curr, p2);
+    }
     p.closeSubpath();
     return p;
+}
+
+QPainterPath HalftoneRenderer::buildTriangle(float cx, float cy, float r, float cornerRadius)
+{
+    constexpr float k2pi3 = 2.0f * static_cast<float>(M_PI) / 3.0f;
+    const float a0 = -static_cast<float>(M_PI_2);
+    QVector<QPointF> pts;
+    for (int i = 0; i < 3; ++i)
+        pts.append({ cx + r * std::cos(a0 + i * k2pi3),
+                     cy + r * std::sin(a0 + i * k2pi3) });
+    return roundedPolygon(pts, cornerRadius);
 }
 
 QPainterPath HalftoneRenderer::buildCircle(float cx, float cy, float r)
@@ -259,31 +293,27 @@ QPainterPath HalftoneRenderer::buildSquare(float cx, float cy, float r, float co
     return p;
 }
 
-QPainterPath HalftoneRenderer::buildStar(float cx, float cy, float r, int points)
+QPainterPath HalftoneRenderer::buildStar(float cx, float cy, float r, float cornerRadius, int points)
 {
-    QPainterPath p;
-    float innerR = r * 0.4f;
-    float step   = static_cast<float>(M_PI) / points;
+    const float innerR = r * 0.4f;
+    const float step   = static_cast<float>(M_PI) / points;
+    QVector<QPointF> pts;
     for (int i = 0; i < points * 2; ++i) {
-        float angle = i * step - static_cast<float>(M_PI_2);
-        float rad   = (i % 2 == 0) ? r : innerR;
-        float x     = cx + std::cos(angle) * rad;
-        float y     = cy + std::sin(angle) * rad;
-        if (i == 0) p.moveTo(x, y);
-        else        p.lineTo(x, y);
+        const float angle = i * step - static_cast<float>(M_PI_2);
+        const float rad   = (i % 2 == 0) ? r : innerR;
+        pts.append({ cx + std::cos(angle) * rad, cy + std::sin(angle) * rad });
     }
-    p.closeSubpath();
-    return p;
+    return roundedPolygon(pts, cornerRadius);
 }
 
 QPainterPath HalftoneRenderer::buildShape(HalftoneShape shape, float cx, float cy, float r,
                                            float cornerRadius)
 {
     switch (shape) {
-        case HalftoneShape::Triangle: return buildTriangle(cx, cy, r);
+        case HalftoneShape::Triangle: return buildTriangle(cx, cy, r, cornerRadius);
         case HalftoneShape::Circle:   return buildCircle  (cx, cy, r);
         case HalftoneShape::Square:   return buildSquare  (cx, cy, r, cornerRadius);
-        case HalftoneShape::Star:     return buildStar    (cx, cy, r);
+        case HalftoneShape::Star:     return buildStar    (cx, cy, r, cornerRadius);
         default:                      return buildCircle  (cx, cy, r);
     }
 }

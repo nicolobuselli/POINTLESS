@@ -329,6 +329,7 @@ public:
     std::function<void(int, int)> onChildReorder;    // layerId, insertIndex
     std::function<void(int, int)> onParentReorder;   // mediaId, insertIndex
     std::function<void(int)>      onAddChild;         // mediaId
+    std::function<void(int)>      onMediaDropped;     // library source → new layer
 
     explicit RowsArea(QWidget* parent = nullptr)
         : QWidget(parent)
@@ -346,7 +347,8 @@ public:
 protected:
     void dragEnterEvent(QDragEnterEvent* e) override
     {
-        if (e->mimeData()->hasFormat(kLayerMime) || e->mimeData()->hasFormat(kParentMime))
+        if (e->mimeData()->hasFormat(kLayerMime) || e->mimeData()->hasFormat(kParentMime)
+         || e->mimeData()->hasFormat(kMediaMime))
             e->acceptProposedAction();
     }
 
@@ -365,6 +367,9 @@ protected:
                 m_addChildMedia = -1;
                 m_indicatorY = parentIndicatorY(parentInsertIndexAt(pos));
             }
+        } else if (e->mimeData()->hasFormat(kMediaMime)) {
+            m_addChildMedia = -1;
+            m_indicatorY = childIndicatorY(childInsertIndexAt(pos));   // hint a drop
         } else return;
         update();
         e->acceptProposedAction();
@@ -383,6 +388,8 @@ protected:
             const int zone = childZoneMediaAt(pos);
             if (zone >= 0 && zone != mid) { if (onAddChild) onAddChild(zone); }
             else if (onParentReorder)     onParentReorder(mid, parentInsertIndexAt(pos));
+        } else if (e->mimeData()->hasFormat(kMediaMime)) {
+            if (onMediaDropped) onMediaDropped(e->mimeData()->data(kMediaMime).toInt());
         }
         clearDnd();
         e->acceptProposedAction();
@@ -781,6 +788,7 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         m_rowsArea->onChildReorder  = [this](int id,  int idx) { emit reorderRequested(id, idx); };
         m_rowsArea->onParentReorder = [this](int mid, int idx) { emit parentReordered(mid, idx); };
         m_rowsArea->onAddChild      = [this](int mid)          { emit addChildRequested(mid); };
+        m_rowsArea->onMediaDropped  = [this](int mid)          { emit mediaDroppedAsLayer(mid); };
         // Left margin aligns the thumbnail with the section titles (40px); the
         // row's own 70px eye gutter sits flush against the right content edge.
         m_rowsArea->rowsLayout()->setContentsMargins(Ui::px(32), Ui::px(14), 0, Ui::px(2));
@@ -835,6 +843,7 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         m_rowsArea->onChildReorder  = [this](int id,  int idx) { emit reorderRequested(id, idx); };
         m_rowsArea->onParentReorder = [this](int mid, int idx) { emit parentReordered(mid, idx); };
         m_rowsArea->onAddChild      = [this](int mid)          { emit addChildRequested(mid); };
+        m_rowsArea->onMediaDropped  = [this](int mid)          { emit mediaDroppedAsLayer(mid); };
         vl->addWidget(m_rowsArea);
 
         auto* footer = new QHBoxLayout;

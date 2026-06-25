@@ -68,6 +68,7 @@ signals:
     void duplicateParentRequested(int mediaId);
     void deleteParentRequested(int mediaId);
     void parentRenamed(int mediaId, const QString& name);
+    void mediaDroppedAsLayer(int mediaId);   // library source dropped onto the panel
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;

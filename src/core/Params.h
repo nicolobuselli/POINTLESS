@@ -286,6 +286,7 @@ struct HalftoneSettings {
 
     GridSettings grid;
     float gamma        = 1.0f;
+    float weight       = 0.0f;   // 0 = size ∝ ink coverage, 1 = all symbols full size
     float jitter       = 0.0f;
     float opacity      = 1.0f;
     float cornerRadius = 0.0f;
@@ -296,7 +297,7 @@ struct HalftoneSettings {
 inline bool operator==(const HalftoneSettings& a, const HalftoneSettings& b) {
     return a.inputDpi == b.inputDpi && a.shapes == b.shapes
         && a.multiThreshold == b.multiThreshold && a.grid == b.grid
-        && a.gamma == b.gamma
+        && a.gamma == b.gamma && a.weight == b.weight
         && a.jitter == b.jitter && a.opacity == b.opacity
         && a.cornerRadius == b.cornerRadius && a.tonal == b.tonal;
 }

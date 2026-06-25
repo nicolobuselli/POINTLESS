@@ -43,8 +43,10 @@ private slots:
     void onExport();
     void onAddRequested();
     void onFilesDropped(const QStringList& paths);
-    void onThumbSelected(int index);
-    void onThumbCloseRequested(int index);
+    void onThumbSelected(int mediaId);        // library: single click → highlight
+    void onThumbActivated(int mediaId);       // library: double click → add as layer
+    void onThumbCloseRequested(int mediaId);  // library: ✕ → remove source
+    void onMediaDroppedAsLayer(int mediaId);  // library thumb dropped on layers/canvas
     void onModeSelected(RenderMode m);
     void onLayerVisibilityToggled(int layerId, bool visible);
     void onLayerSelected(int layerId);
@@ -113,7 +115,9 @@ private:
     float zoomQualityScale() const;   // full-pass supersample for the current zoom
     QHash<int, QImage> layerSourcesAt(const SessionImage& img, int frame) const;
     void pushUndoSnapshot();
-    void addImages(const QStringList& paths);
+    void addImages(const QStringList& paths);   // load files into the library only
+    void addLayerFromMedia(int mediaId);        // place a library source as a layer
+    int  ensureBoard();                         // make sure the single composition exists
     void importSequence(const QStringList& paths);
     void switchToImage(int index);
 

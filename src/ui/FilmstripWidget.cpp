@@ -9,6 +9,8 @@
 #include <QPainterPath>
 #include <QSvgRenderer>
 #include <QMouseEvent>
+#include <QDrag>
+#include <QApplication>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
@@ -70,11 +72,15 @@ protected:
 
 class FilmstripThumb : public QWidget {
 public:
-    std::function<void()> onClicked;
+    std::function<void()> onClicked;     // single click → select
+    std::function<void()> onActivated;   // double click → add as layer
     std::function<void()> onClose;
+    std::function<void(FilmstripThumb*)> onDragStart;   // → start a media drag
 
-    FilmstripThumb(const QImage& source, const QString& name, QWidget* parent = nullptr)
-        : QWidget(parent), m_name(name)
+    int  mediaId() const { return m_mediaId; }
+
+    FilmstripThumb(int mediaId, const QImage& source, const QString& name, QWidget* parent = nullptr)
+        : QWidget(parent), m_mediaId(mediaId), m_name(name)
     {
         setFixedSize(168, 100);
         setCursor(Qt::PointingHandCursor);
@@ -136,19 +142,48 @@ protected:
     void mousePressEvent(QMouseEvent* e) override {
         if (e->button() != Qt::LeftButton) return;
         if (m_hover && closeRect().contains(e->position())) {
-            if (onClose) onClose();
-        } else {
+            m_pressOnClose = true;
+            return;
+        }
+        m_pressOnClose = false;
+        m_pressPos = e->position().toPoint();
+        m_dragging = false;
+    }
+
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (m_pressOnClose || m_dragging || !(e->buttons() & Qt::LeftButton)) return;
+        if ((e->position().toPoint() - m_pressPos).manhattanLength()
+                < QApplication::startDragDistance())
+            return;
+        m_dragging = true;
+        if (onDragStart) onDragStart(this);
+    }
+
+    void mouseReleaseEvent(QMouseEvent* e) override {
+        if (e->button() != Qt::LeftButton) return;
+        if (m_pressOnClose) {
+            if (m_hover && closeRect().contains(e->position()) && onClose) onClose();
+        } else if (!m_dragging) {
             if (onClicked) onClicked();
         }
+        m_dragging = false;
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton && onActivated) onActivated();
     }
 
 private:
     QRectF closeRect() const { return QRectF(width() - 24, 6, 18, 18); }
 
+    int     m_mediaId = -1;
     QString m_name;
     QPixmap m_pixmap;
-    bool m_active = false;
-    bool m_hover  = false;
+    bool    m_active = false;
+    bool    m_hover  = false;
+    QPoint  m_pressPos;
+    bool    m_pressOnClose = false;
+    bool    m_dragging     = false;
 };
 
 // ── FilmstripWidget ──────────────────────────────────────────
@@ -194,36 +229,42 @@ FilmstripWidget::FilmstripWidget(QWidget* parent)
     hl->addWidget(m_rightBtn);
 }
 
-int FilmstripWidget::addThumb(const QImage& source, const QString& name)
+void FilmstripWidget::addThumb(int mediaId, const QImage& source, const QString& name)
 {
-    auto* thumb = new FilmstripThumb(source, name);
+    auto* thumb = new FilmstripThumb(mediaId, source, name);
     m_thumbs.append(thumb);
     // Insert before the trailing stretch
     m_thumbLayout->insertWidget(m_thumbLayout->count() - 1, thumb);
 
-    thumb->onClicked = [this, thumb]() {
-        int idx = m_thumbs.indexOf(thumb);
-        if (idx >= 0) emit thumbSelected(idx);
+    thumb->onClicked   = [this, mediaId]() { emit thumbSelected(mediaId); };
+    thumb->onActivated = [this, mediaId]() { emit thumbActivated(mediaId); };
+    thumb->onClose     = [this, mediaId]() { emit thumbCloseRequested(mediaId); };
+    thumb->onDragStart = [mediaId](FilmstripThumb* t) {
+        auto* mime = new QMimeData;
+        mime->setData(kMediaMime, QByteArray::number(mediaId));
+        auto* drag = new QDrag(t);
+        drag->setMimeData(mime);
+        drag->setPixmap(t->grab().scaled(96, 57, Qt::KeepAspectRatio,
+                                         Qt::SmoothTransformation));
+        drag->exec(Qt::CopyAction);
     };
-    thumb->onClose = [this, thumb]() {
-        int idx = m_thumbs.indexOf(thumb);
-        if (idx >= 0) emit thumbCloseRequested(idx);
-    };
-    return m_thumbs.size() - 1;
 }
 
-void FilmstripWidget::removeThumb(int index)
+void FilmstripWidget::removeThumb(int mediaId)
 {
-    if (index < 0 || index >= m_thumbs.size()) return;
-    FilmstripThumb* t = m_thumbs.takeAt(index);
-    m_thumbLayout->removeWidget(t);
-    t->deleteLater();
+    for (int i = 0; i < m_thumbs.size(); ++i) {
+        if (m_thumbs[i]->mediaId() != mediaId) continue;
+        FilmstripThumb* t = m_thumbs.takeAt(i);
+        m_thumbLayout->removeWidget(t);
+        t->deleteLater();
+        return;
+    }
 }
 
-void FilmstripWidget::setActive(int index)
+void FilmstripWidget::setActive(int mediaId)
 {
-    for (int i = 0; i < m_thumbs.size(); ++i)
-        m_thumbs[i]->setActive(i == index);
+    for (FilmstripThumb* t : m_thumbs)
+        t->setActive(t->mediaId() == mediaId);
 }
 
 void FilmstripWidget::scrollBy(int dx)

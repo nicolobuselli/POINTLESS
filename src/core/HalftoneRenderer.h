@@ -48,10 +48,13 @@ private:
     static void paintDots  (QPainter& painter, const TileJob& job);
 
     // Shape builders
-    static QPainterPath buildTriangle(float cx, float cy, float r);
+    static QPainterPath buildTriangle(float cx, float cy, float r, float cornerRadius = 0.f);
     static QPainterPath buildCircle  (float cx, float cy, float r);
     static QPainterPath buildSquare  (float cx, float cy, float r, float cornerRadius = 0.f);
-    static QPainterPath buildStar    (float cx, float cy, float r, int points = 5);
+    static QPainterPath buildStar    (float cx, float cy, float r, float cornerRadius = 0.f,
+                                      int points = 5);
+    // Closed polygon through `pts` with corners rounded by `radius` (0 = sharp).
+    static QPainterPath roundedPolygon(const QVector<QPointF>& pts, float radius);
 
     static QPainterPath buildShape(HalftoneShape shape, float cx, float cy, float r,
                                    float cornerRadius = 0.f);

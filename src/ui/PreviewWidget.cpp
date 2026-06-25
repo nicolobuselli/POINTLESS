@@ -1,4 +1,5 @@
 #include "PreviewWidget.h"
+#include "Widgets.h"
 
 #include <QPainter>
 #include <QPaintEvent>
@@ -414,12 +415,18 @@ void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
 
 void PreviewWidget::dragEnterEvent(QDragEnterEvent* event)
 {
-    if (!imagePathsFromMime(event->mimeData()).isEmpty())
+    if (event->mimeData()->hasFormat(kMediaMime)
+     || !imagePathsFromMime(event->mimeData()).isEmpty())
         event->acceptProposedAction();
 }
 
 void PreviewWidget::dropEvent(QDropEvent* event)
 {
+    if (event->mimeData()->hasFormat(kMediaMime)) {
+        emit mediaDroppedAsLayer(event->mimeData()->data(kMediaMime).toInt());
+        event->acceptProposedAction();
+        return;
+    }
     const QStringList paths = imagePathsFromMime(event->mimeData());
     if (!paths.isEmpty()) emit filesDropped(paths);
 }

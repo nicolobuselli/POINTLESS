@@ -234,9 +234,10 @@ public:
             m_rotation     = new SliderRow("Rotation",      0, 100,   0);
             m_gamma        = new SliderRow("Gamma",         0, 100,  20);
             m_diameter     = new SliderRow("Diameter",      0, 100,  31);
+            m_weight       = new SliderRow("Weight",        0, 100,   0);
             m_jitter       = new SliderRow("Jitter",        0, 100,   0);
             for (SliderRow* r : { m_spacing, m_rotation, m_gamma, m_diameter,
-                                  m_jitter }) {
+                                  m_weight, m_jitter }) {
                 r->onValueChanged = [this](int) { fire(); };
                 sl->addWidget(r);
             }
@@ -312,21 +313,38 @@ public:
         // Stretch / stretch-angle removed from the UI: leave grid at identity.
 
         s.gamma        = m_gamma->value()  / 100.0f * 5.0f;
+        s.weight       = m_weight->value() / 100.0f;
         s.jitter       = m_jitter->value() / 100.0f;
         s.opacity      = m_opacity->value() / 100.0f;
         s.cornerRadius = float(m_cornerRadius->value());
         return s;
     }
 
+    // Do the on-screen slots already match these shapes? Shapes aren't animated,
+    // so during timeline scrubbing this lets us skip the teardown+rebuild that
+    // otherwise collapses and re-expands the panel every frame (worse with more
+    // shapes). Numeric sliders below are still updated unconditionally.
+    bool shapesMatch(const std::vector<ShapeEntry>& shapes) const
+    {
+        const int n = shapes.empty() ? 1 : int(shapes.size());
+        if (m_shapeSlots.size() != n) return false;
+        for (int i = 0; i < int(shapes.size()); ++i)
+            if (m_shapeSlots[i].combo->currentIndex() != int(shapes[i].shape)
+             || m_shapeSlots[i].svgPath != shapes[i].svgPath) return false;
+        return true;
+    }
+
     void setSettings(const HalftoneSettings& s)
     {
         m_updating = true;
-        clearShapeSlots();
-        if (s.shapes.empty())
-            addShapeSlot(HalftoneShape::Square, QString(), true);
-        else
-            for (const auto& e : s.shapes)
-                addShapeSlot(e.shape, e.svgPath, true);
+        if (!shapesMatch(s.shapes)) {
+            clearShapeSlots();
+            if (s.shapes.empty())
+                addShapeSlot(HalftoneShape::Square, QString(), true);
+            else
+                for (const auto& e : s.shapes)
+                    addShapeSlot(e.shape, e.svgPath, true);
+        }
 
         m_gridType->blockSignals(true);
         m_gridType->setCurrentIndex(int(s.grid.type));
@@ -335,6 +353,7 @@ public:
         m_rotation->setValue(qRound(s.grid.rotation / 360.0f * 100.0f));
         m_diameter->setValue(qRound((s.grid.diameter - 0.1f) / 2.9f * 100.0f));
         m_gamma->setValue(qRound(s.gamma / 5.0f * 100.0f));
+        m_weight->setValue(qRound(s.weight * 100));
         m_jitter->setValue(qRound(s.jitter * 100));
         m_opacity->setValue(qRound(s.opacity * 100));
         m_cornerRadius->setValue(qRound(s.cornerRadius));
@@ -514,6 +533,7 @@ private:
     SliderRow*       m_rotation     = nullptr;
     SliderRow*       m_gamma        = nullptr;
     SliderRow*       m_diameter     = nullptr;
+    SliderRow*       m_weight       = nullptr;
     SliderRow*       m_jitter       = nullptr;
     NoWheelComboBox* m_fusion       = nullptr;
     DragSpinBox*     m_opacity      = nullptr;
