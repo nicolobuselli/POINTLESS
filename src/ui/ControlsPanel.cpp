@@ -133,7 +133,6 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             hl->addWidget(gut);
             ll->addWidget(hdr);
         }
-        ll->addWidget(bandLine());
         m_layers = new LayersPanel(/*embedded*/ true);
         m_layers->setObjectName("layersEmbedded");
         m_layers->setMinimumHeight(Ui::px(64));   // at least ~1 row, then scroll
@@ -173,7 +172,6 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         tp->setSpacing(0);
         tp->addWidget(bandLine());            // line above the title
         tp->addWidget(titleBand("Transform"));
-        tp->addWidget(bandLine());            // line below the title
 
         auto* box = new QWidget;
         auto* bl = new QVBoxLayout(box);
@@ -333,8 +331,8 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         // Transform sits at the top of this pane so it stays glued to Parameters
         // (a single splitter handle separates them from Layers).
         pp->addWidget(transformPane);
+        pp->addWidget(bandLine());            // line above the title
         pp->addWidget(titleBand("Parameters"));
-        pp->addWidget(bandLine());
         m_adjust = new AdjustmentsPanel;
         connect(m_adjust, &AdjustmentsPanel::adjustmentsChanged,
                 this, &ControlsPanel::adjustmentsChanged);
@@ -351,9 +349,9 @@ ControlsPanel::ControlsPanel(QWidget* parent)
     split->addWidget(paramsPane);
     split->setStretchFactor(0, 0);
     split->setStretchFactor(1, 1);
-    // Default: Layers gets generous room (~7 rows incl. parent groups), pushing
-    // Transform lower; the user can still drag the divider.
-    split->setSizes({ Ui::px(7 * 52 + 6 * 6 + 90), Ui::px(760) });
+    // Default: room for ~4 rows — halves the empty gap below the startup layers
+    // (parent + one child) before Transform; the user can still drag the divider.
+    split->setSizes({ Ui::px(4 * 52 + 3 * 6 + 90), Ui::px(760) });
     outer->addWidget(split, 1);
 }
 

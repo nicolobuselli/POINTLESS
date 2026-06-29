@@ -802,7 +802,10 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         m_rowsArea->onMediaDropped  = [this](int mid)          { emit mediaDroppedAsLayer(mid); };
         // Left margin aligns the thumbnail with the section titles (40px); the
         // row's own 70px eye gutter sits flush against the right content edge.
-        m_rowsArea->rowsLayout()->setContentsMargins(Ui::px(32), Ui::px(14), 0, Ui::px(2));
+        // Top = 0: the "Layers" header already adds 12px below its title and each
+        // row adds 2px above its pill → 14px gap, matching the right column's
+        // section-title → first-control spacing (12 title pad + 2 body top).
+        m_rowsArea->rowsLayout()->setContentsMargins(Ui::px(32), 0, 0, Ui::px(2));
         m_rowsArea->rowsLayout()->setSpacing(Ui::px(6));
         scroll->setWidget(m_rowsArea);
         // Floating scrollbar: reserves no width, so rows keep a constant width

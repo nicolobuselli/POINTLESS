@@ -27,6 +27,21 @@ QMainWindow {
     background-color: #1E1E1E;
 }
 
+/* ── Custom title bar ────────────────────────────────────────── */
+#windowTitleBar {
+    background-color: #3B3B3B;
+}
+#titleLogo { background: transparent; }
+#winBtn, #winCloseBtn {
+    background: transparent;
+    border: none;
+    border-radius: s(6)px;
+}
+#winBtn:hover     { background-color: #4A4A4A; }
+#winBtn:pressed   { background-color: #555555; }
+#winCloseBtn:hover   { background-color: #FD231F; }
+#winCloseBtn:pressed { background-color: #C81C19; }
+
 /* ── Scroll area ─────────────────────────────────────────────── */
 QScrollArea,
 QScrollArea > QWidget > QWidget {

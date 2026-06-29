@@ -18,6 +18,7 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPainter>
@@ -28,6 +29,11 @@
 #include <QStackedWidget>
 #include <QTemporaryDir>
 #include <algorithm>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <windowsx.h>
+#endif
 
 namespace {
 constexpr int kMaxUndoSteps   = 100;
@@ -60,6 +66,77 @@ bool looksLikeSequence(const QStringList& paths)
 }
 } // namespace
 
+// ============================================================
+//  WinTitleBar — client-drawn caption: logo (left) + window controls (right)
+// ============================================================
+//
+// The window stays a normal native window; MainWindow::nativeEvent strips the OS
+// caption (WM_NCCALCSIZE) and re-supplies resize borders + a draggable caption
+// region (WM_NCHITTEST → HTCAPTION over this bar, except its buttons). So drag,
+// double-click-maximize, Aero Snap and resize all stay native — this widget only
+// paints and provides the min/max/close buttons.
+class WinTitleBar : public QWidget
+{
+public:
+    explicit WinTitleBar(QWidget* window)
+        : QWidget(window), m_window(window)
+    {
+        setObjectName("windowTitleBar");
+        setAttribute(Qt::WA_StyledBackground, true);
+        setFixedHeight(Ui::px(44));
+
+        auto* hl = new QHBoxLayout(this);
+        // Left gutter 40 = left column gutter; right gutter 14 = right column +/-.
+        hl->setContentsMargins(Ui::px(40), 0, Ui::px(14), 0);
+        hl->setSpacing(0);
+
+        const int lh = Ui::px(34);
+        auto* logo = new QLabel;
+        logo->setObjectName("titleLogo");
+        logo->setPixmap(QIcon(":/logo.png").pixmap(QSize(lh, lh)));
+        logo->setAttribute(Qt::WA_TransparentForMouseEvents);  // drag through it
+        hl->addWidget(logo);
+        hl->addStretch(1);
+
+        auto mkBtn = [&](const QString& icon, const char* obj) {
+            auto* b = new QPushButton;
+            b->setObjectName(obj);
+            b->setCursor(Qt::PointingHandCursor);
+            b->setFixedSize(Ui::px(48), Ui::px(32));
+            b->setIcon(QIcon(icon));
+            b->setIconSize(QSize(Ui::px(20), Ui::px(20)));
+            return b;
+        };
+        m_min = mkBtn(":/icons/win_minimize.svg", "winBtn");
+        m_max = mkBtn(":/icons/win_maximize.svg", "winBtn");
+        auto* close = mkBtn(":/icons/x.svg", "winCloseBtn");
+        hl->addWidget(m_min);
+        hl->addSpacing(Ui::px(6));
+        hl->addWidget(m_max);
+        hl->addSpacing(Ui::px(6));
+        hl->addWidget(close);
+
+        connect(m_min, &QPushButton::clicked, m_window, &QWidget::showMinimized);
+        connect(m_max, &QPushButton::clicked, this, [this] {
+            if (m_window->isMaximized()) m_window->showNormal();
+            else                         m_window->showMaximized();
+        });
+        connect(close, &QPushButton::clicked, m_window, &QWidget::close);
+    }
+
+    // Swap maximize ⇄ restore glyph to mirror the current window state.
+    void updateMaxIcon()
+    {
+        m_max->setIcon(QIcon(m_window->isMaximized() ? ":/icons/win_restore.svg"
+                                                     : ":/icons/win_maximize.svg"));
+    }
+
+private:
+    QWidget*     m_window;
+    QPushButton* m_min = nullptr;
+    QPushButton* m_max = nullptr;
+};
+
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_worker(new RenderWorker(this))
@@ -70,7 +147,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── Layout ───────────────────────────────────────────────
     auto* central = new QWidget;
-    auto* hl = new QHBoxLayout(central);
+    auto* rootV = new QVBoxLayout(central);
+    rootV->setContentsMargins(0, 0, 0, 0);
+    rootV->setSpacing(0);
+
+    m_titleBar = new WinTitleBar(this);
+    rootV->addWidget(m_titleBar);
+
+    auto* content = new QWidget;
+    auto* hl = new QHBoxLayout(content);
     hl->setContentsMargins(0, 0, 0, 0);
     hl->setSpacing(0);
 
@@ -155,6 +240,7 @@ MainWindow::MainWindow(QWidget* parent)
     mainSplit->setSizes({ Ui::px(420), Ui::px(1718), Ui::px(420) });
 
     hl->addWidget(mainSplit);
+    rootV->addWidget(content, 1);
 
     setCentralWidget(central);
 
@@ -327,8 +413,69 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow() = default;
 
+#ifdef Q_OS_WIN
+bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
+{
+    auto* msg = static_cast<MSG*>(message);
+    if (!msg) return QMainWindow::nativeEvent(eventType, message, result);
+
+    switch (msg->message) {
+    case WM_NCCALCSIZE: {
+        if (msg->wParam == FALSE) break;                 // size-only: ignore
+        auto* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+        if (::IsZoomed(msg->hwnd)) {
+            // A maximized borderless window overhangs the monitor by the frame
+            // thickness; inset so its content and the taskbar stay visible.
+            const int fx = ::GetSystemMetrics(SM_CXFRAME) + ::GetSystemMetrics(SM_CXPADDEDBORDER);
+            const int fy = ::GetSystemMetrics(SM_CYFRAME) + ::GetSystemMetrics(SM_CXPADDEDBORDER);
+            RECT& rc = p->rgrc[0];
+            rc.left += fx; rc.right -= fx; rc.top += fy; rc.bottom -= fy;
+        }
+        *result = 0;                                     // client area = whole window
+        return true;
+    }
+    case WM_NCHITTEST: {
+        const qreal dpr = devicePixelRatioF();
+        const LONG gx = GET_X_LPARAM(msg->lParam);
+        const LONG gy = GET_Y_LPARAM(msg->lParam);
+        RECT w; ::GetWindowRect(msg->hwnd, &w);
+        const int b = qMax(1, qRound(7 * dpr));          // resize-border thickness
+        if (!::IsZoomed(msg->hwnd)) {
+            const bool L = gx <  w.left  + b, R = gx >= w.right  - b;
+            const bool T = gy <  w.top   + b, B = gy >= w.bottom - b;
+            if (T && L) { *result = HTTOPLEFT;     return true; }
+            if (T && R) { *result = HTTOPRIGHT;    return true; }
+            if (B && L) { *result = HTBOTTOMLEFT;  return true; }
+            if (B && R) { *result = HTBOTTOMRIGHT; return true; }
+            if (L)      { *result = HTLEFT;        return true; }
+            if (R)      { *result = HTRIGHT;       return true; }
+            if (T)      { *result = HTTOP;         return true; }
+            if (B)      { *result = HTBOTTOM;      return true; }
+        }
+        // Over the custom caption (but not its buttons) → native drag/snap.
+        if (m_titleBar) {
+            const QPoint local = m_titleBar->mapFromGlobal(
+                QPoint(qRound(gx / dpr), qRound(gy / dpr)));
+            if (m_titleBar->rect().contains(local)
+                && !qobject_cast<QPushButton*>(m_titleBar->childAt(local))) {
+                *result = HTCAPTION;
+                return true;
+            }
+        }
+        *result = HTCLIENT;
+        return true;
+    }
+    default: break;
+    }
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+#endif // Q_OS_WIN
+
 bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 {
+    if (obj == this && event->type() == QEvent::WindowStateChange && m_titleBar)
+        m_titleBar->updateMaxIcon();
+
     const bool editableFocus = qobject_cast<QLineEdit*>(QApplication::focusWidget()) != nullptr;
 
     if (!editableFocus) {

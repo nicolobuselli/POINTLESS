@@ -8,6 +8,9 @@
         <file alias="icons/add_image.svg">../assets/icons/add_image.svg</file>
         <file alias="icons/minus.svg">../assets/icons/minus.svg</file>
         <file alias="icons/x.svg">../assets/icons/x.svg</file>
+        <file alias="icons/win_minimize.svg">../assets/icons/win_minimize.svg</file>
+        <file alias="icons/win_maximize.svg">../assets/icons/win_maximize.svg</file>
+        <file alias="icons/win_restore.svg">../assets/icons/win_restore.svg</file>
         <file alias="icons/upload.svg">../assets/icons/upload.svg</file>
         <file alias="icons/opacity.svg">../assets/icons/opacity.svg</file>
         <file alias="icons/corner_radius.svg">../assets/icons/corner_radius.svg</file>

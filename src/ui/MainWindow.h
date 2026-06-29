@@ -20,6 +20,7 @@ class FilmstripWidget;
 class TimelineWidget;
 class LayersPanel;
 class RenderWorker;
+class WinTitleBar;
 
 /**
  * MainWindow
@@ -146,6 +147,11 @@ protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
+#ifdef Q_OS_WIN
+    // Custom client-drawn title bar: strip the native caption via WM_NCCALCSIZE
+    // while keeping native resize/snap/shadow (WM_NCHITTEST borders + caption).
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+#endif
 
 private:
     ControlsPanel*    m_left        = nullptr;
@@ -155,6 +161,7 @@ private:
     TimelineWidget*   m_timeline    = nullptr;
     LayersPanel*      m_layersPanel = nullptr;
     RenderWorker*     m_worker      = nullptr;
+    WinTitleBar*      m_titleBar    = nullptr;
 
     QVector<SessionImage> m_images;
     int                   m_current = -1;
