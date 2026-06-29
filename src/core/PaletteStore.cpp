@@ -5,6 +5,7 @@
 #include <QSettings>
 #include <QStringList>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <random>
 #include <vector>
@@ -109,9 +110,13 @@ std::vector<QColor> PaletteStore::randomColors(int n)
 {
     n = std::clamp(n, 1, 8);
 
-    // Seeded once from the OS entropy and kept advancing across calls, so
-    // successive presses never repeat.
-    static std::mt19937 rng{ std::random_device{}() };
+    // Seeded once and kept advancing across calls, so successive presses never
+    // repeat. NB: std::random_device is deterministic on MinGW (same sequence
+    // every run), so mix in the clock — otherwise the first press after each
+    // launch always produced the identical palette.
+    static std::mt19937 rng{ static_cast<std::mt19937::result_type>(
+        std::random_device{}()
+        ^ static_cast<unsigned>(std::chrono::steady_clock::now().time_since_epoch().count())) };
     std::uniform_real_distribution<float> unit(0.0f, 1.0f);
 
     // Every swatch gets a fully independent hue and a wide saturation /

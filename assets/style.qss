@@ -379,6 +379,16 @@ QPushButton#paletteItem[selected="true"]:hover {
     border: 1px solid #5D5D5D;
     border-radius: 6px;
 }
+#palettePopupScroll, #palettePopupBody { background: transparent; border: none; }
+
+/* Palette-row trash: no box (unlike the layers trash); red tint only on hover. */
+QPushButton#paletteTrash {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+}
+QPushButton#paletteTrash:hover   { background-color: #4A2422; }
+QPushButton#paletteTrash:pressed { background-color: #3B1F19; }
 
 /* Save-palette popup */
 #savePopup {

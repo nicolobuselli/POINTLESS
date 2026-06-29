@@ -177,6 +177,12 @@ private:
     QTimer m_previewTimer;   // debounce live preview until param edits settle
     QTimer m_zoomRenderTimer; // debounce re-render at higher res after zooming
 
+    // Defer the "Rendering…" status caption: only show it if a render is still
+    // running after this delay, so quick renders don't flash it on every click.
+    QTimer  m_renderStatusTimer;
+    QString m_pendingRenderStatus;
+    bool    m_renderStatusVisible = false;
+
     QTimer          m_playTimer;
     bool            m_autoKey = false;
     bool            m_playing = false;

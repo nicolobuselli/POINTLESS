@@ -1,14 +1,20 @@
 #include "Widgets.h"
 #include "UiScale.h"
 
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QFocusEvent>
 #include <QWheelEvent>
 #include <QScreen>
+#include <QCursor>
+#include <QPixmap>
+#include <QImage>
+#include <QPointer>
 #include <QIcon>
 #include <QEvent>
 #include <QGuiApplication>
@@ -182,32 +188,6 @@ void DragSpinBox::updateDisplay()
 {
     if (m_valueEdit && m_valueEdit->isReadOnly())
         m_valueEdit->setText(QString::number(m_value) + m_suffix);
-}
-
-bool ColorPickerDialog::eventFilter(QObject* obj, QEvent* ev)
-{
-    if (!m_pickMode) return QDialog::eventFilter(obj, ev);
-    if (ev->type() == QEvent::MouseButtonPress) {
-        auto* mev = static_cast<QMouseEvent*>(ev);
-        const QPoint gp = mev->globalPosition().toPoint();
-        QScreen* s = QGuiApplication::screenAt(gp);
-        if (s) {
-            QPixmap pm = s->grabWindow(0, gp.x(), gp.y(), 1, 1);
-            if (!pm.isNull()) {
-                QColor c = pm.toImage().pixelColor(0, 0);
-                c.getHsvF(&m_h, &m_s, &m_v);
-                if (m_h < 0) m_h = 0.f;
-                // keep existing m_a (do not sample alpha)
-                updateAllFromHSV();
-                if (onColorChanged) onColorChanged(selectedColor(), m_a);
-            }
-        }
-        m_pickMode = false;
-        qApp->restoreOverrideCursor();
-        qApp->removeEventFilter(this);
-        return true;
-    }
-    return QDialog::eventFilter(obj, ev);
 }
 
 // ============================================================
@@ -892,6 +872,151 @@ private:
 };
 
 // ============================================================
+//  ScreenColorLoupe — full-desktop overlay with a magnifier card
+// ============================================================
+//
+// Captures every screen once, then grabs the mouse and follows the cursor with
+// a zoomed loupe (grid + centred target pixel). Click = pick that pixel's
+// colour; Esc / right-click = cancel. Sampling reads the captured surface, so it
+// returns whatever pixel is on top — independent of any layer.
+namespace {
+class ScreenColorLoupe : public QWidget
+{
+public:
+    std::function<void(bool, QColor)> onFinished;
+
+    ScreenColorLoupe()
+        : QWidget(nullptr, Qt::FramelessWindowHint | Qt::Tool
+                           | Qt::WindowStaysOnTopHint | Qt::X11BypassWindowManagerHint)
+    {
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_DeleteOnClose);
+        setMouseTracking(true);
+        setCursor(Qt::CrossCursor);
+        // Override the global `QWidget { background:#272727 }` rule, else the
+        // full-desktop overlay paints opaque grey over everything.
+        setStyleSheet("background: transparent;");
+
+        QRect vg;
+        for (QScreen* s : QGuiApplication::screens()) vg = vg.united(s->geometry());
+        setGeometry(vg);
+        m_origin = vg.topLeft();
+        captureScreens();
+    }
+
+    void startPick()
+    {
+        show();
+        raise();
+        activateWindow();
+        grabMouse();
+        grabKeyboard();
+        m_cursor = QCursor::pos();
+        update();
+    }
+
+protected:
+    void mouseMoveEvent(QMouseEvent* e) override   { m_cursor = e->globalPosition().toPoint(); update(); }
+    void mousePressEvent(QMouseEvent* e) override  { finish(e->button() == Qt::LeftButton); }
+    void keyPressEvent(QKeyEvent* e) override      { if (e->key() == Qt::Key_Escape) finish(false); }
+    void paintEvent(QPaintEvent*) override         { paintLoupe(); }
+
+private:
+    struct Cap { QImage img; QRect geo; qreal dpr; };
+
+    void captureScreens()
+    {
+        for (QScreen* s : QGuiApplication::screens()) {
+            QPixmap pm = s->grabWindow(0);
+            m_caps.push_back({ pm.toImage(), s->geometry(), pm.devicePixelRatio() });
+        }
+    }
+
+    QColor colorAt(const QPoint& g) const
+    {
+        for (const Cap& c : m_caps) {
+            if (!c.geo.contains(g)) continue;
+            const QPoint loc = g - c.geo.topLeft();
+            const int x = int(loc.x() * c.dpr);
+            const int y = int(loc.y() * c.dpr);
+            if (x >= 0 && y >= 0 && x < c.img.width() && y < c.img.height())
+                return c.img.pixelColor(x, y);
+        }
+        return QColor();
+    }
+
+    void finish(bool ok)
+    {
+        const QColor c = ok ? colorAt(m_cursor) : QColor();
+        releaseMouse();
+        releaseKeyboard();
+        hide();
+        if (onFinished) onFinished(ok && c.isValid(), c);
+        close();   // WA_DeleteOnClose
+    }
+
+    void paintLoupe()
+    {
+        const QPoint lc = m_cursor - m_origin;       // overlay-local cursor
+        const int    R    = 7;                        // half-grid → 15×15 px sample
+        const int    N    = 2 * R + 1;
+        const int    diam = Ui::px(150);
+        const qreal  cell = qreal(diam) / N;
+
+        const int off = 20;   // stuck to the cursor: 20px right, 20px down
+        int lx = lc.x() + off;
+        int ly = lc.y() + off;
+        if (lx + diam > width())  lx = lc.x() - off - diam;
+        if (ly + diam > height()) ly = lc.y() - off - diam;
+        const QRectF box(lx, ly, diam, diam);
+
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+
+        const qreal rad = Ui::px(16);
+        QPainterPath clip; clip.addRoundedRect(box, rad, rad);
+        p.save();
+        p.setClipPath(clip);
+
+        for (int dy = -R; dy <= R; ++dy)
+            for (int dx = -R; dx <= R; ++dx) {
+                const QColor c = colorAt(m_cursor + QPoint(dx, dy));
+                const QRectF r(box.x() + (dx + R) * cell, box.y() + (dy + R) * cell,
+                               cell + 1.0, cell + 1.0);
+                p.fillRect(r, c.isValid() ? c : QColor(20, 20, 20));
+            }
+
+        p.setPen(QPen(QColor(0, 0, 0, 45), 1));
+        for (int i = 0; i <= N; ++i) {
+            const qreal gx = box.x() + i * cell, gy = box.y() + i * cell;
+            p.drawLine(QPointF(gx, box.top()), QPointF(gx, box.bottom()));
+            p.drawLine(QPointF(box.left(), gy), QPointF(box.right(), gy));
+        }
+
+        // Centred target pixel.
+        const QRectF centre(box.x() + R * cell, box.y() + R * cell, cell, cell);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(Qt::black, Ui::px(3)));
+        p.drawRect(centre.adjusted(-1, -1, 1, 1));
+        p.setPen(QPen(Qt::white, Ui::px(2)));
+        p.drawRect(centre);
+        p.restore();
+
+        // Card border (light ring + thin dark outline), matching the design system.
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(QColor(0, 0, 0, 130), Ui::px(4)));
+        p.drawRoundedRect(box.adjusted(-1, -1, 1, 1), rad + 1, rad + 1);
+        p.setPen(QPen(QColor("#5D5D5D"), Ui::px(2)));
+        p.drawRoundedRect(box, rad, rad);
+    }
+
+    std::vector<Cap> m_caps;
+    QPoint           m_origin;
+    QPoint           m_cursor;
+};
+} // namespace
+
+// ============================================================
 //  ColorPickerDialog
 // ============================================================
 
@@ -998,9 +1123,30 @@ void ColorPickerDialog::buildUI(bool showOpacity)
         root->addLayout(row);
 
         connect(eyeBtn, &QPushButton::clicked, this, [this]() {
-            m_pickMode = true;
-            qApp->setOverrideCursor(Qt::CrossCursor);
-            qApp->installEventFilter(this);
+            // This dialog is a Qt::Popup (with WA_DeleteOnClose): the loupe's
+            // mouse grab would dismiss it. Keep it alive and hide it during the
+            // pick so it isn't captured into the screenshot, then reshow it.
+            const bool autoDel = testAttribute(Qt::WA_DeleteOnClose);
+            setAttribute(Qt::WA_DeleteOnClose, false);
+            hide();
+            qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
+
+            QPointer<ColorPickerDialog> self(this);
+            auto* loupe = new ScreenColorLoupe;
+            loupe->onFinished = [self, autoDel](bool ok, QColor c) {
+                if (!self) return;
+                if (ok) {
+                    c.getHsvF(&self->m_h, &self->m_s, &self->m_v);
+                    if (self->m_h < 0) self->m_h = 0.f;
+                    self->updateAllFromHSV();
+                    if (self->onColorChanged) self->onColorChanged(self->selectedColor(), self->m_a);
+                }
+                self->setAttribute(Qt::WA_DeleteOnClose, autoDel);
+                self->show();
+                self->raise();
+                self->activateWindow();
+            };
+            loupe->startPick();
         });
     }
 

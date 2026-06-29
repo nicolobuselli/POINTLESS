@@ -86,8 +86,9 @@ public:
         setFixedHeight(Ui::px(44));
 
         auto* hl = new QHBoxLayout(this);
-        // Left gutter 40 = left column gutter; right gutter 14 = right column +/-.
-        hl->setContentsMargins(Ui::px(40), 0, Ui::px(14), 0);
+        // Left gutter 40 = left column gutter. Right gutter pulled in from the
+        // screen edge (the controls sit at the maximized window's corner).
+        hl->setContentsMargins(Ui::px(40), 0, Ui::px(30), 0);
         hl->setSpacing(0);
 
         const int lh = Ui::px(34);
@@ -182,7 +183,7 @@ MainWindow::MainWindow(QWidget* parent)
     auto* tabRow = new QWidget;
     tabRow->setObjectName("bottomTabRow");
     auto* trl = new QHBoxLayout(tabRow);
-    trl->setContentsMargins(Ui::px(20), Ui::px(10), Ui::px(20), Ui::px(6));
+    trl->setContentsMargins(Ui::px(20), Ui::px(10), Ui::px(20), Ui::px(10));
     trl->setSpacing(Ui::px(6));
     auto* tabTimeline = new QPushButton("Timeline");
     auto* tabLibrary  = new QPushButton("Library");
@@ -353,8 +354,16 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_layersPanel, &LayersPanel::parentRenamed,           this, &MainWindow::onParentRenamed);
 
     connect(m_worker, &RenderWorker::renderComplete, this, &MainWindow::onRenderComplete);
+    m_renderStatusTimer.setSingleShot(true);
+    m_renderStatusTimer.setInterval(1000);
+    connect(&m_renderStatusTimer, &QTimer::timeout, this, [this]() {
+        m_renderStatusVisible = true;
+        m_preview->setStatus(m_pendingRenderStatus);
+    });
     connect(m_worker, &RenderWorker::renderStarted, this, [this](bool isPreview) {
-        m_preview->setStatus(isPreview ? "Preview…" : "Rendering full resolution…");
+        m_pendingRenderStatus = isPreview ? "Preview…" : "Rendering full resolution…";
+        if (m_renderStatusVisible) m_preview->setStatus(m_pendingRenderStatus);
+        else if (!m_renderStatusTimer.isActive()) m_renderStatusTimer.start();
     });
 
     // ── Undo debounce ────────────────────────────────────────
@@ -422,17 +431,44 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
     switch (msg->message) {
     case WM_NCCALCSIZE: {
         if (msg->wParam == FALSE) break;                 // size-only: ignore
-        auto* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+        // Maximized borderless windows are positioned by Windows so their edges
+        // overhang the monitor by the resize-border thickness; with the frame
+        // stripped, that overhang clips our top/left content off-screen. Inset the
+        // client by the (per-monitor DPI) frame metrics so content stays on-screen.
         if (::IsZoomed(msg->hwnd)) {
-            // A maximized borderless window overhangs the monitor by the frame
-            // thickness; inset so its content and the taskbar stay visible.
-            const int fx = ::GetSystemMetrics(SM_CXFRAME) + ::GetSystemMetrics(SM_CXPADDEDBORDER);
-            const int fy = ::GetSystemMetrics(SM_CYFRAME) + ::GetSystemMetrics(SM_CXPADDEDBORDER);
-            RECT& rc = p->rgrc[0];
-            rc.left += fx; rc.right -= fx; rc.top += fy; rc.bottom -= fy;
+            const UINT dpi = ::GetDpiForWindow(msg->hwnd);
+            const int fx = ::GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                         + ::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            const int fy = ::GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi)
+                         + ::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            auto* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+            p->rgrc[0].left   += fx;
+            p->rgrc[0].top    += fy;
+            p->rgrc[0].right  -= fx;
+            p->rgrc[0].bottom -= fy;
         }
         *result = 0;                                     // client area = whole window
         return true;
+    }
+    case WM_GETMINMAXINFO: {
+        // Constrain a maximized window to the work area of the monitor it's on —
+        // otherwise a borderless window maximizes to the primary monitor's size
+        // (so it can't fill a secondary monitor) and overhangs the taskbar.
+        HMONITOR mon = ::MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{}; mi.cbSize = sizeof(mi);
+        if (::GetMonitorInfoW(mon, &mi)) {
+            const RECT wk = mi.rcWork, mr = mi.rcMonitor;
+            auto* mmi = reinterpret_cast<MINMAXINFO*>(msg->lParam);
+            mmi->ptMaxPosition.x  = wk.left - mr.left;    // taskbar offset within monitor
+            mmi->ptMaxPosition.y  = wk.top  - mr.top;
+            mmi->ptMaxSize.x      = wk.right  - wk.left;
+            mmi->ptMaxSize.y      = wk.bottom - wk.top;
+            mmi->ptMaxTrackSize.x = wk.right  - wk.left;
+            mmi->ptMaxTrackSize.y = wk.bottom - wk.top;
+            *result = 0;
+            return true;
+        }
+        break;
     }
     case WM_NCHITTEST: {
         const qreal dpr = devicePixelRatioF();
@@ -1543,7 +1579,17 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
     }
     updateDisplayedPreview();
     pushPreviewTransform();
-    m_preview->setStatus(isPreview ? "Preview (full render pending…)" : "Done");
+    if (isPreview) {
+        // Preview pass done, full pass still pending. Don't flash this unless the
+        // progress caption is already on screen (a genuinely slow render).
+        m_pendingRenderStatus = "Preview (full render pending…)";
+        if (m_renderStatusVisible) m_preview->setStatus(m_pendingRenderStatus);
+    } else {
+        // Full pass done → back to idle; cancel any pending "Rendering…" caption.
+        m_renderStatusTimer.stop();
+        m_renderStatusVisible = false;
+        m_preview->setStatus("Done");
+    }
 }
 
 // ---------------------------------------------------------------------------

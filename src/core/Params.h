@@ -262,7 +262,7 @@ enum class GridType {
 
 struct GridSettings {
     GridType type               = GridType::Square;
-    float    spacing            = 20.0f;  // 2..200
+    float    spacing            = 50.0f;  // 2..200
     float    pointSpacing       = 20.0f;  // 2..200 — Radial ring sampling
     float    rotation           = 0.0f;   // 0..360 deg
     float    diameter           = 1.0f;   // 0.1..3.0 primitive size multiplier

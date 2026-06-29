@@ -255,8 +255,6 @@ private:
     QLineEdit*         m_opacityInput = nullptr;
     float m_h = 0.f, m_s = 1.f, m_v = 1.f, m_a = 1.f;
     QPoint m_dragOffset;
-    bool m_pickMode = false;
-    bool eventFilter(QObject* obj, QEvent* ev) override;
 };
 
 // ── Small helpers ────────────────────────────────────────────

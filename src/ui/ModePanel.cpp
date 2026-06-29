@@ -229,10 +229,11 @@ public:
             sl->addWidget(m_gridType);
             sl->addSpacing(Ui::px(8));   // breathing room before the sliders
 
-            // All five run on a unified 0..100 UI scale; getSettings/setSettings
-            // map each linearly onto its real range (spacing 2..500, rotation
+            // Spacing is shown in its real units (px) so the box matches the
+            // rendered grid. The rest run on a unified 0..100 UI scale that
+            // getSettings/setSettings map onto their real range (rotation
             // 0..360°, gamma 0..5, diameter 0.1..3, jitter 0..1).
-            m_spacing      = new SliderRow("Spacing",       0, 100,   4);
+            m_spacing      = new SliderRow("Spacing",       2, 200,  50);
             m_rotation     = new SliderRow("Rotation",      0, 100,   0);
             m_gamma        = new SliderRow("Gamma",         0, 100,  20);
             m_diameter     = new SliderRow("Diameter",      0, 100,  31);
@@ -309,7 +310,7 @@ public:
         s.multiThreshold = 128;
 
         s.grid.type          = static_cast<GridType>(m_gridType->currentIndex());
-        s.grid.spacing       = 2.0f + m_spacing->value()  / 100.0f * 498.0f;
+        s.grid.spacing       = float(m_spacing->value());   // real px (matches UI)
         s.grid.rotation      = m_rotation->value() / 100.0f * 360.0f;
         s.grid.diameter      = 0.1f + m_diameter->value() / 100.0f * 2.9f;
         // Stretch / stretch-angle removed from the UI: leave grid at identity.
@@ -351,7 +352,7 @@ public:
         m_gridType->blockSignals(true);
         m_gridType->setCurrentIndex(int(s.grid.type));
         m_gridType->blockSignals(false);
-        m_spacing->setValue(qRound((s.grid.spacing - 2.0f) / 498.0f * 100.0f));
+        m_spacing->setValue(qRound(s.grid.spacing));
         m_rotation->setValue(qRound(s.grid.rotation / 360.0f * 100.0f));
         m_diameter->setValue(qRound((s.grid.diameter - 0.1f) / 2.9f * 100.0f));
         m_gamma->setValue(qRound(s.gamma / 5.0f * 100.0f));

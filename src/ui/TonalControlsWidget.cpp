@@ -3,6 +3,8 @@
 #include "../core/PaletteStore.h"
 
 #include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QScrollArea>
 #include <QSpacerItem>
 #include <QLabel>
 #include <QLineEdit>
@@ -85,9 +87,27 @@ public:
     {
         setObjectName("palettePopup");
         setAttribute(Qt::WA_StyledBackground, true);
-        m_layout = new QVBoxLayout(this);
-        m_layout->setContentsMargins(6, 6, 6, 6);
-        m_layout->setSpacing(4);
+
+        // Rows live inside a scroll area so the popup stays short and the saved
+        // palettes scroll (vertical bar appears only when they overflow).
+        auto* outer = new QVBoxLayout(this);
+        outer->setContentsMargins(Ui::px(6), Ui::px(6), Ui::px(6), Ui::px(6));
+        outer->setSpacing(0);
+
+        m_scroll = new QScrollArea(this);
+        m_scroll->setObjectName("palettePopupScroll");
+        m_scroll->setWidgetResizable(true);
+        m_scroll->setFrameShape(QFrame::NoFrame);
+        m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+        auto* body = new QWidget;
+        body->setObjectName("palettePopupBody");
+        m_layout = new QVBoxLayout(body);
+        m_layout->setContentsMargins(0, 0, Ui::px(6), 0);   // gap before the bar
+        m_layout->setSpacing(Ui::px(8));                    // breathing room per item
+        m_scroll->setWidget(body);
+        outer->addWidget(m_scroll);
     }
 
     void setCurrentName(const QString& n) { m_currentName = n; }
@@ -101,6 +121,7 @@ public:
         // but wider than the box so names are readable; kept fully on-screen,
         // flipping above the box if it would overflow the bottom.
         setFixedWidth(Ui::px(330));
+        m_scroll->setMaximumHeight(Ui::px(680));   // taller popup → scroll for more
         adjustSize();
         QScreen* scr = anchor->screen() ? anchor->screen() : QGuiApplication::primaryScreen();
         const QRect a = scr->availableGeometry();
@@ -142,12 +163,12 @@ private:
             auto* row = new QPushButton;
             row->setObjectName("paletteItem");
             row->setCursor(Qt::PointingHandCursor);
-            row->setFixedHeight(Ui::px(36));
+            row->setFixedHeight(Ui::px(46));
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(Ui::px(12), 0, Ui::px(10), 0);
             auto* name = new QLabel("Extract from image");
             name->setAttribute(Qt::WA_TransparentForMouseEvents);
-            name->setStyleSheet(QString("background:transparent; color:#E3E3E3; font-size:%1px; font-weight:500;").arg(Ui::px(15)));
+            name->setStyleSheet(QString("background:transparent; color:#E3E3E3; font-size:%1px; font-weight:500;").arg(Ui::px(16)));
             hl->addWidget(name);
             hl->addStretch(1);
             connect(row, &QPushButton::clicked, this, [this]() {
@@ -164,12 +185,12 @@ private:
             row->setObjectName("paletteItem");
             row->setProperty("selected", true);
             row->setCursor(Qt::PointingHandCursor);
-            row->setFixedHeight(Ui::px(36));
+            row->setFixedHeight(Ui::px(46));
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(Ui::px(12), 0, Ui::px(10), 0);
             auto* name = new QLabel("Custom");
             name->setAttribute(Qt::WA_TransparentForMouseEvents);
-            name->setStyleSheet(QString("background:transparent; color:#FFFFFF; font-size:%1px; font-weight:500;").arg(Ui::px(15)));
+            name->setStyleSheet(QString("background:transparent; color:#FFFFFF; font-size:%1px; font-weight:500;").arg(Ui::px(16)));
             hl->addWidget(name);
             hl->addStretch(1);
             connect(row, &QPushButton::clicked, this, [this]() { hide(); });
@@ -198,7 +219,7 @@ private:
         row->setObjectName("paletteItem");
         row->setProperty("selected", selected);
         row->setCursor(Qt::PointingHandCursor);
-        row->setFixedHeight(Ui::px(36));
+        row->setFixedHeight(Ui::px(46));
 
         auto* hl = new QHBoxLayout(row);
         hl->setContentsMargins(Ui::px(12), 0, Ui::px(8), 0);
@@ -207,13 +228,13 @@ private:
         auto* name = new QLabel(pal.name);
         name->setAttribute(Qt::WA_TransparentForMouseEvents);
         name->setStyleSheet(QString("background:transparent; color:%1; font-size:%2px; font-weight:500;")
-                            .arg(selected ? "#FFFFFF" : "#E3E3E3").arg(Ui::px(15)));
+                            .arg(selected ? "#FFFFFF" : "#E3E3E3").arg(Ui::px(16)));
 
-        auto* strip = new SwatchStrip(Ui::px(16));
+        auto* strip = new SwatchStrip(Ui::px(20));
         strip->setColors(pal.colors);
 
         auto* trash = makeIconButton(":/icons/trash.svg");
-        trash->setObjectName("trashBtn");
+        trash->setObjectName("paletteTrash");   // no box; red tint on hover
         trash->setCursor(Qt::PointingHandCursor);
 
         hl->addWidget(name);
@@ -276,6 +297,7 @@ private:
         return row;
     }
 
+    QScrollArea*               m_scroll = nullptr;
     QVBoxLayout*               m_layout = nullptr;
     std::vector<PalettePreset> m_library;
     int                        m_pendingDelete = -1;
