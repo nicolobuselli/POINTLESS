@@ -191,6 +191,10 @@ MainWindow::MainWindow(QWidget* parent)
         m_transformDragging = true;          // canvas drag: render cheap previews only
         onLayerTransformChanged(t);
     });
+    connect(m_preview, &PreviewWidget::groupTransformChanged, this, [this](const QHash<int, LayerTransform>& byId) {
+        m_transformDragging = true;
+        onGroupTransformChanged(byId);
+    });
     connect(m_preview, &PreviewWidget::transformEditFinished, this, [this]() {
         m_transformDragging = false;
         scheduleRender();        // one full-quality pass now that the gesture is done
@@ -205,6 +209,9 @@ MainWindow::MainWindow(QWidget* parent)
         if (const Layer* l = activeLayer()) onLayerBlendChanged(l->id, m);
     });
     connect(m_right, &ModePanel::modeSelected,              this, &MainWindow::onModeSelected);
+    connect(m_right, &ModePanel::clearModeRequested, this, [this]() {
+        if (Layer* act = activeLayer()) onLayerRemoveEditsRequested(act->id);
+    });
     connect(m_right, &ModePanel::exportRequested,           this, &MainWindow::onExport);
 
     connect(m_preview,   &PreviewWidget::filesDropped,           this, &MainWindow::onFilesDroppedAsLayer);
@@ -242,8 +249,11 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_layersPanel, &LayersPanel::visibilityToggled, this, &MainWindow::onLayerVisibilityToggled);
     connect(m_layersPanel, &LayersPanel::layerSelected,     this, &MainWindow::onLayerSelected);
+    connect(m_layersPanel, &LayersPanel::layerRangeRequested, this, &MainWindow::onLayerRangeRequested);
+    connect(m_layersPanel, &LayersPanel::layerToggleRequested, this, &MainWindow::onLayerToggleRequested);
     connect(m_layersPanel, &LayersPanel::layerRenamed,      this, &MainWindow::onLayerRenamed);
     connect(m_layersPanel, &LayersPanel::deleteRequested,   this, &MainWindow::onLayerDeleteRequested);
+    connect(m_layersPanel, &LayersPanel::removeEditsRequested, this, &MainWindow::onLayerRemoveEditsRequested);
     connect(m_layersPanel, &LayersPanel::blendModeChanged,  this, &MainWindow::onLayerBlendChanged);
     connect(m_layersPanel, &LayersPanel::addLayerRequested, this, &MainWindow::onAddLayerRequested);
     connect(m_layersPanel, &LayersPanel::reorderRequested,  this, &MainWindow::onLayerReordered);
@@ -439,9 +449,13 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         }
         if (m_current >= 0) {
             const auto& st = m_images[m_current].state;
-            const Layer* l = activeLayer();
-            if (l && l->kind != LayerKind::Original) {
-                onLayerDeleteRequested(st.activeLayerId);
+            // Delete the whole canvas selection, or the active layer if nothing
+            // is box-selected. Any kind is deletable (Original images included).
+            QList<int> ids = m_selection.values();
+            if (ids.isEmpty() && st.activeLayerId >= 0) ids << st.activeLayerId;
+            if (!ids.isEmpty()) {
+                m_selection.clear();
+                for (int id : ids) onLayerDeleteRequested(id);
                 event->accept();
                 return;
             }
@@ -614,6 +628,7 @@ void MainWindow::syncLayersPanel()
 
     m_layersPanel->setBackground(st.background, st.backgroundOpacity);
     m_layersPanel->setTree(st.parents, st.layers, st.activeLayerId, mediaImages);
+    m_layersPanel->setSelection(m_selection);   // reflect multi-select highlight
 }
 
 void MainWindow::onParamsChanged()
@@ -855,8 +870,56 @@ void MainWindow::onLayerVisibilityToggled(int layerId, bool visible)
 void MainWindow::onLayerSelected(int layerId)
 {
     if (m_current < 0) return;
-    if (m_images[m_current].state.activeLayerId == layerId) return;
+    m_selAnchor = layerId;            // anchor for a subsequent shift-range
+    m_selection = { layerId };
+    if (m_images[m_current].state.activeLayerId == layerId) {
+        syncLayersPanel();            // already active → just refresh the highlight
+        pushPreviewTransform();
+        return;
+    }
     selectLayerInternal(layerId, true);
+}
+
+// Shift-click a row: select every layer between the anchor and the clicked one
+// (inclusive), in stack order. The clicked layer becomes the edit target.
+void MainWindow::onLayerRangeRequested(int layerId)
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+    const int to = findLayerById(st.layers, layerId);
+    if (to < 0) return;
+    int from = findLayerById(st.layers, m_selAnchor);
+    if (from < 0) { from = to; m_selAnchor = layerId; }
+
+    const int lo = qMin(from, to), hi = qMax(from, to);
+    m_selection.clear();
+    for (int i = lo; i <= hi; ++i) m_selection.insert(st.layers[i].id);
+
+    st.activeLayerId = layerId;
+    applyParams(st);
+    syncLayersPanel();
+    scheduleRender();
+}
+
+// Ctrl-click a row: add/remove just that layer from the selection.
+void MainWindow::onLayerToggleRequested(int layerId)
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+    if (findLayerById(st.layers, layerId) < 0) return;
+
+    if (m_selection.contains(layerId)) {
+        m_selection.remove(layerId);
+        if (st.activeLayerId == layerId && !m_selection.isEmpty())
+            st.activeLayerId = *m_selection.constBegin();
+    } else {
+        m_selection.insert(layerId);
+        st.activeLayerId = layerId;   // newly added becomes the edit target
+    }
+    m_selAnchor = layerId;
+    applyParams(st);
+    syncLayersPanel();
+    scheduleRender();
 }
 
 void MainWindow::onLayerRenamed(int layerId, const QString& name)
@@ -901,6 +964,24 @@ void MainWindow::onLayerDeleteRequested(int layerId)
     m_undoTimer.start();
 }
 
+void MainWindow::onLayerRemoveEditsRequested(int layerId)
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+    const int idx = findLayerById(st.layers, layerId);
+    if (idx < 0 || st.layers[idx].kind == LayerKind::Original) return;
+
+    Layer& l = st.layers[idx];
+    const bool wasAutoName = (l.name == layerKindName(l.kind));
+    l.kind = LayerKind::Original;     // revert to raw; per-kind settings stay dormant
+    if (wasAutoName) l.name = uniqueLayerName(st, LayerKind::Original);
+
+    if (st.activeLayerId == layerId) applyParams(st);
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
+}
+
 void MainWindow::onLayerBlendChanged(int layerId, BlendMode mode)
 {
     if (m_current < 0) return;
@@ -928,6 +1009,28 @@ void MainWindow::onLayerTransformChanged(const LayerTransform& t)
     // layer thumbnails, on every mouse move is what made many-layer drags chaotic.
     scheduleRender(/*previewOnly=*/m_transformDragging);
     if (!m_transformDragging) m_previewTimer.start();   // thumbs catch up after edits
+    m_undoTimer.start();
+}
+
+void MainWindow::onGroupTransformChanged(const QHash<int, LayerTransform>& byId)
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+    bool any = false;
+    for (auto it = byId.cbegin(); it != byId.cend(); ++it) {
+        const int idx = findLayerById(st.layers, it.key());
+        if (idx >= 0 && !(st.layers[idx].transform == it.value())) {
+            st.layers[idx].transform = it.value();
+            any = true;
+        }
+    }
+    if (!any) return;
+
+    m_playCacheValid = false;
+    if (const Layer* l = activeLayer()) m_left->setTransform(l->transform);
+    pushPreviewTransform();
+    scheduleRender(/*previewOnly=*/m_transformDragging);
+    if (!m_transformDragging) m_previewTimer.start();
     m_undoTimer.start();
 }
 
@@ -1013,6 +1116,7 @@ void MainWindow::onAddLayerRequested()
 
     Layer nl = *act;                  // duplicate the active child (settings + parent)
     nl.id      = st.nextLayerId++;
+    nl.kind    = LayerKind::Original; // new children start mode-less; user picks a mode
     nl.name    = uniqueLayerName(st, nl.kind);
     nl.visible = true;
     nl.pinned  = true;
@@ -1062,7 +1166,7 @@ void MainWindow::onAddChildRequested(int mediaId)
     if (it != board.media.end()) native = it->image.size();
 
     // New children start as Original (raw); the user picks a mode after.
-    Layer child = makeChildLayer(st, mediaId, layerKindForMode(m_right->mode()), native);
+    Layer child = makeChildLayer(st, mediaId, LayerKind::Original, native);
     st.layers.insert(st.layers.begin(), child);
     st.activeLayerId = child.id;
     commitStructuralChange();
@@ -1271,6 +1375,11 @@ QHash<int, QImage> MainWindow::layerSourcesAt(const SessionImage& img, int frame
 
 void MainWindow::onRenderComplete(QImage result, bool isPreview)
 {
+    // A render that finished after the last layer was deleted is stale: the
+    // empty-frame branch in scheduleRender already cleared the canvas — don't
+    // let the in-flight result paint the deleted layers back in.
+    if (m_current >= 0 && m_images[m_current].state.layers.empty()) return;
+
     if (isPreview) {
         m_lastPreviewFrame = result;
     } else {

@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QHash>
 #include <QList>
+#include <QSet>
 #include <vector>
 #include "../core/Params.h"
 
@@ -47,6 +48,7 @@ public:
                  const std::vector<Layer>& layers, int activeId,
                  const QHash<int, QImage>& mediaImages);
     void setLayers(const std::vector<Layer>& layers, int activeId);   // legacy flat
+    void setSelection(const QSet<int>& sel);   // multi-select highlight (shift-range)
     void setSourceImage(const QImage& source);
     void setBackground(const QColor& background, float opacity);
     void requestAddLayer();   // external "+" trigger (embedded header lives in ControlsPanel)
@@ -55,8 +57,11 @@ signals:
     // Child (layer) signals
     void visibilityToggled(int layerId, bool visible);
     void layerSelected(int layerId);
+    void layerRangeRequested(int layerId);   // shift-click: select anchor→here
+    void layerToggleRequested(int layerId);  // ctrl-click: toggle in/out of selection
     void layerRenamed(int layerId, const QString& name);
     void deleteRequested(int layerId);
+    void removeEditsRequested(int layerId);
     void blendModeChanged(int layerId, BlendMode mode);
     void addLayerRequested();
     void reorderRequested(int layerId, int insertIndex);
@@ -89,6 +94,7 @@ private:
     std::vector<ParentGroup> m_parents;
     QHash<int, QImage>       m_mediaImages;   // mediaId → small source for thumbs
     int                m_activeId = -1;
+    QSet<int>          m_selSet;          // extra highlighted rows (range selection)
     QImage             m_smallSource;   // downscaled source for row thumbs (legacy)
     QColor             m_background    = QColor(0x0A,0x0A,0x0A);
     float              m_bgOpacity     = 1.0f;

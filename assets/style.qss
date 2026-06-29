@@ -672,3 +672,28 @@ QStatusBar {
     font-size: 9pt;
     border-top: 1px solid #3B3B3B;
 }
+
+/* ── Context menu (right-click on a layer row, etc.) ──────────── */
+QMenu {
+    background-color: #3B3B3B;
+    border: 1px solid #5D5D5D;
+    border-radius: s(8)px;
+    padding: s(6)px;
+}
+QMenu::item {
+    background: transparent;
+    color: #E3E3E3;
+    font-size: s(18)px;
+    padding: s(8)px s(18)px;
+    margin: s(2)px 0;
+    border-radius: s(6)px;
+}
+QMenu::item:selected {
+    background-color: #568AD9;
+    color: #EEEEEE;
+}
+QMenu::separator {
+    height: 1px;
+    background: #5D5D5D;
+    margin: s(4)px s(8)px;
+}

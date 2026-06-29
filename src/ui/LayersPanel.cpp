@@ -107,11 +107,15 @@ class LayerRow : public QFrame
 {
 public:
     std::function<void()>            onSelected;
+    std::function<void()>            onShiftSelected;   // range-select to anchor
+    std::function<void()>            onCtrlSelected;    // toggle this row in/out
     std::function<void(bool)>       onEyeToggled;
     std::function<void(const QString&)> onRenamed;
     std::function<void()>            onDeleteRequested;
+    std::function<void()>            onRemoveEditsRequested;
 
     void setDeletable(bool d) { m_deletable = d; }
+    void setHasEdits(bool h)  { m_hasEdits = h; }
 
     // Indent a child row so the tree connector has room on its left.
     void setIndent(int leftPx)
@@ -218,7 +222,9 @@ protected:
     {
         if (e->button() == Qt::LeftButton && !m_editingName) {
             m_pressPos = e->pos();
-            if (onSelected) onSelected();
+            if ((e->modifiers() & Qt::ShiftModifier) && onShiftSelected) onShiftSelected();
+            else if ((e->modifiers() & Qt::ControlModifier) && onCtrlSelected) onCtrlSelected();
+            else if (onSelected) onSelected();
         }
         QFrame::mousePressEvent(e);
     }
@@ -255,8 +261,12 @@ protected:
         if (!m_deletable) return;
         QMenu menu(this);
         QAction* del = menu.addAction("Delete layer");
-        if (menu.exec(e->globalPos()) == del && onDeleteRequested)
+        QAction* rmEdits = m_hasEdits ? menu.addAction("Remove edits") : nullptr;
+        QAction* chosen = menu.exec(e->globalPos());
+        if (chosen == del && onDeleteRequested)
             onDeleteRequested();
+        else if (chosen && chosen == rmEdits && onRemoveEditsRequested)
+            onRemoveEditsRequested();
     }
 
 private:
@@ -296,6 +306,7 @@ private:
     bool         m_visible = true;
     bool         m_editingName = false;
     bool         m_deletable = true;
+    bool         m_hasEdits  = false;
     QFrame*      m_pill    = nullptr;
     QLabel*      m_thumb   = nullptr;
     QLabel*      m_name    = nullptr;
@@ -928,6 +939,13 @@ void LayersPanel::setTree(const std::vector<ParentGroup>& parents,
     reposition();
 }
 
+void LayersPanel::setSelection(const QSet<int>& sel)
+{
+    m_selSet = sel;
+    for (LayerRow* r : m_rows)
+        r->setSelected(r->layerId() == m_activeId || m_selSet.contains(r->layerId()));
+}
+
 void LayersPanel::setLayers(const std::vector<Layer>& layers, int activeId)
 {
     m_parents.clear();
@@ -1011,13 +1029,17 @@ void LayersPanel::buildTree()
         row->setName(layer.name);
         row->setThumb(thumbFor(layer));
         row->setLayerVisible(layer.visible);
-        row->setSelected(layer.id == m_activeId);
+        row->setSelected(layer.id == m_activeId || m_selSet.contains(layer.id));
         row->setIndent(tree::indent());
+        row->setHasEdits(layer.kind != LayerKind::Original);
         const int id = layer.id;
         row->onSelected        = [this, id]()                { emit layerSelected(id); };
+        row->onShiftSelected   = [this, id]()                { emit layerRangeRequested(id); };
+        row->onCtrlSelected    = [this, id]()                { emit layerToggleRequested(id); };
         row->onEyeToggled      = [this, id](bool on)         { emit visibilityToggled(id, on); };
         row->onRenamed         = [this, id](const QString& n){ emit layerRenamed(id, n); };
         row->onDeleteRequested = [this, id]()                { emit deleteRequested(id); };
+        row->onRemoveEditsRequested = [this, id]()           { emit removeEditsRequested(id); };
         lay->addWidget(row);
         m_rows.append(row);
         model.push_back({ row, false, layer.mediaId, id });
@@ -1063,7 +1085,7 @@ void LayersPanel::updateRowsInPlace()
         row->setName(layer.name);
         row->setThumb(thumbFor(layer));
         row->setLayerVisible(layer.visible);
-        row->setSelected(layer.id == m_activeId);
+        row->setSelected(layer.id == m_activeId || m_selSet.contains(layer.id));
     };
     if (m_parents.empty()) {
         for (const Layer& l : m_layers) updateChild(l);

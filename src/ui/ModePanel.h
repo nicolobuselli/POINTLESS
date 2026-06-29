@@ -56,11 +56,13 @@ signals:
     void backgroundChanged();
     void blendChanged(BlendMode mode);       // Fusion combo → active layer
     void modeSelected(RenderMode m);         // user clicked a tab
+    void clearModeRequested();               // user clicked the "X" → back to Original
     void exportRequested();
 
 private:
     void setMode(RenderMode m);   // silent: updates tabs + visible page
 
+    QWidget*     m_fillSection = nullptr;   // Fill section (per-mode tonal)
     QPushButton* m_tabHalftone = nullptr;
     QPushButton* m_tabDither   = nullptr;
     QPushButton* m_tabAscii    = nullptr;

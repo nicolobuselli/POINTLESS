@@ -117,7 +117,9 @@ public:
 
         auto* titleRow = new QWidget;
         auto* tl = new QHBoxLayout(titleRow);
-        tl->setContentsMargins(Ui::px(40), Ui::px(12), Ui::px(24), Ui::px(12));
+        // Right gutter reduced from 24 → 14 so the header icons (+/−/x) sit
+        // ~5 real px further right (they read slightly off-centre otherwise).
+        tl->setContentsMargins(Ui::px(40), Ui::px(12), Ui::px(14), Ui::px(12));
         tl->setSpacing(Ui::px(6));
         tl->addWidget(makeSectionTitle(title), 1);
         m_titleLayout = tl;
@@ -944,7 +946,8 @@ ModePanel::ModePanel(QWidget* parent)
     {
         auto* tabRow = new QWidget;
         auto* tl = new QHBoxLayout(tabRow);
-        tl->setContentsMargins(Ui::px(24), Ui::px(16), Ui::px(12), Ui::px(12));
+        // Right gutter 24→14 so the "X" lines up with the section header icons.
+        tl->setContentsMargins(Ui::px(24), Ui::px(16), Ui::px(14), Ui::px(12));
         tl->setSpacing(Ui::px(4));
 
         auto makeTab = [&](const QString& text) {
@@ -961,6 +964,18 @@ ModePanel::ModePanel(QWidget* parent)
         m_tabAscii    = makeTab("Ascii");
         m_tabHalftone->setChecked(true);
         tl->addStretch(1);
+
+        // "X" in the +/- gutter: clears the mode → layer goes back to Original
+        // (raw image), a second way to deselect besides the row context menu.
+        auto* clearBtn = new QPushButton;
+        clearBtn->setObjectName("iconBtn");
+        clearBtn->setCursor(Qt::PointingHandCursor);
+        clearBtn->setFixedSize(Ui::px(26), Ui::px(26));
+        clearBtn->setIconSize(QSize(Ui::px(16), Ui::px(16)));
+        clearBtn->setIcon(QIcon(":/icons/x.svg"));
+        clearBtn->setToolTip("Clear mode (show original)");
+        connect(clearBtn, &QPushButton::clicked, this, &ModePanel::clearModeRequested);
+        tl->addWidget(clearBtn);
 
         connect(m_tabHalftone, &QPushButton::clicked, this, [this]() { emit modeSelected(RenderMode::Halftone); });
         connect(m_tabDither,   &QPushButton::clicked, this, [this]() { emit modeSelected(RenderMode::Dither); });
@@ -1003,9 +1018,12 @@ ModePanel::ModePanel(QWidget* parent)
 
     // ── Fill (shared palette) ────────────────────────────────
     auto* fill = new PanelSection("Fill", /*collapsible*/ true, true);
+    m_fillSection = fill;
     // Extend the body to the +/− gutter so the favourite icon can sit in that
     // column; the palette controls compensate with their own right margin.
-    fill->body()->setContentsMargins(Ui::px(40), Ui::px(2), Ui::px(24), Ui::px(14));
+    // Right margin 24→14 to match the (shifted) header icons; TonalControls'
+    // kGutterComp tracks this so the boxes still stop at the 70px gutter.
+    fill->body()->setContentsMargins(Ui::px(40), Ui::px(2), Ui::px(14), Ui::px(14));
     m_tonal = new TonalControlsWidget(
         TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
     m_tonal->onChanged = [this]() { if (!m_updating) emit tonalChanged(); };
@@ -1151,15 +1169,24 @@ void ModePanel::setFromLayer(const Layer& layer)
         m_tonal->setSettings(tonal);
     }
 
-    if (layer.kind != LayerKind::Original)
-        setMode(modeForLayerKind(layer.kind));
-
-    // The Original layer has no mode settings: only the left adjustments apply.
-    const bool editable = (layer.kind != LayerKind::Original);
-    m_halftonePage->setEnabled(editable);
-    m_ditherPage->setEnabled(editable);
-    m_asciiPage->setEnabled(editable);
-    m_tonal->setEnabled(editable);
+    // The Original (clean) layer has no mode: the tabs stay visible (so a mode
+    // can be re-picked) but everything tied to a mode disappears — the settings
+    // page and the colour/Fill section. Only the left adjustments apply.
+    const bool hasMode = (layer.kind != LayerKind::Original);
+    if (hasMode) setMode(modeForLayerKind(layer.kind));
+    else {
+        // autoExclusive refuses to uncheck the last checked tab, so drop it
+        // momentarily to clear the highlight, then restore exclusivity.
+        for (auto* t : { m_tabHalftone, m_tabDither, m_tabAscii }) {
+            t->setAutoExclusive(false);
+            t->setChecked(false);
+            t->setAutoExclusive(true);
+        }
+        m_halftonePage->setVisible(false);
+        m_ditherPage->setVisible(false);
+        m_asciiPage->setVisible(false);
+    }
+    m_fillSection->setVisible(hasMode);
 
     m_updating = false;
 }

@@ -111,7 +111,7 @@ void PreviewWidget::setActiveTransform(const LayerTransform& tf, QSize layerNati
                                        QSize frame, bool transformable)
 {
     // Don't clobber the live value while the user is dragging a handle.
-    if (m_tfDrag != TfDrag::None) return;
+    if (m_tfDrag != TfDrag::None || m_groupDrag) return;
 
     m_tf            = tf;
     m_layerNative   = layerNative;
@@ -200,6 +200,38 @@ bool PreviewWidget::handlesVisible() const
         && m_selection.size() == 1 && m_selection.contains(m_activeId);
 }
 
+bool PreviewWidget::groupHandlesVisible() const
+{
+    return !m_panMode && !m_showOriginal && m_selection.size() >= 2;
+}
+
+QPointF PreviewWidget::centreFrame(const LayerTransform& tf) const
+{
+    return QPointF(m_frame.width()  * 0.5 + double(tf.xPct) * m_frame.width(),
+                   m_frame.height() * 0.5 + double(tf.yPct) * m_frame.height());
+}
+
+QRectF PreviewWidget::groupBBoxFrame() const
+{
+    QRectF box;
+    bool first = true;
+    for (const CanvasLayer& cl : m_canvasLayers) {
+        if (!m_selection.contains(cl.id)) continue;
+        const QRectF b = quadFrame(cl.tf, cl.native).boundingRect();
+        box = first ? b : box.united(b);
+        first = false;
+    }
+    return first ? QRectF() : box;
+}
+
+QRectF PreviewWidget::groupRectWidget() const
+{
+    const QRectF f = groupBBoxFrame();
+    if (f.isNull()) return {};
+    // frameToWidget is scale+translate only, so the AABB maps to an AABB.
+    return QRectF(frameToWidget(f.topLeft()), frameToWidget(f.bottomRight())).normalized();
+}
+
 const PreviewWidget::CanvasLayer* PreviewWidget::layerById(int id) const
 {
     for (const CanvasLayer& cl : m_canvasLayers)
@@ -284,6 +316,50 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
         && imageScale() > 0.0) {
         const QPointF pos = event->position();
         const Qt::KeyboardModifiers mods = event->modifiers();
+
+        // 0. Group gizmo for a multi-layer selection. Plain drags only — Shift/Ctrl
+        //    still add/remove layers from the selection.
+        if (groupHandlesVisible() && !(mods & (Qt::ShiftModifier | Qt::ControlModifier))) {
+            const QRectF gw      = groupRectWidget();
+            const QPointF framePt = widgetToFrame(pos);
+            const QPointF pivot   = groupBBoxFrame().center();
+            const QPointF topMid  = (gw.topLeft() + gw.topRight()) * 0.5;
+            const QPointF rot     = topMid + QPointF(0, -kRotArm);
+
+            auto beginGroup = [&](TfDrag mode) {
+                m_groupDrag  = true;
+                m_groupMode  = mode;
+                m_groupPivot = pivot;
+                m_groupStart.clear();
+                for (const CanvasLayer& cl : m_canvasLayers)
+                    if (m_selection.contains(cl.id)) m_groupStart.insert(cl.id, cl.tf);
+            };
+
+            if (QLineF(pos, rot).length() <= kRotHandleHit) {
+                beginGroup(TfDrag::Rotate);
+                m_startAngle = std::atan2(framePt.y() - pivot.y(), framePt.x() - pivot.x());
+                event->accept();
+                return;
+            }
+            const QPointF corners[4] = { gw.topLeft(), gw.topRight(),
+                                         gw.bottomRight(), gw.bottomLeft() };
+            for (const QPointF& corner : corners) {
+                if (QLineF(pos, corner).length() <= kHandleHit) {
+                    beginGroup(TfDrag::Scale);
+                    m_startDist = qMax(1e-3, QLineF(pivot, framePt).length());
+                    event->accept();
+                    return;
+                }
+            }
+            if (gw.contains(pos)) {
+                beginGroup(TfDrag::Move);
+                m_groupGrabFrame = framePt;
+                setCursor(Qt::SizeAllCursor);
+                event->accept();
+                return;
+            }
+            // Outside the group box → fall through to normal click / box-select.
+        }
 
         // 1. Rotation/scale handles of the single active layer take priority.
         if (handlesVisible()) {
@@ -382,6 +458,56 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
 
 void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
 {
+    if (m_groupDrag) {
+        const QPointF framePt = widgetToFrame(event->position());
+        const QPointF P = m_groupPivot;
+        QHash<int, LayerTransform> out;
+
+        if (m_groupMode == TfDrag::Move) {
+            const QPointF d = framePt - m_groupGrabFrame;
+            for (auto it = m_groupStart.cbegin(); it != m_groupStart.cend(); ++it) {
+                LayerTransform t = it.value();
+                const QPointF c = centreFrame(t) + d;
+                t.xPct = m_frame.width()  > 0 ? float((c.x() - m_frame.width()  * 0.5) / m_frame.width())  : 0.0f;
+                t.yPct = m_frame.height() > 0 ? float((c.y() - m_frame.height() * 0.5) / m_frame.height()) : 0.0f;
+                out.insert(it.key(), t);
+            }
+        } else if (m_groupMode == TfDrag::Scale) {
+            const double f = QLineF(P, framePt).length() / m_startDist;
+            for (auto it = m_groupStart.cbegin(); it != m_groupStart.cend(); ++it) {
+                LayerTransform t = it.value();
+                t.scalePct = qBound(0.1f, float(it.value().scalePct * f), 100000.0f);
+                const QPointF c = P + (centreFrame(it.value()) - P) * f;
+                t.xPct = m_frame.width()  > 0 ? float((c.x() - m_frame.width()  * 0.5) / m_frame.width())  : 0.0f;
+                t.yPct = m_frame.height() > 0 ? float((c.y() - m_frame.height() * 0.5) / m_frame.height()) : 0.0f;
+                out.insert(it.key(), t);
+            }
+        } else if (m_groupMode == TfDrag::Rotate) {
+            const double a   = std::atan2(framePt.y() - P.y(), framePt.x() - P.x());
+            const double rad = a - m_startAngle;
+            const double cs = std::cos(rad), sn = std::sin(rad);
+            const float dDeg = float(qRadiansToDegrees(rad));
+            for (auto it = m_groupStart.cbegin(); it != m_groupStart.cend(); ++it) {
+                LayerTransform t = it.value();
+                const QPointF rel = centreFrame(it.value()) - P;
+                const QPointF c(P.x() + rel.x() * cs - rel.y() * sn,
+                                P.y() + rel.x() * sn + rel.y() * cs);
+                float r = it.value().rotation + dDeg;
+                r = std::fmod(r, 360.0f);
+                if (r > 180.0f)  r -= 360.0f;
+                if (r < -180.0f) r += 360.0f;
+                t.rotation = r;
+                t.xPct = m_frame.width()  > 0 ? float((c.x() - m_frame.width()  * 0.5) / m_frame.width())  : 0.0f;
+                t.yPct = m_frame.height() > 0 ? float((c.y() - m_frame.height() * 0.5) / m_frame.height()) : 0.0f;
+                out.insert(it.key(), t);
+            }
+        }
+        update();
+        emit groupTransformChanged(out);
+        event->accept();
+        return;
+    }
+
     if (m_tfDrag != TfDrag::None) {
         const QPointF framePt = widgetToFrame(event->position());
         const QPointF c = layerCentreFrame();
@@ -437,6 +563,15 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
 
 void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (m_groupDrag && event->button() == Qt::LeftButton) {
+        m_groupDrag = false;
+        m_groupMode = TfDrag::None;
+        setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        emit transformEditFinished();
+        event->accept();
+        return;
+    }
+
     if (m_tfDrag != TfDrag::None && event->button() == Qt::LeftButton) {
         m_tfDrag = TfDrag::None;
         setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
@@ -509,6 +644,30 @@ void PreviewWidget::paintHandles(QPainter& p)
     p.drawEllipse(rot, 4.5, 4.5);
 }
 
+void PreviewWidget::paintGroupHandles(QPainter& p)
+{
+    const QRectF gw = groupRectWidget();
+    if (gw.isNull()) return;
+    const QPointF topMid = (gw.topLeft() + gw.topRight()) * 0.5;
+    const QPointF rot    = topMid + QPointF(0, -kRotArm);
+
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor("#F0F0F0"));
+    pen.setWidthF(1.2);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(gw);
+    p.drawLine(topMid, rot);
+
+    p.setBrush(QColor("#F0F0F0"));
+    const double h = 4.0;
+    const QPointF corners[4] = { gw.topLeft(), gw.topRight(),
+                                 gw.bottomRight(), gw.bottomLeft() };
+    for (const QPointF& c : corners)
+        p.drawRect(QRectF(c.x() - h, c.y() - h, 2 * h, 2 * h));
+    p.drawEllipse(rot, 4.5, 4.5);
+}
+
 void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter p(this);
@@ -547,6 +706,7 @@ void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
                 p.drawPolygon(quadWidget(cl.tf, cl.native));
             }
             if (single) paintHandles(p);
+            else if (groupHandlesVisible()) paintGroupHandles(p);
         }
 
         // Rubber-band box: dashed = crossing (drag left), solid = window (right).

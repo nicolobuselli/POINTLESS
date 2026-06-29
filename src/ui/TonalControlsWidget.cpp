@@ -395,7 +395,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
     // gutter; every other control stops kGutterComp earlier (the 70px box
     // gutter), so all box right-edges line up exactly.
     const int kFavW       = 24;           // match iconBtn (toggles) width
-    const int kGutterComp = Ui::px(46);   // 70 − 24
+    const int kGutterComp = Ui::px(56);   // 70 − 14 (Fill body right margin)
 
     // ── Palette selector + colour count + favourite(save) ───────
     m_paletteSection = new QWidget;
@@ -596,7 +596,7 @@ void TonalControlsWidget::rebuildRows()
     // With the header + favourite hidden, the combo spans the row. Drop the
     // leading gap and widen the trailing one by the (now absent) favourite width
     // so the combo's right edge still lands on the 70px gutter.
-    const int kFavW = 24, kGutterComp = Ui::px(46);
+    const int kFavW = 24, kGutterComp = Ui::px(56);   // 70 − 14 (Fill body margin)
     if (imageColors) {
         m_modeCombo->setMinimumWidth(Ui::px(150));
         m_modeCombo->setMaximumWidth(QWIDGETSIZE_MAX);

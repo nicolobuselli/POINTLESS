@@ -7,6 +7,7 @@
 #include <QPolygonF>
 #include <QRect>
 #include <QSet>
+#include <QHash>
 #include <QVector>
 #include "../core/Params.h"
 
@@ -50,6 +51,7 @@ signals:
     void filesDropped(const QStringList& paths);
     void mediaDroppedAsLayer(int mediaId);   // a library thumbnail dropped on the canvas
     void transformChanged(const LayerTransform& t);
+    void groupTransformChanged(const QHash<int, LayerTransform>& byId);  // multi-select gizmo
     void transformEditFinished();   // a move/scale/rotate drag ended → do a full render
     void selectionChanged(const QSet<int>& ids, int activeId);   // canvas click/box select
     void zoomChanged();   // user zoomed; UI may re-render at the new resolution
@@ -102,6 +104,13 @@ private:
     QPoint               m_boxStart;
     QPoint               m_boxCur;
 
+    // ── Group gizmo for a multi-layer selection (>= 2 layers) ──────
+    bool                       m_groupDrag = false;
+    TfDrag                     m_groupMode = TfDrag::None;
+    QHash<int, LayerTransform> m_groupStart;     // per-layer transform at drag start
+    QPointF                    m_groupPivot;     // bbox centre (frame space), fixed for the drag
+    QPointF                    m_groupGrabFrame; // Move: grab point in frame space
+
     double  imageScale() const;        // frame px → widget px factor (0 if none)
     QPointF imageOrigin() const;       // top-left of m_scaled in widget coords
     QPointF frameToWidget(QPointF f) const;
@@ -114,4 +123,11 @@ private:
     int       hitTest(QPointF widgetPos) const;   // top-most layer id under point, -1
     const CanvasLayer* layerById(int id) const;
     void    paintHandles(QPainter& p);
+
+    // Group gizmo helpers (multi-selection).
+    bool      groupHandlesVisible() const;        // >= 2 selected, editable
+    QRectF    groupBBoxFrame() const;             // AABB of selected layers, frame space
+    QRectF    groupRectWidget() const;            // same box mapped to widget space
+    QPointF   centreFrame(const LayerTransform& tf) const;  // layer centre in frame space
+    void      paintGroupHandles(QPainter& p);
 };

@@ -163,6 +163,30 @@ QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& p
 
 // Place a layer's rendered image onto a frame-sized transparent canvas using
 // its transform (centre offset, scale, rotation). 100% scale = native pixels.
+// When a layer is scaled UP into the frame, its tone symbols would otherwise be
+// rasterized at the (small) source resolution and then bitmap-upscaled, looking
+// soft — which reads as "low quality source". Render such layers at their
+// on-frame resolution instead: enlarge the source and the pixel-pitch params by
+// the same factor, then drop the placement scale to match. Identical look, crisp
+// symbols. (Mirror of scaledForPreview, which scales the same params down.)
+static void prerenderAtFrameRes(QImage& src, Layer& layer)
+{
+    if (layer.kind == LayerKind::Original || src.isNull()) return;
+    double rs = double(layer.transform.scalePct) / 100.0;
+    if (rs <= 1.01) return;                       // not enlarged → nothing to gain
+    const int maxDim = qMax(src.width(), src.height());
+    if (maxDim * rs > 6000.0) rs = 6000.0 / maxDim;   // cap working resolution
+    if (rs <= 1.01) return;
+
+    src = src.scaled(qMax(1, qRound(src.width()  * rs)),
+                     qMax(1, qRound(src.height() * rs)),
+                     Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    layer.halftone.grid.spacing = qMax(2.0f, layer.halftone.grid.spacing * float(rs));
+    layer.ascii.cellSize        = qMax(3,    int(layer.ascii.cellSize    * rs));
+    layer.dither.pixelSize      = qMax(1,    qRound(layer.dither.pixelSize * rs));
+    layer.transform.scalePct    = float(layer.transform.scalePct / rs);
+}
+
 static QImage placeOnFrame(const QImage& layerImg, const LayerTransform& tf, QSize frame)
 {
     QImage placed(frame, QImage::Format_ARGB32_Premultiplied);
@@ -213,10 +237,12 @@ QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& p
     // Layer stack is stored top→bottom (UI order); composite bottom→top.
     for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
         if (!it->visible) continue;
-        const QImage src = layerSrc.contains(it->id) ? layerSrc.value(it->id) : source;
+        QImage src = layerSrc.contains(it->id) ? layerSrc.value(it->id) : source;
         if (src.isNull()) continue;
-        const QImage layerImg = renderLayer(src, *it);
-        const QImage placed   = placeOnFrame(layerImg, it->transform, outSize);
+        Layer layer = *it;
+        prerenderAtFrameRes(src, layer);          // crisp symbols when scaled up
+        const QImage layerImg = renderLayer(src, layer);
+        const QImage placed   = placeOnFrame(layerImg, layer.transform, outSize);
         BlendCompositor::compositeOver(canvas, placed, it->blend);
     }
 

@@ -52,10 +52,14 @@ private slots:
     void onModeSelected(RenderMode m);
     void onLayerVisibilityToggled(int layerId, bool visible);
     void onLayerSelected(int layerId);
+    void onLayerRangeRequested(int layerId);
+    void onLayerToggleRequested(int layerId);
     void onLayerRenamed(int layerId, const QString& name);
     void onLayerDeleteRequested(int layerId);
+    void onLayerRemoveEditsRequested(int layerId);
     void onLayerBlendChanged(int layerId, BlendMode mode);
     void onLayerTransformChanged(const LayerTransform& t);
+    void onGroupTransformChanged(const QHash<int, LayerTransform>& byId);
     void onCanvasSelectionChanged(const QSet<int>& ids, int activeId);
     void onAddLayerRequested();
     void onLayerReordered(int layerId, int insertIndex);
@@ -155,6 +159,7 @@ private:
     QVector<SessionImage> m_images;
     int                   m_current = -1;
     QSet<int>             m_selection;   // canvas multi-selection (runtime, not undone)
+    int                   m_selAnchor = -1;   // anchor layer for shift-range selection
 
     QImage m_lastRender;
     QImage m_lastPreviewFrame;
