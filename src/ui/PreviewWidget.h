@@ -36,6 +36,12 @@ public:
     // zoomed in, so the vector symbols stay crisp instead of upscaling a raster.
     double zoomFactor() const { return m_zoomFactor; }
 
+    // True while an active move drag is magnet-snapped to a frame edge/centre:
+    // the position is momentarily locked in place, so MainWindow can afford a
+    // full-quality render right away instead of the usual downscaled drag
+    // preview (which would otherwise visibly sharpen a beat after release).
+    bool isSnapped() const { return m_snapped; }
+
     // Active layer placement for the on-canvas transform handles. layerNative is
     // the layer's pixel size at 100% scale; frame is the composited canvas size.
     void setActiveTransform(const LayerTransform& tf, QSize layerNative,
@@ -103,6 +109,7 @@ private:
     bool                 m_boxAdditive  = false;   // shift held → add to selection
     QPoint               m_boxStart;
     QPoint               m_boxCur;
+    bool                 m_snapped = false;   // current move drag is edge/centre-locked
 
     // ── Group gizmo for a multi-layer selection (>= 2 layers) ──────
     bool                       m_groupDrag = false;
@@ -130,4 +137,10 @@ private:
     QRectF    groupRectWidget() const;            // same box mapped to widget space
     QPointF   centreFrame(const LayerTransform& tf) const;  // layer centre in frame space
     void      paintGroupHandles(QPainter& p);
+
+    // Magnetic snap to the frame's edges/centre while moving (single layer or
+    // group): nudges the drag delta so a bounding box within a screen-constant
+    // threshold locks onto the nearest frame edge or midline.
+    QPointF   snapDeltaForBBox(const QRectF& bboxFrame) const;
+    QRectF    layerBBoxAt(const QPointF& centreFrame, const LayerTransform& tf, QSize native) const;
 };

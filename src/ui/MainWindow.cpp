@@ -1193,8 +1193,13 @@ void MainWindow::onLayerTransformChanged(const LayerTransform& t)
     // During a live canvas drag, only the cheap interactive pass runs (the full
     // pass is deferred to drag end) — re-rendering the whole document, and the
     // layer thumbnails, on every mouse move is what made many-layer drags chaotic.
-    scheduleRender(/*previewOnly=*/m_transformDragging);
-    if (!m_transformDragging) m_previewTimer.start();   // thumbs catch up after edits
+    // Exception: while magnet-snapped to a frame edge/centre the position is
+    // momentarily locked (won't change again until it un-snaps), so a full-
+    // quality render is worth it — otherwise the snap settles into a blurry
+    // drag preview that visibly sharpens a beat after release.
+    const bool preview = m_transformDragging && !m_preview->isSnapped();
+    scheduleRender(preview);
+    if (!preview) m_previewTimer.start();   // thumbs catch up after edits
     m_undoTimer.start();
 }
 
@@ -1215,8 +1220,9 @@ void MainWindow::onGroupTransformChanged(const QHash<int, LayerTransform>& byId)
     m_playCacheValid = false;
     if (const Layer* l = activeLayer()) m_left->setTransform(l->transform);
     pushPreviewTransform();
-    scheduleRender(/*previewOnly=*/m_transformDragging);
-    if (!m_transformDragging) m_previewTimer.start();
+    const bool preview = m_transformDragging && !m_preview->isSnapped();
+    scheduleRender(preview);
+    if (!preview) m_previewTimer.start();
     m_undoTimer.start();
 }
 
@@ -1289,7 +1295,11 @@ void MainWindow::onCanvasSelectionChanged(const QSet<int>& ids, int activeId)
 
     applyParams(st);      // refresh panels + pushPreviewTransform (pushes selection)
     syncLayersPanel();
-    scheduleRender();
+    // No scheduleRender(): clicking the canvas only changes which layer is
+    // active/selected (a UI concept — activeLayerId isn't read by the render
+    // pipeline), never a layer's visibility or content, so the composited
+    // image never actually changes here. Re-rendering anyway just flashed the
+    // status caption on every click for no visual difference.
 }
 
 void MainWindow::onAddLayerRequested()
@@ -1644,6 +1654,10 @@ void MainWindow::undo()
     syncLayersPanel();
     syncTimeline();
     setPlayhead(img.anim.playhead);
+    // applyParams' setters (setTransform, setAdjustments, …) are deliberately
+    // silent (m_updating) to avoid feedback loops, so they never schedule a
+    // render themselves — undo/redo must trigger one explicitly.
+    scheduleRender();
 }
 
 void MainWindow::redo()
@@ -1665,6 +1679,7 @@ void MainWindow::redo()
     syncLayersPanel();
     syncTimeline();
     setPlayhead(img.anim.playhead);
+    scheduleRender();   // see undo(): applyParams' setters don't self-trigger one
 }
 
 void MainWindow::copyToClipboard()

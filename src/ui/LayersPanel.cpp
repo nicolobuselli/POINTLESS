@@ -1094,6 +1094,12 @@ void LayersPanel::updateRowsInPlace()
         row->setThumb(thumbFor(layer));
         row->setLayerVisible(layer.visible);
         row->setSelected(layer.id == m_activeId || m_selSet.contains(layer.id));
+        // Mode switches don't change treeSignature() (same layer ids/structure),
+        // so this in-place path runs on every mode change too — must refresh
+        // "has edits" here, or the context menu keeps whatever kind was current
+        // the last time buildTree() ran (e.g. still offers "Remove edits" after
+        // reverting to Original).
+        row->setHasEdits(layer.kind != LayerKind::Original);
     };
     if (m_parents.empty()) {
         for (const Layer& l : m_layers) updateChild(l);

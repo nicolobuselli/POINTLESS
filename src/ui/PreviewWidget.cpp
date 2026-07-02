@@ -211,6 +211,43 @@ QPointF PreviewWidget::centreFrame(const LayerTransform& tf) const
                    m_frame.height() * 0.5 + double(tf.yPct) * m_frame.height());
 }
 
+QRectF PreviewWidget::layerBBoxAt(const QPointF& centre, const LayerTransform& tf, QSize native) const
+{
+    LayerTransform t = tf;
+    t.xPct = m_frame.width()  > 0 ? float((centre.x() - m_frame.width()  * 0.5) / m_frame.width())  : 0.0f;
+    t.yPct = m_frame.height() > 0 ? float((centre.y() - m_frame.height() * 0.5) / m_frame.height()) : 0.0f;
+    return quadFrame(t, native).boundingRect();
+}
+
+// Nudge (dx,dy) that would snap bboxFrame's edges/midlines onto the frame's,
+// when within a screen-constant threshold; zero on each axis with no match.
+QPointF PreviewWidget::snapDeltaForBBox(const QRectF& bbox) const
+{
+    const double k = imageScale();
+    if (k <= 0.0 || m_frame.isEmpty()) return {};
+    const double thr = 8.0 / k;   // ~8 widget px, independent of zoom
+
+    double bestDx = 0.0, bestDxDist = thr;
+    const double dxCandidates[3] = {
+        0.0                     - bbox.left(),
+        double(m_frame.width()) - bbox.right(),
+        m_frame.width() * 0.5   - (bbox.left() + bbox.right()) * 0.5,
+    };
+    for (double d : dxCandidates)
+        if (std::abs(d) < bestDxDist) { bestDxDist = std::abs(d); bestDx = d; }
+
+    double bestDy = 0.0, bestDyDist = thr;
+    const double dyCandidates[3] = {
+        0.0                      - bbox.top(),
+        double(m_frame.height()) - bbox.bottom(),
+        m_frame.height() * 0.5   - (bbox.top() + bbox.bottom()) * 0.5,
+    };
+    for (double d : dyCandidates)
+        if (std::abs(d) < bestDyDist) { bestDyDist = std::abs(d); bestDy = d; }
+
+    return QPointF(bestDx, bestDy);
+}
+
 QRectF PreviewWidget::groupBBoxFrame() const
 {
     QRectF box;
@@ -300,6 +337,7 @@ void PreviewWidget::wheelEvent(QWheelEvent* event)
 
 void PreviewWidget::mousePressEvent(QMouseEvent* event)
 {
+    m_snapped = false;   // cleared here; Move drags re-derive it every move
     const bool leftPan = m_panMode && event->button() == Qt::LeftButton;
     const bool middlePan = event->button() == Qt::MiddleButton;
     if (!m_scaled.isNull() && (leftPan || middlePan)) {
@@ -464,7 +502,27 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
         QHash<int, LayerTransform> out;
 
         if (m_groupMode == TfDrag::Move) {
-            const QPointF d = framePt - m_groupGrabFrame;
+            QPointF d = framePt - m_groupGrabFrame;
+            if (event->modifiers() & Qt::ShiftModifier) {
+                if (std::abs(d.x()) >= std::abs(d.y())) d.setY(0.0);
+                else                                     d.setX(0.0);
+            }
+
+            // Magnetic snap on the group's combined bounding box.
+            {
+                QRectF box; bool first = true;
+                for (auto it = m_groupStart.cbegin(); it != m_groupStart.cend(); ++it) {
+                    const CanvasLayer* cl = layerById(it.key());
+                    if (!cl) continue;
+                    const QRectF b = layerBBoxAt(centreFrame(it.value()) + d, it.value(), cl->native);
+                    box = first ? b : box.united(b);
+                    first = false;
+                }
+                const QPointF snap = first ? QPointF() : snapDeltaForBBox(box);
+                m_snapped = (snap.x() != 0.0 || snap.y() != 0.0);
+                d += snap;
+            }
+
             for (auto it = m_groupStart.cbegin(); it != m_groupStart.cend(); ++it) {
                 LayerTransform t = it.value();
                 const QPointF c = centreFrame(t) + d;
@@ -513,7 +571,20 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
         const QPointF c = layerCentreFrame();
         switch (m_tfDrag) {
             case TfDrag::Move: {
-                const QPointF nc = framePt + m_grabOffset;
+                QPointF nc = framePt + m_grabOffset;
+                if (event->modifiers() & Qt::ShiftModifier) {
+                    // Constrain to whichever axis best matches the total drag
+                    // direction from where the gesture started (not the
+                    // instantaneous mouse delta), so the axis doesn't flicker.
+                    const QPointF startC = centreFrame(m_tfStart);
+                    QPointF d = nc - startC;
+                    if (std::abs(d.x()) >= std::abs(d.y())) d.setY(0.0);
+                    else                                     d.setX(0.0);
+                    nc = startC + d;
+                }
+                const QPointF snap = snapDeltaForBBox(layerBBoxAt(nc, m_tf, m_layerNative));
+                m_snapped = (snap.x() != 0.0 || snap.y() != 0.0);
+                nc += snap;
                 m_tf.xPct = m_frame.width()  > 0 ? float((nc.x() - m_frame.width()  * 0.5) / m_frame.width())  : 0.0f;
                 m_tf.yPct = m_frame.height() > 0 ? float((nc.y() - m_frame.height() * 0.5) / m_frame.height()) : 0.0f;
                 break;
@@ -563,6 +634,7 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
 
 void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
 {
+    m_snapped = false;
     if (m_groupDrag && event->button() == Qt::LeftButton) {
         m_groupDrag = false;
         m_groupMode = TfDrag::None;

@@ -5,6 +5,7 @@
 #include <QPainter>
 #include <QTimer>
 #include <QHash>
+#include <QMutex>
 #include <QFutureWatcher>
 #include "../core/Params.h"
 
@@ -98,6 +99,27 @@ private slots:
 
 private:
     static SessionParams scaledForPreview(const SessionParams& params, float scale);
+
+    // Caches renderLayer()'s output per layer id: position/rotation/flip don't
+    // affect that pixel content (only placement does), so a move/rotate-only
+    // drag can reuse the last halftone/dither/ascii render and just recomposite
+    // — the same instance cache serves both the fast and full passes, since
+    // their entries naturally coexist (different source resolutions → different
+    // cache keys for the same layer id).
+    struct LayerCacheEntry {
+        Layer       key;               // origLayer with xPct/yPct/rotation/flip zeroed
+        QSize       srcSize;
+        const void* srcBits = nullptr; // identity check only, never dereferenced
+        QImage      rendered;
+    };
+    static QImage renderDocumentImpl(const QImage& source, const SessionParams& params,
+                                     const QHash<int, QImage>& layerSrc,
+                                     QHash<int, LayerCacheEntry>* cache, QMutex* cacheMutex);
+    QImage renderDocumentInteractive(const QImage& source, const SessionParams& params,
+                                     const QHash<int, QImage>& layerSrc);
+
+    QHash<int, LayerCacheEntry> m_layerCache;
+    QMutex                      m_layerCacheMutex;
 
     QTimer            m_fullTimer;
     QImage            m_sourceImage;

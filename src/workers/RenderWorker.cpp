@@ -176,14 +176,28 @@ QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& p
 // on-frame resolution instead: enlarge the source and the pixel-pitch params by
 // the same factor, then drop the placement scale to match. Identical look, crisp
 // symbols. (Mirror of scaledForPreview, which scales the same params down.)
+// The scale-only half of prerenderAtFrameRes's math: how much placement scale
+// remains after the source is enlarged to frame resolution. No pixel work, so
+// it's cheap enough to recompute every frame for cache-hit placement (the
+// enlarge factor `rs` depends only on scalePct + source size, not on kind-
+// specific settings, so it's stable across the symbol-pitch mutations below).
+static float effectivePlacementScalePct(LayerKind kind, float scalePct, QSize srcSize)
+{
+    if (kind == LayerKind::Original || srcSize.isEmpty()) return scalePct;
+    double rs = double(scalePct) / 100.0;
+    if (rs <= 1.01) return scalePct;
+    const int maxDim = qMax(srcSize.width(), srcSize.height());
+    if (maxDim * rs > 6000.0) rs = 6000.0 / maxDim;
+    if (rs <= 1.01) return scalePct;
+    return float(scalePct / rs);
+}
+
 static void prerenderAtFrameRes(QImage& src, Layer& layer)
 {
     if (layer.kind == LayerKind::Original || src.isNull()) return;
-    double rs = double(layer.transform.scalePct) / 100.0;
-    if (rs <= 1.01) return;                       // not enlarged → nothing to gain
-    const int maxDim = qMax(src.width(), src.height());
-    if (maxDim * rs > 6000.0) rs = 6000.0 / maxDim;   // cap working resolution
-    if (rs <= 1.01) return;
+    const float newScale = effectivePlacementScalePct(layer.kind, layer.transform.scalePct, src.size());
+    if (newScale >= layer.transform.scalePct) return;   // not enlarged → nothing to gain
+    const double rs = double(layer.transform.scalePct) / double(newScale);
 
     src = src.scaled(qMax(1, qRound(src.width()  * rs)),
                      qMax(1, qRound(src.height() * rs)),
@@ -191,7 +205,7 @@ static void prerenderAtFrameRes(QImage& src, Layer& layer)
     layer.halftone.grid.spacing = qMax(2.0f, layer.halftone.grid.spacing * float(rs));
     layer.ascii.cellSize        = qMax(3,    int(layer.ascii.cellSize    * rs));
     layer.dither.pixelSize      = qMax(1,    qRound(layer.dither.pixelSize * rs));
-    layer.transform.scalePct    = float(layer.transform.scalePct / rs);
+    layer.transform.scalePct    = newScale;
 }
 
 // Symbol sizes (halftone spacing, ascii cell, dither pixel) are authored in
@@ -239,6 +253,20 @@ static QImage placeOnFrame(const QImage& layerImg, const LayerTransform& tf, QSi
 QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& params,
                                     const QHash<int, QImage>& layerSrc)
 {
+    return renderDocumentImpl(source, params, layerSrc, nullptr, nullptr);
+}
+
+QImage RenderWorker::renderDocumentInteractive(const QImage& source, const SessionParams& params,
+                                               const QHash<int, QImage>& layerSrc)
+{
+    return renderDocumentImpl(source, params, layerSrc, &m_layerCache, &m_layerCacheMutex);
+}
+
+QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParams& params,
+                                        const QHash<int, QImage>& layerSrc,
+                                        QHash<int, RenderWorker::LayerCacheEntry>* cache,
+                                        QMutex* cacheMutex)
+{
     // Canvas size = the frame. Fallback to the base/first-media size for
     // documents predating the frame (frameW/H == 0).
     QSize outSize = (params.frameW > 0 && params.frameH > 0)
@@ -261,7 +289,7 @@ QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& p
     // Layer stack is stored top→bottom (UI order); composite bottom→top.
     // Each layer renders independently, so render them all concurrently on
     // the thread pool, then composite sequentially in stack order.
-    struct Job { QImage src; Layer layer; QImage placed; };
+    struct Job { QImage origSrc; Layer origLayer; QImage placed; };
     std::vector<Job> jobs;
     for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
         if (!it->visible) continue;
@@ -270,14 +298,50 @@ QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& p
         jobs.push_back({src, *it, {}});
     }
 
-    QtConcurrent::blockingMap(jobs, [outSize](Job& j) {
-        compensateSymbolScale(j.layer);           // symbol sizes are frame px
-        prerenderAtFrameRes(j.src, j.layer);      // crisp symbols when scaled up
-        j.placed = placeOnFrame(renderLayer(j.src, j.layer), j.layer.transform, outSize);
+    QtConcurrent::blockingMap(jobs, [outSize, cache, cacheMutex](Job& j) {
+        // Cache key = everything that affects renderLayer's pixel output:
+        // content settings + scale (via compensate/prerender), but NOT
+        // position/rotation/flip, which only matter to placeOnFrame below.
+        Layer contentKey = j.origLayer;
+        contentKey.transform.xPct = contentKey.transform.yPct = contentKey.transform.rotation = 0.0f;
+        contentKey.transform.flipH = contentKey.transform.flipV = false;
+        const void* srcBits = static_cast<const void*>(j.origSrc.constBits());
+
+        QImage rendered;
+        bool hit = false;
+        if (cache) {
+            QMutexLocker lock(cacheMutex);
+            auto it = cache->find(j.origLayer.id);
+            if (it != cache->end() && it->key == contentKey
+                && it->srcSize == j.origSrc.size() && it->srcBits == srcBits) {
+                rendered = it->rendered;
+                hit = true;
+            }
+        }
+        if (!hit) {
+            QImage wsrc = j.origSrc;
+            Layer  wlayer = j.origLayer;
+            compensateSymbolScale(wlayer);        // symbol sizes are frame px
+            prerenderAtFrameRes(wsrc, wlayer);    // crisp symbols when scaled up
+            rendered = renderLayer(wsrc, wlayer);
+            if (cache) {
+                QMutexLocker lock(cacheMutex);
+                (*cache)[j.origLayer.id] = { contentKey, j.origSrc.size(), srcBits, rendered };
+            }
+        }
+
+        // Placement always uses the LIVE transform (position/rotation/flip can
+        // change every frame during a drag); only scalePct needs the same
+        // frame-resolution adjustment prerenderAtFrameRes would have applied —
+        // cheap to recompute, so a cache hit skips zero placement accuracy.
+        LayerTransform placementTf = j.origLayer.transform;
+        placementTf.scalePct = effectivePlacementScalePct(
+            j.origLayer.kind, j.origLayer.transform.scalePct, j.origSrc.size());
+        j.placed = placeOnFrame(rendered, placementTf, outSize);
     });
 
     for (const Job& j : jobs)
-        BlendCompositor::compositeOver(canvas, j.placed, j.layer.blend);
+        BlendCompositor::compositeOver(canvas, j.placed, j.origLayer.blend);
 
     return canvas;
 }
@@ -586,8 +650,8 @@ void RenderWorker::launchFast()
 
     emit renderStarted(true);
 
-    m_fastWatcher.setFuture(QtConcurrent::run([src, p, ls]() {
-        return renderDocument(src, p, ls);
+    m_fastWatcher.setFuture(QtConcurrent::run([this, src, p, ls]() {
+        return renderDocumentInteractive(src, p, ls);
     }));
 }
 
@@ -615,8 +679,8 @@ void RenderWorker::launchFull()
 
     emit renderStarted(false);
 
-    m_fullWatcher.setFuture(QtConcurrent::run([src, p, ls]() {
-        return renderDocument(src, p, ls);
+    m_fullWatcher.setFuture(QtConcurrent::run([this, src, p, ls]() {
+        return renderDocumentInteractive(src, p, ls);
     }));
 }
 
