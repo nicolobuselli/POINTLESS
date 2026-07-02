@@ -692,7 +692,7 @@ Layer MainWindow::makeChildLayer(SessionParams& st, int mediaId, LayerKind kind,
     l.id      = st.nextLayerId++;
     l.kind    = kind;
     l.mediaId = mediaId;
-    l.name    = uniqueLayerName(st, kind);
+    l.name    = uniqueLayerName(st, kind, mediaId);
     l.visible = true;
     l.pinned  = true;          // user-created children persist across mode switches
     if (native.isValid() && native.width() > 0 && native.height() > 0)
@@ -992,23 +992,28 @@ void MainWindow::selectLayerInternal(int layerId, bool makeVisible)
     m_undoTimer.start();
 }
 
-QString MainWindow::uniqueLayerName(const SessionParams& p, LayerKind kind) const
+// Auto layer names are "<source>.<mode>" (e.g. "example.ascii"): source = the
+// parent group's name without extension, mode = the lowercase kind. When the
+// name is already taken, 1, 2, 3… is appended.
+QString MainWindow::uniqueLayerName(const SessionParams& p, LayerKind kind, int mediaId) const
 {
-    const QString base = layerKindName(kind);
-    int count = 0;
-    for (const Layer& l : p.layers)
-        if (l.kind == kind) ++count;
-    if (count == 0) return base;
+    QString src;
+    const int pi = findParentByMedia(p.parents, mediaId);
+    if (pi >= 0) src = QFileInfo(p.parents[pi].name).completeBaseName();
+    if (src.isEmpty()) src = QStringLiteral("layer");
+    const QString base = src + "." + layerKindName(kind).toLower();
 
-    int n = count + 1;
     auto exists = [&p](const QString& name) {
         for (const Layer& l : p.layers)
             if (l.name == name) return true;
         return false;
     };
-    QString candidate = base + " " + QString::number(n);
+    if (!exists(base)) return base;
+
+    int n = 1;
+    QString candidate = base + QString::number(n);
     while (exists(candidate))
-        candidate = base + " " + QString::number(++n);
+        candidate = base + QString::number(++n);
     return candidate;
 }
 
@@ -1025,9 +1030,8 @@ void MainWindow::onModeSelected(RenderMode m)
     if (!act) return;
     if (act->kind == kind) { applyParams(st); return; }
 
-    const bool wasAutoName = (act->name == layerKindName(act->kind));
     act->kind = kind;
-    if (wasAutoName) act->name = uniqueLayerName(st, kind);
+    act->name = uniqueLayerName(st, kind, act->mediaId);   // name follows the mode
 
     applyParams(st);
     syncLayersPanel();
@@ -1155,9 +1159,8 @@ void MainWindow::onLayerRemoveEditsRequested(int layerId)
     if (idx < 0 || st.layers[idx].kind == LayerKind::Original) return;
 
     Layer& l = st.layers[idx];
-    const bool wasAutoName = (l.name == layerKindName(l.kind));
     l.kind = LayerKind::Original;     // revert to raw; per-kind settings stay dormant
-    if (wasAutoName) l.name = uniqueLayerName(st, LayerKind::Original);
+    l.name = uniqueLayerName(st, LayerKind::Original, l.mediaId);
 
     if (st.activeLayerId == layerId) applyParams(st);
     syncLayersPanel();
@@ -1300,7 +1303,7 @@ void MainWindow::onAddLayerRequested()
     Layer nl = *act;                  // duplicate the active child (settings + parent)
     nl.id      = st.nextLayerId++;
     nl.kind    = LayerKind::Original; // new children start mode-less; user picks a mode
-    nl.name    = uniqueLayerName(st, nl.kind);
+    nl.name    = uniqueLayerName(st, nl.kind, nl.mediaId);
     nl.visible = true;
     nl.pinned  = true;
 
@@ -1428,7 +1431,12 @@ void MainWindow::onDuplicateParentRequested(int mediaId)
             c.mediaId = newMid;
             copies.push_back(c);
         }
-    for (const Layer& c : copies) st.layers.push_back(c);
+    for (const Layer& c : copies) {
+        st.layers.push_back(c);
+        // Rebuild the auto name against the new group ("<name> copy"), one at a
+        // time so same-mode siblings pick up 1, 2, 3…
+        st.layers.back().name = uniqueLayerName(st, c.kind, newMid);
+    }
     if (!copies.empty()) st.activeLayerId = copies.front().id;
     commitStructuralChange();
 }

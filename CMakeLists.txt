@@ -21,6 +21,7 @@ set(SOURCES
     # Core (pure logic)
     src/core/Params.h
     src/core/ColorMath.h
+    src/core/Parallel.h
     src/core/AnimParams.cpp
     src/core/AnimParams.h
     src/core/Animation.cpp

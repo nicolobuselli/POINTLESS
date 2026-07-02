@@ -1,5 +1,6 @@
 #include "DitherRenderer.h"
 #include "ColorMath.h"
+#include "Parallel.h"
 #include "DitherVarErrData.h"   // Ostromoukhov coefficient tables (ported from libdither)
 
 #include <QPainter>
@@ -30,6 +31,30 @@ std::vector<ToneEntry> sortedTones(const std::vector<ToneEntry>& tones)
     std::sort(t.begin(), t.end(),
               [](const ToneEntry& a, const ToneEntry& b) { return a.level < b.level; });
     return t;
+}
+
+// Fill float channel buffers in LINEAR light (source composited over white).
+// Shared by the diffusion renderers; rows are independent → parallel.
+void linearBuffers(const QImage& work, std::vector<float>& fr,
+                   std::vector<float>& fg, std::vector<float>& fb)
+{
+    const int w = work.width(), h = work.height();
+    fr.resize(size_t(w) * h);
+    fg.resize(size_t(w) * h);
+    fb.resize(size_t(w) * h);
+    parallelRows(h, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
+            const QRgb* line = reinterpret_cast<const QRgb*>(work.constScanLine(y));
+            for (int x = 0; x < w; ++x) {
+                const QRgb p = line[x];
+                const float a = qAlpha(p) / 255.0f;
+                const size_t i = size_t(y) * w + x;
+                fr[i] = ColorMath::srgbToLinear(qRed(p))   * a + (1.0f - a);
+                fg[i] = ColorMath::srgbToLinear(qGreen(p)) * a + (1.0f - a);
+                fb[i] = ColorMath::srgbToLinear(qBlue(p))  * a + (1.0f - a);
+            }
+        }
+    });
 }
 
 // ============================================================
@@ -580,19 +605,8 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
     if (!imageColors && !paletteMode && nTones == 1)
         inkLumLin = ColorMath::linearLuminance(tones[0].color.rgb());
 
-    // Float channel buffers in LINEAR light (source composited over white).
-    std::vector<float> fr(size_t(w) * h), fg(size_t(w) * h), fb(size_t(w) * h);
-    for (int y = 0; y < h; ++y) {
-        const QRgb* line = reinterpret_cast<const QRgb*>(work.constScanLine(y));
-        for (int x = 0; x < w; ++x) {
-            QRgb p = line[x];
-            float a = qAlpha(p) / 255.0f;
-            size_t i = size_t(y) * w + x;
-            fr[i] = ColorMath::srgbToLinear(qRed(p))   * a + (1.0f - a);
-            fg[i] = ColorMath::srgbToLinear(qGreen(p)) * a + (1.0f - a);
-            fb[i] = ColorMath::srgbToLinear(qBlue(p))  * a + (1.0f - a);
-        }
-    }
+    std::vector<float> fr, fg, fb;
+    linearBuffers(work, fr, fg, fb);
 
     // Serpentine raster scan (horizontal).
     for (int row = 0; row < h; ++row) {
@@ -656,16 +670,8 @@ void DitherRenderer::renderVarErrDiff(const QImage& work, QImage& out,
     if (!imageColors && !paletteMode && nTones == 1)
         inkLumLin = ColorMath::linearLuminance(tones[0].color.rgb());
 
-    std::vector<float> fr(size_t(w) * h), fg(size_t(w) * h), fb(size_t(w) * h);
-    for (int y = 0; y < h; ++y) {
-        const QRgb* line = reinterpret_cast<const QRgb*>(work.constScanLine(y));
-        for (int x = 0; x < w; ++x) {
-            QRgb p = line[x]; float a = qAlpha(p) / 255.0f; size_t i = size_t(y) * w + x;
-            fr[i] = ColorMath::srgbToLinear(qRed(p))   * a + (1.0f - a);
-            fg[i] = ColorMath::srgbToLinear(qGreen(p)) * a + (1.0f - a);
-            fb[i] = ColorMath::srgbToLinear(qBlue(p))  * a + (1.0f - a);
-        }
-    }
+    std::vector<float> fr, fg, fb;
+    linearBuffers(work, fr, fg, fb);
 
     // Ostromoukhov neighbours (forward): (+1,0), (-1,+1), (0,+1); x mirrored on
     // reverse rows. Per-pixel weights come from the tone-indexed coefficient table.
@@ -752,16 +758,8 @@ void DitherRenderer::renderRiemersma(const QImage& work, QImage& out,
     if (!imageColors && !paletteMode && nTones == 1)
         inkLumLin = ColorMath::linearLuminance(tones[0].color.rgb());
 
-    std::vector<float> fr(size_t(w) * h), fg(size_t(w) * h), fb(size_t(w) * h);
-    for (int y = 0; y < h; ++y) {
-        const QRgb* line = reinterpret_cast<const QRgb*>(work.constScanLine(y));
-        for (int x = 0; x < w; ++x) {
-            QRgb p = line[x]; float a = qAlpha(p) / 255.0f; size_t i = size_t(y) * w + x;
-            fr[i] = ColorMath::srgbToLinear(qRed(p))   * a + (1.0f - a);
-            fg[i] = ColorMath::srgbToLinear(qGreen(p)) * a + (1.0f - a);
-            fb[i] = ColorMath::srgbToLinear(qBlue(p))  * a + (1.0f - a);
-        }
-    }
+    std::vector<float> fr, fg, fb;
+    linearBuffers(work, fr, fg, fb);
 
     // Geometric error weights 1..max (oldest..newest); decision adds err/max.
     constexpr int errLen = 16; constexpr double maxW = 16.0;
@@ -854,7 +852,8 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
         };
     }
 
-    for (int y = 0; y < h; ++y) {
+    parallelRows(h, [&](int fromY, int toY) {
+    for (int y = fromY; y < toY; ++y) {
         const QRgb* in  = reinterpret_cast<const QRgb*>(work.constScanLine(y));
         QRgb*       dst = reinterpret_cast<QRgb*>(out.scanLine(y));
 
@@ -912,6 +911,7 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
             }
         }
     }
+    });
 }
 
 // ============================================================
@@ -958,19 +958,8 @@ void DitherRenderer::renderDotDiffusion(const QImage& work, QImage& out,
     if (!imageColors && !paletteMode && nTones == 1)
         inkLumLin = ColorMath::linearLuminance(tones[0].color.rgb());
 
-    // Float channel buffers in LINEAR light (source composited over white).
-    std::vector<float> fr(size_t(w) * h), fg(size_t(w) * h), fb(size_t(w) * h);
-    for (int y = 0; y < h; ++y) {
-        const QRgb* line = reinterpret_cast<const QRgb*>(work.constScanLine(y));
-        for (int x = 0; x < w; ++x) {
-            const QRgb p = line[x];
-            float a = qAlpha(p) / 255.0f;
-            size_t i = size_t(y) * w + x;
-            fr[i] = ColorMath::srgbToLinear(qRed(p))   * a + (1.0f - a);
-            fg[i] = ColorMath::srgbToLinear(qGreen(p)) * a + (1.0f - a);
-            fb[i] = ColorMath::srgbToLinear(qBlue(p))  * a + (1.0f - a);
-        }
-    }
+    std::vector<float> fr, fg, fb;
+    linearBuffers(work, fr, fg, fb);
 
     static const int dx8[8] = { -1, 0, 1, -1, 1, -1, 0, 1 };
     static const int dy8[8] = { -1,-1,-1,  0, 0,  1, 1, 1 };
@@ -1039,7 +1028,8 @@ void DitherRenderer::renderThreshold(const QImage& work, QImage& out,
     const int    inkA     = tones.empty() ? 255 : toneAlpha(tones.front());
     const QRgb   inkPx    = qRgba(inkColor.red(), inkColor.green(), inkColor.blue(), inkA);
 
-    for (int y = 0; y < h; ++y) {
+    parallelRows(h, [&](int fromY, int toY) {
+    for (int y = fromY; y < toY; ++y) {
         const QRgb* in  = reinterpret_cast<const QRgb*>(work.constScanLine(y));
         QRgb*       dst = reinterpret_cast<QRgb*>(out.scanLine(y));
         for (int x = 0; x < w; ++x) {
@@ -1056,4 +1046,5 @@ void DitherRenderer::renderThreshold(const QImage& work, QImage& out,
                 dst[x] = imageColors ? qRgba(255, 255, 255, 255) : qRgba(0, 0, 0, 0);
         }
     }
+    });
 }

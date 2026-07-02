@@ -118,7 +118,7 @@ private:
     QSize layerNativeSize(const Layer& l) const;   // any layer's 100%-scale size
     void  pushPreviewTransform();          // feed active transform + selection to the preview
     void selectLayerInternal(int layerId, bool makeVisible);
-    QString uniqueLayerName(const SessionParams& p, LayerKind kind) const;
+    QString uniqueLayerName(const SessionParams& p, LayerKind kind, int mediaId) const;
     void syncLayersPanel();
     void scheduleRender(bool previewOnly = false, bool qualityOnly = false);
     float zoomQualityScale() const;   // full-pass supersample for the current zoom

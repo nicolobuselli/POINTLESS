@@ -121,7 +121,10 @@ public:
         // but wider than the box so names are readable; kept fully on-screen,
         // flipping above the box if it would overflow the bottom.
         setFixedWidth(Ui::px(330));
-        m_scroll->setMaximumHeight(Ui::px(680));   // taller popup → scroll for more
+        // Size the scroll to its content (QScrollArea's own sizeHint is tiny,
+        // which opened the popup one-row short); cap it, then scroll.
+        const int content = m_scroll->widget()->sizeHint().height() + Ui::px(4);
+        m_scroll->setFixedHeight(qMin(content, Ui::px(680)));
         adjustSize();
         QScreen* scr = anchor->screen() ? anchor->screen() : QGuiApplication::primaryScreen();
         const QRect a = scr->availableGeometry();

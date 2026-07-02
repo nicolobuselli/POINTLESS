@@ -442,6 +442,16 @@ QPushButton#iconBtn {
 QPushButton#iconBtn:hover {
     background-color: #3B3B3B;
 }
+
+/* Parent-row chevron: same chrome as iconBtn but its own size (18×34, wider
+   hit target than the glyph) — no fixed min/max-width, unlike iconBtn. */
+QPushButton#parentChevron {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    border-radius: 4px;
+}
 QPushButton#iconBtn:pressed {
     background-color: #2A2A2A;
 }
@@ -633,11 +643,11 @@ QPushButton#layersToggleBtn:pressed {
     background: transparent;
     color: #B2B2B2;
     font-size: s(18)px;
-    font-weight: 500;
+    font-weight: 400;
 }
 #layerRow[selected="true"] #layerName {
     color: #FFFFFF;
-    font-weight: 500;
+    font-weight: 400;
 }
 
 QPushButton#eyeBtn {

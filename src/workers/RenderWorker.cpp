@@ -81,8 +81,15 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
                 painter.save();
                 painter.scale(qreal(adjusted.width())  / work.width(),
                               qreal(adjusted.height()) / work.height());
+                // DPI is a sampling-resolution control, not a symbol-size one:
+                // spacing is authored in output px, so it scales with the work
+                // raster and the painter scale-back cancels it exactly.
+                HalftoneSettings hw = hs;
+                const float kx = float(work.width()) / adjusted.width();
+                hw.grid.spacing      *= kx;
+                hw.grid.pointSpacing *= kx;
                 HalftoneRenderer renderer;
-                renderer.render(work, painter, hs);
+                renderer.render(work, painter, hw);
                 painter.restore();
             }
             break;
@@ -187,6 +194,23 @@ static void prerenderAtFrameRes(QImage& src, Layer& layer)
     layer.transform.scalePct    = float(layer.transform.scalePct / rs);
 }
 
+// Symbol sizes (halftone spacing, ascii cell, dither pixel) are authored in
+// FRAME pixels: cancel the layer's placement scale so scaling a layer scales
+// the photo, not the symbols. prerenderAtFrameRes then re-applies any upscale
+// to both the raster and these params, so the two compose back exactly.
+static void compensateSymbolScale(Layer& l)
+{
+    if (l.kind == LayerKind::Original) return;
+    const double s = qMax(0.0001, double(l.transform.scalePct) / 100.0);
+    if (qAbs(s - 1.0) < 0.001) return;
+    l.halftone.grid.spacing      = float(l.halftone.grid.spacing / s);
+    l.halftone.grid.pointSpacing = float(l.halftone.grid.pointSpacing / s);
+    // ponytail: int params round here — at extreme scales cell/pixel sizes
+    // drift by up to half a source px; make them float if it ever shows.
+    l.ascii.cellSize   = qMax(1, qRound(l.ascii.cellSize / s));
+    l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize / s));
+}
+
 static QImage placeOnFrame(const QImage& layerImg, const LayerTransform& tf, QSize frame)
 {
     QImage placed(frame, QImage::Format_ARGB32_Premultiplied);
@@ -235,16 +259,25 @@ QImage RenderWorker::renderDocument(const QImage& source, const SessionParams& p
     canvas.fill(bg);
 
     // Layer stack is stored top→bottom (UI order); composite bottom→top.
+    // Each layer renders independently, so render them all concurrently on
+    // the thread pool, then composite sequentially in stack order.
+    struct Job { QImage src; Layer layer; QImage placed; };
+    std::vector<Job> jobs;
     for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
         if (!it->visible) continue;
         QImage src = layerSrc.contains(it->id) ? layerSrc.value(it->id) : source;
         if (src.isNull()) continue;
-        Layer layer = *it;
-        prerenderAtFrameRes(src, layer);          // crisp symbols when scaled up
-        const QImage layerImg = renderLayer(src, layer);
-        const QImage placed   = placeOnFrame(layerImg, layer.transform, outSize);
-        BlendCompositor::compositeOver(canvas, placed, it->blend);
+        jobs.push_back({src, *it, {}});
     }
+
+    QtConcurrent::blockingMap(jobs, [outSize](Job& j) {
+        compensateSymbolScale(j.layer);           // symbol sizes are frame px
+        prerenderAtFrameRes(j.src, j.layer);      // crisp symbols when scaled up
+        j.placed = placeOnFrame(renderLayer(j.src, j.layer), j.layer.transform, outSize);
+    });
+
+    for (const Job& j : jobs)
+        BlendCompositor::compositeOver(canvas, j.placed, j.layer.blend);
 
     return canvas;
 }
@@ -311,7 +344,8 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
 
     // Stored top→bottom; paint bottom→top.
     for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
-        const Layer& layer = *it;
+        Layer layer = *it;
+        compensateSymbolScale(layer);   // symbol sizes are frame px (matches raster)
         if (!layer.visible || !layerFillEnabled(layer)) continue;
         const QImage src = layerSrc.contains(layer.id) ? layerSrc.value(layer.id) : source;
         if (src.isNull()) continue;
@@ -356,7 +390,13 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
                     p.save();
                     p.scale(qreal(forRender.width())  / work.width(),
                             qreal(forRender.height()) / work.height());
-                    r.renderVector(work, p, hs);
+                    // Same DPI compensation as the raster path: spacing is
+                    // output px, DPI only changes sampling resolution.
+                    HalftoneSettings hw = hs;
+                    const float kx = float(work.width()) / forRender.width();
+                    hw.grid.spacing      *= kx;
+                    hw.grid.pointSpacing *= kx;
+                    r.renderVector(work, p, hw);
                     p.restore();
                 }
                 break;
@@ -384,25 +424,25 @@ int RenderWorker::estimateSvgElements(const QImage& source, const SessionParams&
         if (src.isNull()) continue;
         const QImage adjusted = ImageAdjuster::apply(src, layer.adjustments);
         const int w = adjusted.width(), h = adjusted.height();
+        // Symbol pitch is in frame px (compensated), so a scaled-up layer packs
+        // more elements per source pixel: counts grow with the placement scale².
+        // DPI no longer changes the pitch, so it dropped out of the estimate.
+        const double s  = qMax(0.0001, double(layer.transform.scalePct) / 100.0);
+        const double s2 = s * s;
         switch (layer.kind) {
             case LayerKind::Halftone: {
-                // Dots scale with the supersampled area (see renderDocumentToSvg).
-                float scale = qBound(18, layer.halftone.inputDpi, 300) / 72.0f;
-                const int maxDim = qMax(w, h);
-                if (maxDim * scale > 6000.0f) scale = 6000.0f / maxDim;
-                if (maxDim * scale < 16.0f)   scale = 16.0f / maxDim;
                 total += (long long)(HalftoneRenderer::estimateDotCount(adjusted, layer.halftone)
-                                     * double(scale) * double(scale));
+                                     * s2);
                 break;
             }
             case LayerKind::Ascii: {
                 const int cell = qBound(3, layer.ascii.cellSize, 128);
-                total += (long long)(w / cell + 1) * (h / cell + 1);
+                total += (long long)(((long long)(w / cell + 1) * (h / cell + 1)) * s2);
                 break;
             }
             case LayerKind::Dither: {   // worst case = un-merged cells
                 const int ps = qBound(1, layer.dither.pixelSize, 32);
-                total += (long long)(w / ps + 1) * (h / ps + 1);
+                total += (long long)(((long long)(w / ps + 1) * (h / ps + 1)) * s2);
                 break;
             }
             default: break;

@@ -1,4 +1,5 @@
 #include "BlendCompositor.h"
+#include "Parallel.h"
 
 #include <QPainter>
 #include <algorithm>
@@ -133,7 +134,8 @@ void compositeManual(QImage& base, const QImage& layer, BlendMode mode)
     const int h = b.height();
     const bool nonSep = isNonSeparable(mode);
 
-    for (int y = 0; y < h; ++y) {
+    parallelRows(h, [&](int y0, int y1) {
+    for (int y = y0; y < y1; ++y) {
         QRgb*       bl = reinterpret_cast<QRgb*>(b.scanLine(y));
         const QRgb* sl = reinterpret_cast<const QRgb*>(s.constScanLine(y));
 
@@ -179,6 +181,7 @@ void compositeManual(QImage& base, const QImage& layer, BlendMode mode)
                           qBound(0, qRound(ao * 255.0f), 255));
         }
     }
+    });
 
     base = b.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 }

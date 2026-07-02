@@ -1,4 +1,5 @@
 #include "ImageAdjuster.h"
+#include "Parallel.h"
 
 #include <QtMath>
 #include <cstring>
@@ -15,6 +16,21 @@ inline quint32 hash2d(quint32 x, quint32 y)
     h *= 0x45d9f3bu;
     h ^= (h >> 16);
     return h;
+}
+
+// Parallel per-pixel LUT on RGB, alpha preserved (shared by the point ops).
+void applyLut(QImage& img, const uint8_t* lut)
+{
+    const int w = img.width(), h = img.height();
+    parallelRows(h, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
+            QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
+            for (int x = 0; x < w; ++x) {
+                QRgb p = line[x];
+                line[x] = qRgba(lut[qRed(p)], lut[qGreen(p)], lut[qBlue(p)], qAlpha(p));
+            }
+        }
+    });
 }
 
 } // namespace
@@ -99,7 +115,8 @@ void ImageAdjuster::boxBlur(QImage& img, int radius)
     std::vector<quint32> tmp(size_t(w) * size_t(h));
 
     // Horizontal pass: img → tmp
-    for (int y = 0; y < h; ++y) {
+    parallelRows(h, [&](int y0, int y1) {
+    for (int y = y0; y < y1; ++y) {
         const QRgb* line = reinterpret_cast<const QRgb*>(img.constScanLine(y));
         int sr = 0, sg = 0, sb = 0;
         int count = 0;
@@ -120,9 +137,11 @@ void ImageAdjuster::boxBlur(QImage& img, int radius)
             sb += qBlue(pa) - qBlue(ps);
         }
     }
+    });
 
-    // Vertical pass: tmp → img
-    for (int x = 0; x < w; ++x) {
+    // Vertical pass: tmp → img (columns are independent)
+    parallelRows(w, [&](int x0, int x1) {
+    for (int x = x0; x < x1; ++x) {
         int sr = 0, sg = 0, sb = 0;
         int count = 0;
         for (int y = -radius; y <= radius; ++y) {
@@ -142,13 +161,15 @@ void ImageAdjuster::boxBlur(QImage& img, int radius)
             sb += qBlue(pa) - qBlue(ps);
         }
     }
+    });
 }
 
 void ImageAdjuster::blend(QImage& dst, const QImage& other, float t)
 {
     const int w = dst.width(), h = dst.height();
     const int ti = qBound(0, qRound(t * 256.0f), 256);
-    for (int y = 0; y < h; ++y) {
+    parallelRows(h, [&](int y0, int y1) {
+    for (int y = y0; y < y1; ++y) {
         QRgb*       d = reinterpret_cast<QRgb*>(dst.scanLine(y));
         const QRgb* o = reinterpret_cast<const QRgb*>(other.constScanLine(y));
         for (int x = 0; x < w; ++x) {
@@ -158,6 +179,7 @@ void ImageAdjuster::blend(QImage& dst, const QImage& other, float t)
             d[x] = qRgba(r, g, b, qAlpha(d[x]));
         }
     }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -170,18 +192,10 @@ void ImageAdjuster::brightnessContrast(QImage& img, int brightness, int contrast
     const float factor = (259.0f * (c + 255.0f)) / (255.0f * (259.0f - c));
     const float offset = brightness * 1.275f;
 
-    int lut[256];
+    uint8_t lut[256];
     for (int i = 0; i < 256; ++i)
         lut[i] = clamp255(qRound(factor * (i - 128) + 128 + offset));
-
-    const int w = img.width(), h = img.height();
-    for (int y = 0; y < h; ++y) {
-        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
-        for (int x = 0; x < w; ++x) {
-            QRgb p = line[x];
-            line[x] = qRgba(lut[qRed(p)], lut[qGreen(p)], lut[qBlue(p)], qAlpha(p));
-        }
-    }
+    applyLut(img, lut);
 }
 
 void ImageAdjuster::applyGamma(QImage& img, float gamma)
@@ -190,15 +204,7 @@ void ImageAdjuster::applyGamma(QImage& img, float gamma)
     uint8_t lut[256];
     for (int i = 0; i < 256; ++i)
         lut[i] = clamp255(qRound(qPow(i / 255.0, gamma) * 255.0));
-
-    const int w = img.width(), h = img.height();
-    for (int y = 0; y < h; ++y) {
-        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
-        for (int x = 0; x < w; ++x) {
-            QRgb p = line[x];
-            line[x] = qRgba(lut[qRed(p)], lut[qGreen(p)], lut[qBlue(p)], qAlpha(p));
-        }
-    }
+    applyLut(img, lut);
 }
 
 void ImageAdjuster::applyLevels(QImage& img, int blackPoint, float midPoint, int whitePoint)
@@ -215,22 +221,15 @@ void ImageAdjuster::applyLevels(QImage& img, int blackPoint, float midPoint, int
             v = qPow(v, 1.0f / midPoint);
         lut[i] = clamp255(qRound(v * 255.0f));
     }
-
-    const int w = img.width(), h = img.height();
-    for (int y = 0; y < h; ++y) {
-        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
-        for (int x = 0; x < w; ++x) {
-            QRgb p = line[x];
-            line[x] = qRgba(lut[qRed(p)], lut[qGreen(p)], lut[qBlue(p)], qAlpha(p));
-        }
-    }
+    applyLut(img, lut);
 }
 
 void ImageAdjuster::saturate(QImage& img, int saturation)
 {
     const int s = qBound(0, 100 + saturation, 200);   // 0..200, 100 = identity
     const int w = img.width(), h = img.height();
-    for (int y = 0; y < h; ++y) {
+    parallelRows(h, [&](int y0, int y1) {
+    for (int y = y0; y < y1; ++y) {
         QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
         for (int x = 0; x < w; ++x) {
             QRgb p = line[x];
@@ -242,6 +241,7 @@ void ImageAdjuster::saturate(QImage& img, int saturation)
             line[x] = qRgba(r, g, b, qAlpha(p));
         }
     }
+    });
 }
 
 void ImageAdjuster::edgeEnhance(QImage& img, int amount)
@@ -254,7 +254,8 @@ void ImageAdjuster::edgeEnhance(QImage& img, int amount)
 
     // Compute per-pixel Laplacian of luminance: 4*C - L - R - T - B
     std::vector<int> lap(size_t(w) * size_t(h), 0);
-    for (int y = 1; y < h - 1; ++y) {
+    parallelRows(h - 2, [&](int r0, int r1) {
+    for (int y = r0 + 1; y < r1 + 1; ++y) {
         const QRgb* lc = reinterpret_cast<const QRgb*>(img.constScanLine(y));
         const QRgb* lt = reinterpret_cast<const QRgb*>(img.constScanLine(y - 1));
         const QRgb* lb = reinterpret_cast<const QRgb*>(img.constScanLine(y + 1));
@@ -263,11 +264,13 @@ void ImageAdjuster::edgeEnhance(QImage& img, int amount)
             lap[size_t(y) * w + x] = 4 * lum(lc[x]) - lum(lc[x-1]) - lum(lc[x+1])
                                      - lum(lt[x]) - lum(lb[x]);
     }
+    });
 
     // Blend the Laplacian response back; scale so 100% gives a strong but not
     // destructive boost (max response ~4*255=1020, we add at most ~30% of that).
     const float strength = amount / 100.0f * 0.30f;
-    for (int y = 0; y < h; ++y) {
+    parallelRows(h, [&](int y0, int y1) {
+    for (int y = y0; y < y1; ++y) {
         QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
         for (int x = 0; x < w; ++x) {
             int e = qRound(lap[size_t(y) * w + x] * strength);
@@ -278,6 +281,7 @@ void ImageAdjuster::edgeEnhance(QImage& img, int amount)
                             qAlpha(p));
         }
     }
+    });
 }
 
 void ImageAdjuster::unsharpMask(QImage& img, int strength, int radius)
@@ -287,7 +291,8 @@ void ImageAdjuster::unsharpMask(QImage& img, int strength, int radius)
 
     const float amount = strength / 100.0f * 1.5f;
     const int w = img.width(), h = img.height();
-    for (int y = 0; y < h; ++y) {
+    parallelRows(h, [&](int y0, int y1) {
+    for (int y = y0; y < y1; ++y) {
         QRgb*       d = reinterpret_cast<QRgb*>(img.scanLine(y));
         const QRgb* b = reinterpret_cast<const QRgb*>(blurred.constScanLine(y));
         for (int x = 0; x < w; ++x) {
@@ -297,13 +302,15 @@ void ImageAdjuster::unsharpMask(QImage& img, int strength, int radius)
             d[x] = qRgba(r, g, bl, qAlpha(d[x]));
         }
     }
+    });
 }
 
 void ImageAdjuster::addGrain(QImage& img, int amount)
 {
     const float amp = amount * 1.6f;
     const int w = img.width(), h = img.height();
-    for (int y = 0; y < h; ++y) {
+    parallelRows(h, [&](int y0, int y1) {
+    for (int y = y0; y < y1; ++y) {
         QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
         for (int x = 0; x < w; ++x) {
             quint32 hsh = hash2d(quint32(x), quint32(y));
@@ -315,6 +322,7 @@ void ImageAdjuster::addGrain(QImage& img, int amount)
                             qAlpha(p));
         }
     }
+    });
 }
 
 void ImageAdjuster::applyPosterize(QImage& img, int levels)
@@ -327,15 +335,7 @@ void ImageAdjuster::applyPosterize(QImage& img, int levels)
         int step = qRound(float(i) / 255.0f * (levels - 1));
         lut[i] = clamp255(qRound(float(step) / float(levels - 1) * 255.0f));
     }
-
-    const int w = img.width(), h = img.height();
-    for (int y = 0; y < h; ++y) {
-        QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
-        for (int x = 0; x < w; ++x) {
-            QRgb p = line[x];
-            line[x] = qRgba(lut[qRed(p)], lut[qGreen(p)], lut[qBlue(p)], qAlpha(p));
-        }
-    }
+    applyLut(img, lut);
 }
 
 void ImageAdjuster::applyThreshold(QImage& img, int threshold)
@@ -344,7 +344,8 @@ void ImageAdjuster::applyThreshold(QImage& img, int threshold)
     if (threshold <= 0) return;
 
     const int w = img.width(), h = img.height();
-    for (int y = 0; y < h; ++y) {
+    parallelRows(h, [&](int y0, int y1) {
+    for (int y = y0; y < y1; ++y) {
         QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
         for (int x = 0; x < w; ++x) {
             QRgb p = line[x];
@@ -353,4 +354,5 @@ void ImageAdjuster::applyThreshold(QImage& img, int threshold)
             line[x] = qRgba(v, v, v, qAlpha(p));
         }
     }
+    });
 }

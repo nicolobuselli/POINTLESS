@@ -167,7 +167,7 @@ public:
         m_nameEdit->setVisible(false);
         m_nameEdit->setStyleSheet(QString(
             "background:transparent; border:none; padding:0; margin:0; min-height:0;"
-            " color:#FFFFFF; font-size:%1px; font-weight:500;"
+            " color:#FFFFFF; font-size:%1px; font-weight:400;"
             " selection-background-color:#FD5A1F;").arg(Ui::px(18)));
         pl->addWidget(m_nameEdit, 1);
 
@@ -571,11 +571,16 @@ public:
 
         m_box = new QFrame(this);
         m_box->setObjectName("parentRow");
+        // Margins/spacing line the thumb (x=38) and name (x=94) up with the
+        // child rows' (indent 30 + pill margin 8 + thumb 46 + spacing 10).
         auto* bl = new QHBoxLayout(m_box);
-        bl->setContentsMargins(Ui::px(6), Ui::px(4), Ui::px(12), Ui::px(4));
-        bl->setSpacing(Ui::px(6));
+        bl->setContentsMargins(Ui::px(10), Ui::px(4), Ui::px(12), Ui::px(4));
+        bl->setSpacing(Ui::px(10));
 
         m_chevron = new ChevronButton(ChevronButton::Down);
+        // Not "iconBtn": that QSS pins min/max-width to 24px fixed, which beats
+        // setFixedSize and would push the thumb off the child rows' alignment.
+        m_chevron->setObjectName("parentChevron");
         m_chevron->setFixedSize(Ui::px(18), Ui::px(34));
         m_chevron->setCursor(Qt::PointingHandCursor);
         connect(m_chevron, &QPushButton::clicked, this, [this]() {
@@ -586,7 +591,7 @@ public:
         bl->addWidget(m_chevron);
 
         m_thumb = new QLabel;
-        m_thumb->setFixedSize(Ui::px(42), Ui::px(30));
+        m_thumb->setFixedSize(Ui::px(46), Ui::px(32));   // same cell as child rows
         m_thumb->setAttribute(Qt::WA_TransparentForMouseEvents);
         bl->addWidget(m_thumb);
 
@@ -601,7 +606,7 @@ public:
         m_nameEdit->setVisible(false);
         m_nameEdit->setStyleSheet(QString(
             "background:transparent; border:none; padding:0; margin:0; min-height:0;"
-            " color:#E3E3E3; font-size:%1px; font-weight:500;"
+            " color:#E3E3E3; font-size:%1px; font-weight:400;"
             " selection-background-color:#FD5A1F;").arg(Ui::px(18)));
         connect(m_nameEdit, &QLineEdit::editingFinished, this, [this]() { finishRename(); });
         bl->addWidget(m_nameEdit, 1);
@@ -1012,7 +1017,7 @@ QPixmap LayersPanel::thumbFor(const Layer& layer) const
 
 QPixmap LayersPanel::parentThumb(int mediaId) const
 {
-    return roundedThumb(m_mediaImages.value(mediaId), QSize(Ui::px(42), Ui::px(30)),
+    return roundedThumb(m_mediaImages.value(mediaId), QSize(Ui::px(44), Ui::px(30)),
                         Ui::px(5), m_background, m_bgOpacity);
 }
 
