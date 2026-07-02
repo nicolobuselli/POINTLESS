@@ -492,6 +492,48 @@ QComboBox::down-arrow {
     width: s(14)px;
     height: s(8)px;
 }
+/* Popup open → arrow points up. */
+QComboBox::down-arrow:on {
+    image: url(:/icons/arrow_up.svg);
+}
+
+/* ── Algorithm picker (Dither) ───────────────────────────────── */
+/* Closed box mimics a QComboBox; the popup is a grid of boxed items
+   with pill group headers. */
+QPushButton#algoBox {
+    background-color: #3B3B3B;
+    border: 1px solid #5D5D5D;
+    border-radius: s(8)px;
+    color: #E3E3E3;
+    padding: 0 s(12)px;
+    font-size: s(17)px;
+    text-align: left;
+}
+QPushButton#algoBox:hover { border-color: #828282; }
+
+QFrame#algoPopup {
+    background-color: #272727;
+    border: 1px solid #5D5D5D;
+    border-radius: 8px;
+}
+QLabel#algoHeader {
+    background-color: #3B3B3B;
+    border-radius: s(8)px;
+    color: #EEEEEE;
+    font-size: s(18)px;
+    font-weight: 700;
+    padding: s(10)px s(15)px;
+}
+QPushButton#algoCell {
+    background-color: transparent;
+    border: 1px solid #5D5D5D;
+    border-radius: s(8)px;
+    color: #E3E3E3;
+    font-size: s(18)px;
+    padding: s(10)px s(15)px;
+}
+QPushButton#algoCell:hover   { border-color: #828282; background-color: #313131; }
+QPushButton#algoCell:checked { background-color: #3B3B3B; border-color: #828282; }
 
 QComboBox QAbstractItemView {
     background-color: #272727;

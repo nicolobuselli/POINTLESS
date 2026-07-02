@@ -15,6 +15,7 @@
         <file alias="icons/opacity.svg">../assets/icons/opacity.svg</file>
         <file alias="icons/corner_radius.svg">../assets/icons/corner_radius.svg</file>
         <file alias="icons/arrow.svg">../assets/icons/arrow.svg</file>
+        <file alias="icons/arrow_up.svg">../assets/icons/arrow_up.svg</file>
         <file alias="icons/pick_color.svg">../assets/icons/pick_color.svg</file>
         <file alias="icons/color_picker.svg">../assets/icons/color_picker.svg</file>
         <file alias="icons/layers.svg">../assets/icons/layers.svg</file>

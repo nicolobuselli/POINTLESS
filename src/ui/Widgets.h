@@ -163,29 +163,6 @@ private:
     Direction m_dir;
 };
 
-// ── CollapsibleSection ───────────────────────────────────────
-// Header (title + chevron) that toggles a content widget.
-
-class CollapsibleSection : public QWidget {
-public:
-    CollapsibleSection(const QString& title, QWidget* content,
-                       QWidget* parent = nullptr);
-
-    void setExpanded(bool expanded);
-    QWidget* headerExtras() const { return m_extras; }   // slot left of chevron
-
-protected:
-    bool eventFilter(QObject* obj, QEvent* ev) override;
-
-private:
-    QWidget*       m_header      = nullptr;
-    QWidget*       m_content     = nullptr;
-    QWidget*       m_contentWrap = nullptr;   // adds the standard column gutter
-    QWidget*       m_extras      = nullptr;
-    ChevronButton* m_chevron     = nullptr;
-    bool           m_expanded = true;
-};
-
 // ── FillSwatch ───────────────────────────────────────────────
 // Color chip + hex text; optional opacity readout (drag to change).
 

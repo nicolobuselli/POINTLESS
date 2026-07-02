@@ -327,7 +327,10 @@ enum class DitherAlgorithm {
     Threshold           = 13,  // Hard B/W cut by a threshold (no dithering)
     // ── Error Diffusion (extended; tables/refs from libdither) ────
     Ostromoukhov        = 14,  // Variable-coefficient error diffusion
-    Riemersma           = 15   // Error diffusion along a Hilbert curve
+    Riemersma           = 15,  // Error diffusion along a Hilbert curve
+    // ── Ordered (extended) ───────────────────────────────────────
+    LineHatch           = 16,  // Parallel line screen; thickness follows tone
+    CustomPattern       = 17   // User image tiled as the threshold matrix
 };
 
 struct DitherSettings {
@@ -338,6 +341,11 @@ struct DitherSettings {
     int             threshold = 50;   // 0..100 — only for the Threshold algorithm
     float           opacity      = 1.0f;
     float           cornerRadius = 0.0f;
+    int             levels       = 2;     // 2..16 — mixing inks: steps/channel (image colors) or interpolated tones (fills)
+    bool            serpentine   = true;  // error diffusion: zig-zag scan vs left→right
+    float           lineAngle    = 45.0f; // 0..180 deg — LineHatch direction
+    int             lineSpacing  = 6;     // 2..32 cells — LineHatch line period
+    QString         patternPath;          // CustomPattern threshold image
 
     TonalSettings tonal { ToneMode::FixedTones, defaultAccentTones(1) };
 };
@@ -347,6 +355,9 @@ inline bool operator==(const DitherSettings& a, const DitherSettings& b) {
         && a.pixelSize == b.pixelSize && a.strength == b.strength
         && a.threshold == b.threshold
         && a.opacity == b.opacity && a.cornerRadius == b.cornerRadius
+        && a.levels == b.levels && a.serpentine == b.serpentine
+        && a.lineAngle == b.lineAngle && a.lineSpacing == b.lineSpacing
+        && a.patternPath == b.patternPath
         && a.tonal == b.tonal;
 }
 
@@ -367,9 +378,15 @@ inline const std::vector<AsciiCharsetPreset>& asciiCharsetPresets()
         { "Blocks",   QString::fromUtf8(" ░▒▓█") },
         { "Minimal",  QString::fromUtf8(" .oO0@") },
         { "Binary",   QString::fromUtf8(" 01") },
+        // Special-cased by the renderer: 2×4 braille dots per cell (8× the
+        // effective resolution). The ramp here is only a safe fallback.
+        { "Braille",  QString::fromUtf8(" ⣿") },
     };
     return presets;
 }
+
+// The Braille preset is render-path special-cased; keep it LAST in the list.
+inline int asciiBraillePreset() { return int(asciiCharsetPresets().size()) - 1; }
 
 struct AsciiSettings {
     int     charsetPreset = 0;        // index into presets; == size() → custom
@@ -377,9 +394,15 @@ struct AsciiSettings {
     int     cellSize      = 12;       // 4..48 px
     float   gamma         = 1.0f;
     bool    invert        = false;
+    QString fontFamily    = QStringLiteral("Consolas");
+    int     fontWeight    = 600;      // QFont::Weight (400/500/600/700)
+    int     edges         = 0;        // 0..100 — contour glyphs (/ - \ |); 0 = off
+    bool    cellBackground = false;   // fill the cell with the ink, punch the glyph out
 
     TonalSettings tonal { ToneMode::FixedTones,
                           { ToneEntry{ QColor(0xC0, 0xC0, 0xC0), 0 } } };
+
+    bool isBraille() const { return charsetPreset == asciiBraillePreset(); }
 
     QString effectiveCharset() const {
         const auto& presets = asciiCharsetPresets();
@@ -393,7 +416,10 @@ struct AsciiSettings {
 inline bool operator==(const AsciiSettings& a, const AsciiSettings& b) {
     return a.charsetPreset == b.charsetPreset && a.customCharset == b.customCharset
         && a.cellSize == b.cellSize && a.gamma == b.gamma
-        && a.invert == b.invert && a.tonal == b.tonal;
+        && a.invert == b.invert
+        && a.fontFamily == b.fontFamily && a.fontWeight == b.fontWeight
+        && a.edges == b.edges && a.cellBackground == b.cellBackground
+        && a.tonal == b.tonal;
 }
 
 // ============================================================

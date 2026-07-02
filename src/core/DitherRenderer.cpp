@@ -7,6 +7,7 @@
 #include <QPainterPath>
 #include <QTransform>
 #include <QHash>
+#include <QMutex>
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
@@ -55,6 +56,47 @@ void linearBuffers(const QImage& work, std::vector<float>& fr,
             }
         }
     });
+}
+
+// ============================================================
+//  "Color levels" tone expansion: with levels > 2, (levels-2)
+//  interpolated tones — linear-light colour lerp, evenly spaced
+//  level anchors — are inserted between each consecutive pair.
+//  The slider thus adds intermediate mixing inks in BOTH the
+//  fixed-tones and palette fill modes; levels == 2 is unchanged.
+// ============================================================
+
+std::vector<ToneEntry> expandTones(std::vector<ToneEntry> tones, int levels)
+{
+    using namespace ColorMath;
+    const int steps = qBound(2, levels, 16);
+    if (steps <= 2 || tones.size() < 2) return tones;
+
+    std::vector<ToneEntry> out;
+    out.reserve(tones.size() + (tones.size() - 1) * size_t(steps - 2));
+    for (size_t i = 0; i + 1 < tones.size(); ++i) {
+        const ToneEntry& a = tones[i];
+        const ToneEntry& b = tones[i + 1];
+        out.push_back(a);
+        const float ar = srgbToLinear(a.color.red());
+        const float ag = srgbToLinear(a.color.green());
+        const float ab = srgbToLinear(a.color.blue());
+        const float br = srgbToLinear(b.color.red());
+        const float bg = srgbToLinear(b.color.green());
+        const float bb = srgbToLinear(b.color.blue());
+        for (int k = 1; k <= steps - 2; ++k) {
+            const float t = float(k) / float(steps - 1);
+            ToneEntry e;
+            e.color = QColor(linearToSrgb8(ar + (br - ar) * t),
+                             linearToSrgb8(ag + (bg - ag) * t),
+                             linearToSrgb8(ab + (bb - ab) * t));
+            e.level   = qRound(a.level + (b.level - a.level) * t);
+            e.opacity = a.opacity + (b.opacity - a.opacity) * t;
+            out.push_back(e);
+        }
+    }
+    out.push_back(tones.back());
+    return out;
 }
 
 // ============================================================
@@ -259,6 +301,56 @@ const std::vector<float>& voidClusterMask()
 }
 
 // ============================================================
+//  Custom pattern threshold mask
+//  Any user image becomes a tiled threshold matrix: the pixels are
+//  rank-normalised (sorted by luma, threshold = rank position), so
+//  the tonal response is uniform regardless of the image's own
+//  contrast/histogram. Cached per path; returned BY VALUE because
+//  QHash may rehash under a concurrent insert from another render.
+// ============================================================
+
+struct PatternMask {
+    int w = 0, h = 0;
+    std::vector<float> t;
+};
+
+PatternMask patternMask(const QString& path)
+{
+    static QMutex mutex;
+    static QHash<QString, PatternMask> cache;
+    QMutexLocker lock(&mutex);
+
+    auto it = cache.constFind(path);
+    if (it != cache.constEnd()) return it.value();
+
+    PatternMask m;
+    QImage img(path);
+    if (!img.isNull()) {
+        if (img.width() > 256 || img.height() > 256)
+            img = img.scaled(256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        img = img.convertToFormat(QImage::Format_RGB32);
+        m.w = img.width();
+        m.h = img.height();
+        const int N = m.w * m.h;
+        std::vector<float> lum(static_cast<size_t>(N));
+        for (int y = 0; y < m.h; ++y) {
+            const QRgb* line = reinterpret_cast<const QRgb*>(img.constScanLine(y));
+            for (int x = 0; x < m.w; ++x)
+                lum[size_t(y) * m.w + x] = float(qGray(line[x]));
+        }
+        std::vector<int> order(static_cast<size_t>(N));
+        std::iota(order.begin(), order.end(), 0);
+        std::stable_sort(order.begin(), order.end(),
+                         [&](int a, int b) { return lum[size_t(a)] < lum[size_t(b)]; });
+        m.t.resize(static_cast<size_t>(N));
+        for (int r = 0; r < N; ++r)
+            m.t[size_t(order[size_t(r)])] = (r + 0.5f) / float(N);
+    }
+    cache.insert(path, m);
+    return m;
+}
+
+// ============================================================
 //  Error-diffusion kernels
 //  KTap: { column_offset, row_offset, weight }
 //  column_offset is relative to the current pixel along the scan axis
@@ -320,7 +412,9 @@ bool DitherRenderer::isOrdered(DitherAlgorithm a)
     return a == DitherAlgorithm::Bayer
         || a == DitherAlgorithm::ClusteredDot
         || a == DitherAlgorithm::BlueNoise
-        || a == DitherAlgorithm::VoidAndCluster;
+        || a == DitherAlgorithm::VoidAndCluster
+        || a == DitherAlgorithm::LineHatch
+        || a == DitherAlgorithm::CustomPattern;
 }
 
 bool DitherRenderer::isHybrid(DitherAlgorithm a)
@@ -592,9 +686,9 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
     const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
-    const auto  tones       = sortedTones(s.tonal.tones);
+    const auto  tones       = expandTones(sortedTones(s.tonal.tones), s.levels);
     const int   nTones      = int(tones.size());
-    const int   L           = 2;
+    const int   L           = qBound(2, s.levels, 16);
 
     const std::vector<ColorMath::PaletteEntry> palette =
         paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
@@ -608,9 +702,9 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
     std::vector<float> fr, fg, fb;
     linearBuffers(work, fr, fg, fb);
 
-    // Serpentine raster scan (horizontal).
+    // Raster scan: serpentine (zig-zag) by default, left→right when disabled.
     for (int row = 0; row < h; ++row) {
-        const bool rev = (row & 1) != 0;
+        const bool rev = s.serpentine && (row & 1) != 0;
         for (int ci = 0; ci < w; ++ci) {
             const int col = rev ? w - 1 - ci : ci;
             const size_t i = size_t(row) * w + col;
@@ -657,9 +751,9 @@ void DitherRenderer::renderVarErrDiff(const QImage& work, QImage& out,
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
     const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
-    const auto  tones       = sortedTones(s.tonal.tones);
+    const auto  tones       = expandTones(sortedTones(s.tonal.tones), s.levels);
     const int   nTones      = int(tones.size());
-    const int   L           = 2;
+    const int   L           = qBound(2, s.levels, 16);
 
     const std::vector<ColorMath::PaletteEntry> palette =
         paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
@@ -679,7 +773,7 @@ void DitherRenderer::renderVarErrDiff(const QImage& work, QImage& out,
     const int dyF[3] = {  0, +1, 1 };
 
     for (int row = 0; row < h; ++row) {
-        const bool rev = (row & 1) != 0;
+        const bool rev = s.serpentine && (row & 1) != 0;
         for (int ci = 0; ci < w; ++ci) {
             const int col = rev ? w - 1 - ci : ci;
             const size_t i = size_t(row) * w + col;
@@ -745,9 +839,9 @@ void DitherRenderer::renderRiemersma(const QImage& work, QImage& out,
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
     const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
-    const auto  tones       = sortedTones(s.tonal.tones);
+    const auto  tones       = expandTones(sortedTones(s.tonal.tones), s.levels);
     const int   nTones      = int(tones.size());
-    const int   L           = 2;
+    const int   L           = qBound(2, s.levels, 16);
 
     const std::vector<ColorMath::PaletteEntry> palette =
         paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
@@ -806,9 +900,9 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
     const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
-    const auto  tones       = sortedTones(s.tonal.tones);
+    const auto  tones       = expandTones(sortedTones(s.tonal.tones), s.levels);
     const int   nTones      = int(tones.size());
-    const int   L           = 2;
+    const int   L           = qBound(2, s.levels, 16);
 
     const std::vector<ColorMath::PaletteEntry> palette =
         paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
@@ -836,6 +930,33 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
         } else {
             threshold = [](int x, int y) -> float {
                 return (kClustered8[((y & 7) << 3) | (x & 7)] + 0.5f) / 64.0f;
+            };
+        }
+
+    } else if (s.algorithm == DitherAlgorithm::LineHatch) {
+        // Parallel line screen: threshold = distance from the nearest line
+        // centre (0 at the centre), so lines thicken with darkness.
+        const float a   = qDegreesToRadians(s.lineAngle);
+        const float ca  = std::cos(a), sa = std::sin(a);
+        const float inv = 1.0f / float(qBound(2, s.lineSpacing, 64));
+        threshold = [ca, sa, inv](int x, int y) -> float {
+            const float u = (x * ca + y * sa) * inv;
+            const float f = u - std::floor(u);
+            return std::fabs(f - 0.5f) * 2.0f;
+        };
+
+    } else if (s.algorithm == DitherAlgorithm::CustomPattern) {
+        const PatternMask pm = patternMask(s.patternPath);
+        if (pm.w > 0 && pm.h > 0) {
+            threshold = [pm](int x, int y) -> float {
+                return pm.t[size_t(y % pm.h) * pm.w + (x % pm.w)];
+            };
+        } else {
+            // No/invalid pattern image → Bayer 8 fallback so the mode
+            // still renders something sensible before a file is picked.
+            const std::vector<float> bayer = bayerMatrix(8);
+            threshold = [bayer](int x, int y) -> float {
+                return bayer[size_t(y & 7) * 8 + (x & 7)];
             };
         }
 
@@ -945,9 +1066,9 @@ void DitherRenderer::renderDotDiffusion(const QImage& work, QImage& out,
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
     const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
-    const auto  tones       = sortedTones(s.tonal.tones);
+    const auto  tones       = expandTones(sortedTones(s.tonal.tones), s.levels);
     const int   nTones      = int(tones.size());
-    const int   L           = 2;
+    const int   L           = qBound(2, s.levels, 16);
 
     const std::vector<ColorMath::PaletteEntry> palette =
         paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
@@ -1021,7 +1142,7 @@ void DitherRenderer::renderThreshold(const QImage& work, QImage& out,
 
     const float thr         = qBound(0, s.threshold, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
-    const auto  tones       = sortedTones(s.tonal.tones);
+    const auto  tones       = sortedTones(s.tonal.tones);   // hard cut: no expansion
 
     // Ink = darkest tone (lowest level); paper = transparent (background shows).
     const QColor inkColor = tones.empty() ? QColor(Qt::black) : tones.front().color;

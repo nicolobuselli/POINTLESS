@@ -43,9 +43,13 @@ const std::array<ParamDesc, int(ParamId::Count)> kDescs = {{
     { "Opacity",            0,     1,  false, ParamScope::Dither },
     { "Corner radius",      0,   100,  false, ParamScope::Dither },
     { "Threshold",          0,   100,  true,  ParamScope::Dither },
+    { "Levels",             2,    16,  true,  ParamScope::Dither },
+    { "Line angle",         0,   180,  false, ParamScope::Dither },
+    { "Line spacing",       2,    32,  true,  ParamScope::Dither },
 
     { "Cell size",          4,    48,  true,  ParamScope::Ascii },
     { "Gamma",            0.1,   5.0,  false, ParamScope::Ascii },
+    { "Edges",              0,   100,  true,  ParamScope::Ascii },
 
     { "Threshold 1",        0,   255,  true,  ParamScope::Tonal },
     { "Threshold 2",        0,   255,  true,  ParamScope::Tonal },
@@ -132,9 +136,13 @@ double getParam(const Layer& l, ParamId id)
         case ParamId::DiOpacity:      return l.dither.opacity;
         case ParamId::DiCornerRadius: return l.dither.cornerRadius;
         case ParamId::DiThreshold:    return l.dither.threshold;
+        case ParamId::DiLevels:       return l.dither.levels;
+        case ParamId::DiLineAngle:    return l.dither.lineAngle;
+        case ParamId::DiLineSpacing:  return l.dither.lineSpacing;
 
         case ParamId::AsCellSize: return l.ascii.cellSize;
         case ParamId::AsGamma:    return l.ascii.gamma;
+        case ParamId::AsEdges:    return l.ascii.edges;
 
         default: return 0.0;   // Document params handled elsewhere
     }
@@ -189,9 +197,13 @@ void setParam(Layer& l, ParamId id, double v)
         case ParamId::DiOpacity:      l.dither.opacity      = fv; break;
         case ParamId::DiCornerRadius: l.dither.cornerRadius = fv; break;
         case ParamId::DiThreshold:    l.dither.threshold    = iv; break;
+        case ParamId::DiLevels:       l.dither.levels       = iv; break;
+        case ParamId::DiLineAngle:    l.dither.lineAngle    = fv; break;
+        case ParamId::DiLineSpacing:  l.dither.lineSpacing  = iv; break;
 
         case ParamId::AsCellSize: l.ascii.cellSize = iv; break;
         case ParamId::AsGamma:    l.ascii.gamma    = fv; break;
+        case ParamId::AsEdges:    l.ascii.edges    = iv; break;
 
         default: break;   // Document params handled elsewhere
     }

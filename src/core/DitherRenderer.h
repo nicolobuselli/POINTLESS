@@ -16,7 +16,9 @@ class QPainter;
  *    propagated to unprocessed neighbours via a fixed kernel.
  *
  *  Ordered Dithering — Bayer (2/4/8/16), Clustered Dot (4/8),
- *    Blue Noise (64-sample V&C mask), Void and Cluster (32-sample V&C).
+ *    Blue Noise (64-sample V&C mask), Void and Cluster (32-sample V&C),
+ *    Line Hatch (angled line screen), Custom Pattern (user image
+ *    rank-normalised into a tiled threshold matrix).
  *    Per-pixel threshold is looked up from a precomputed mask; the
  *    operation is fully parallel and scales to any resolution.
  *
@@ -27,7 +29,7 @@ class QPainter;
  *    dithering with the tonal accuracy of error diffusion.
  *
  * Color output follows the tonal settings:
- *   ImageColors → per-channel quantization to 2 steps.
+ *   ImageColors → per-channel quantization to `levels` steps (2..16).
  *   1 tone      → binary ink-on-transparent (background visible).
  *   2+ tones    → luminosity mapped onto the tone palette via each
  *                 tone's level anchor (see pickToneIndex).

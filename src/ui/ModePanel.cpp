@@ -4,6 +4,7 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QScrollArea>
 #include <QStackedWidget>
 #include <QFileDialog>
@@ -14,8 +15,11 @@
 #include <QPushButton>
 #include <QFrame>
 #include <QStandardItemModel>
+#include <QFontDatabase>
 #include <QSvgRenderer>
 #include <QPainter>
+#include <QPixmap>
+#include <QScreen>
 #include <QIcon>
 #include <QStyle>
 
@@ -563,7 +567,7 @@ const AlgoEntry kAlgoEntries[] = {
     { DitherAlgorithm::FloydSteinberg,      nullptr,               "Error Diffusion"  },  // header
     { DitherAlgorithm::FloydSteinberg,      "Floyd\xe2\x80\x93Steinberg",
         "Classic 4-tap kernel. Balanced tonal accuracy with characteristic worm-pattern artifacts." },
-    { DitherAlgorithm::FalseFloydSteinberg, "False Floyd\xe2\x80\x93Steinberg",
+    { DitherAlgorithm::FalseFloydSteinberg, "False Floyd",
         "Lightweight 3-tap FS approximation. Faster, but produces more directional banding." },
     { DitherAlgorithm::Atkinson,            "Atkinson",
         "Diffuses 75\xe2\x80\x89% of error. Retains bright areas; the iconic Mac / early-desktop aesthetic." },
@@ -590,12 +594,119 @@ const AlgoEntry kAlgoEntries[] = {
         "64\303\22764 void-and-cluster mask. Spectrally optimal; natural, grain-like appearance." },
     { DitherAlgorithm::VoidAndCluster,      "Void and Cluster",
         "32\303\22732 Ulichney optimal mask. Minimal tiling artifacts; visually quiet noise floor." },
-    { DitherAlgorithm::DotDiffusion,        nullptr,               "Hybrid"           }, // header
+    { DitherAlgorithm::LineHatch,           "Line Hatch",
+        "Parallel line screen: line thickness follows tone. Set the angle and spacing for an engraving / hatching look." },
+    { DitherAlgorithm::CustomPattern,       "Custom Pattern",
+        "Any image, tiled as the threshold matrix (rank-normalised). Pick a texture and the tones dither through it." },
+    { DitherAlgorithm::DotDiffusion,        nullptr,               "Other"            }, // header
     { DitherAlgorithm::DotDiffusion,        "Dot Diffusion",
         "Knuth (1987) class-matrix scan with error propagation. Clustered dot structure meets tonal accuracy." },
-    { DitherAlgorithm::Threshold,           nullptr,               "Tone"             }, // header
     { DitherAlgorithm::Threshold,           "Threshold",
         "Hard black/white cut by a level (no dithering). Pair with Pixel size and Corner radius for smooth poster shapes." },
+};
+
+// Combo-look button that opens a 2-column grid popup of boxed algorithm
+// entries with pill group headers (clearer than a flat dropdown list).
+class AlgoPicker : public QPushButton
+{
+public:
+    std::function<void(DitherAlgorithm)> onSelected;   // user pick only, not setValue
+
+    AlgoPicker(QWidget* parent = nullptr) : QPushButton(parent)
+    {
+        setObjectName("algoBox");
+        setCursor(Qt::PointingHandCursor);
+        setFixedHeight(Ui::px(48));
+
+        // Chevron overlay in the right padding (the button text stays left).
+        auto* hl = new QHBoxLayout(this);
+        hl->setContentsMargins(0, 0, Ui::px(14), 0);
+        hl->addStretch(1);
+        m_arrow = new QLabel;
+        m_arrow->setAttribute(Qt::WA_TransparentForMouseEvents);
+        m_arrow->setStyleSheet("background:transparent; border:none;");
+        hl->addWidget(m_arrow);
+        setArrowOpen(false);
+
+        connect(this, &QPushButton::clicked, this, [this]() { openPopup(); });
+        setValue(DitherAlgorithm::FloydSteinberg);
+    }
+
+    DitherAlgorithm value() const { return m_value; }
+
+    void setValue(DitherAlgorithm a)   // silent — no onSelected
+    {
+        m_value = a;
+        for (const auto& e : kAlgoEntries)
+            if (e.label && e.algo == a) { setText(QString::fromUtf8(e.label)); break; }
+    }
+
+private:
+    void setArrowOpen(bool open)
+    {
+        m_arrow->setPixmap(QIcon(open ? ":/icons/arrow_up.svg" : ":/icons/arrow.svg")
+                               .pixmap(Ui::px(14), Ui::px(8)));
+    }
+
+    void openPopup()
+    {
+        auto* pop = new QFrame(this, Qt::Popup);
+        pop->setObjectName("algoPopup");
+        pop->setAttribute(Qt::WA_DeleteOnClose);
+
+        auto* gl = new QGridLayout(pop);
+        gl->setContentsMargins(Ui::px(12), Ui::px(12), Ui::px(12), Ui::px(12));
+        gl->setHorizontalSpacing(Ui::px(10));
+        gl->setVerticalSpacing(Ui::px(10));
+
+        int row = 0, col = 0;
+        for (const auto& e : kAlgoEntries) {
+            if (e.label == nullptr) {                       // group header pill
+                if (col) { ++row; col = 0; }
+                auto* h = new QLabel(QString::fromUtf8(e.description));
+                h->setObjectName("algoHeader");
+                h->setAlignment(Qt::AlignCenter);
+                gl->addWidget(h, row++, 0, 1, 2);
+            } else {
+                auto* b = new QPushButton(QString::fromUtf8(e.label));
+                b->setObjectName("algoCell");
+                b->setCursor(Qt::PointingHandCursor);
+                b->setCheckable(true);
+                b->setChecked(e.algo == m_value);
+                b->setToolTip(QString::fromUtf8(e.description));
+                b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                const DitherAlgorithm algo = e.algo;
+                connect(b, &QPushButton::clicked, this, [this, algo, pop]() {
+                    pop->close();
+                    if (algo == m_value) return;
+                    setValue(algo);
+                    if (onSelected) onSelected(algo);
+                });
+                gl->addWidget(b, row, col);
+                if (++col == 2) { col = 0; ++row; }
+            }
+        }
+
+        pop->setMinimumWidth(width());
+        pop->adjustSize();
+
+        // Below the box; pulled above it if it would run off the screen.
+        QPoint pos = mapToGlobal(QPoint(0, height() + Ui::px(4)));
+        const QRect avail = screen()->availableGeometry();
+        if (pos.y() + pop->height() > avail.bottom())
+            pos.setY(qMax(avail.top(),
+                          mapToGlobal(QPoint(0, 0)).y() - pop->height() - Ui::px(4)));
+        if (pos.x() + pop->width() > avail.right())
+            pos.setX(avail.right() - pop->width());
+        pop->move(pos);
+
+        setArrowOpen(true);
+        connect(pop, &QObject::destroyed, this, [this]() { setArrowOpen(false); });
+        pop->show();
+    }
+
+    QLabel*         m_arrow = nullptr;
+    DitherAlgorithm m_value = DitherAlgorithm::FloydSteinberg;
 };
 
 } // namespace
@@ -620,29 +731,7 @@ public:
             sl->setSpacing(10);
 
             sl->addWidget(makeParamLabel("Algorithm"));
-            m_algorithm = new NoWheelComboBox;
-
-            // Build a model so we can insert non-selectable category headers.
-            auto* model = new QStandardItemModel(m_algorithm);
-            for (const auto& e : kAlgoEntries) {
-                const bool isHeader = (e.label == nullptr);
-                auto* item = new QStandardItem(isHeader
-                    ? QString("— %1 —").arg(QString::fromUtf8(e.description))
-                    : QString::fromUtf8(e.label));
-                if (isHeader) {
-                    item->setFlags(item->flags() & ~Qt::ItemIsEnabled & ~Qt::ItemIsSelectable);
-                    QFont f = item->font();
-                    f.setBold(true);
-                    item->setFont(f);
-                } else {
-                    item->setData(int(e.algo), Qt::UserRole);
-                    item->setToolTip(QString::fromUtf8(e.description));
-                }
-                model->appendRow(item);
-            }
-            m_algorithm->setModel(model);
-            // Select the first real item (skip first header row, which is index 0).
-            m_algorithm->setCurrentIndex(1);
+            m_algorithm = new AlgoPicker;
             sl->addWidget(m_algorithm);
 
             // Per-algorithm description label.
@@ -670,28 +759,98 @@ public:
             m_matrixRow->setVisible(false);
             sl->addWidget(m_matrixRow);
 
-            connect(m_algorithm, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int) {
-                const DitherAlgorithm a = currentAlgorithm();
-                const bool showMatrix =
-                    (a == DitherAlgorithm::Bayer || a == DitherAlgorithm::ClusteredDot);
-                const bool isThr = (a == DitherAlgorithm::Threshold);
-                m_matrixRow->setVisible(showMatrix);
-                m_threshold->setVisible(isThr);
-                m_strength->setVisible(!isThr);
+            // Scan direction — error-diffusion algorithms only.
+            m_scanRow = new QWidget;
+            {
+                auto* cl = new QVBoxLayout(m_scanRow);
+                cl->setContentsMargins(0, 0, 0, 0);
+                cl->setSpacing(4);
+                cl->addWidget(makeParamLabel("Scan direction"));
+                m_scan = new NoWheelComboBox;
+                m_scan->addItems({ "Serpentine (zig-zag)",
+                                   QString::fromUtf8("Standard (left \342\206\222 right)") });
+                cl->addWidget(m_scan);
+            }
+            sl->addWidget(m_scanRow);
+
+            // Line Hatch controls.
+            m_lineRow = new QWidget;
+            {
+                auto* ll = new QVBoxLayout(m_lineRow);
+                ll->setContentsMargins(0, 0, 0, 0);
+                ll->setSpacing(8);
+                m_lineAngle   = new SliderRow("Line angle",   0, 180, 45);
+                m_lineSpacing = new SliderRow("Line spacing", 2,  32,  6);
+                m_lineAngle->onValueChanged   = [this](int) { fire(); };
+                m_lineSpacing->onValueChanged = [this](int) { fire(); };
+                ll->addWidget(m_lineAngle);
+                ll->addWidget(m_lineSpacing);
+            }
+            m_lineRow->setVisible(false);
+            sl->addWidget(m_lineRow);
+
+            // Custom Pattern picker (mirrors the halftone Custom SVG row).
+            m_patternRow = new QWidget;
+            {
+                auto* pr = new QHBoxLayout(m_patternRow);
+                pr->setContentsMargins(0, 0, 0, 0);
+                pr->setSpacing(Ui::px(8));
+
+                m_patternNameBox = new QFrame;
+                m_patternNameBox->setObjectName("dragSpinBox");   // dark box + border
+                m_patternNameBox->setFixedHeight(Ui::px(48));
+                auto* nbl = new QHBoxLayout(m_patternNameBox);
+                nbl->setContentsMargins(Ui::px(10), 0, Ui::px(10), 0);
+                nbl->setSpacing(Ui::px(8));
+                m_patternPreview = new QLabel;
+                m_patternPreview->setFixedSize(Ui::px(22), Ui::px(22));
+                m_patternPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
+                nbl->addWidget(m_patternPreview);
+                m_patternName = new ElidedLabel;
+                m_patternName->setStyleSheet("background:transparent; color:#E3E3E3;");
+                m_patternName->setAttribute(Qt::WA_TransparentForMouseEvents);
+                nbl->addWidget(m_patternName, 1);
+                pr->addWidget(m_patternNameBox, 1);
+
+                m_patternBtn = new QPushButton;
+                m_patternBtn->setObjectName("accentBtn");
+                m_patternBtn->setCursor(Qt::PointingHandCursor);
+                m_patternBtn->setStyleSheet(
+                    QString("min-height:%1px; max-height:%1px;").arg(Ui::px(48)));
+                m_patternBtn->setFixedHeight(Ui::px(48));
+                pr->addWidget(m_patternBtn, 1);
+
+                connect(m_patternBtn, &QPushButton::clicked, this, [this]() {
+                    const QString p = QFileDialog::getOpenFileName(
+                        this, "Load pattern image", "",
+                        "Images (*.png *.jpg *.jpeg *.bmp *.webp)");
+                    if (p.isEmpty()) return;
+                    m_patternPath = p;
+                    updatePatternRow();
+                    fire();
+                });
+            }
+            m_patternRow->setVisible(false);
+            updatePatternRow();
+            sl->addWidget(m_patternRow);
+
+            m_algorithm->onSelected = [this](DitherAlgorithm) {
+                updateConditionalRows();
                 updateDescription();
                 fire();
-            });
+            };
             connect(m_matrix, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [this](int) { fire(); });
+            connect(m_scan, QOverload<int>::of(&QComboBox::currentIndexChanged),
                     this, [this](int) { fire(); });
 
             updateDescription();
         }
-        vl->addWidget(new CollapsibleSection("Settings", settingsContent));
-
-        vl->addSpacing(16);
-        vl->addWidget(makeSeparatorLine());
-        vl->addSpacing(16);
+        // PanelSection (same as the Halftone page) so titles, band lines and
+        // gutters match across the three modes.
+        auto* settingsSec = new PanelSection("Settings", /*collapsible*/ false, true);
+        settingsSec->body()->addWidget(settingsContent);
+        vl->addWidget(settingsSec);
 
         // ── Parameters ──────────────────────────────────────
         auto* paramsContent = new QWidget;
@@ -703,7 +862,10 @@ public:
             m_pixelSize = new SliderRow("Pixel size", 1, 16, 2);
             m_strength  = new SliderRow("Strength",   0, 100, 50);
             m_threshold = new SliderRow("Threshold",  0, 100, 50);
-            for (SliderRow* r : { m_pixelSize, m_strength, m_threshold }) {
+            m_levels    = new SliderRow("Color levels", 2, 16, 2);
+            m_levels->setToolTip("Image colors: quantisation steps per RGB channel.\n"
+                                 "Palette: intermediate mixing colors between palette entries.");
+            for (SliderRow* r : { m_pixelSize, m_strength, m_threshold, m_levels }) {
                 r->onValueChanged = [this](int) { fire(); };
                 pl->addWidget(r);
             }
@@ -720,7 +882,9 @@ public:
             row->addWidget(m_cornerRadius, 1);
             pl->addLayout(row);
         }
-        vl->addWidget(new CollapsibleSection("Parameters", paramsContent));
+        auto* paramsSec = new PanelSection("Parameters", /*collapsible*/ false, true);
+        paramsSec->body()->addWidget(paramsContent);
+        vl->addWidget(paramsSec);
     }
 
     DitherSettings settings() const
@@ -734,31 +898,20 @@ public:
         s.threshold    = m_threshold->value();
         s.opacity      = m_opacity->value() / 100.0f;
         s.cornerRadius = float(m_cornerRadius->value());
+        s.levels       = m_levels->value();
+        s.serpentine   = (m_scan->currentIndex() == 0);
+        s.lineAngle    = float(m_lineAngle->value());
+        s.lineSpacing  = m_lineSpacing->value();
+        s.patternPath  = m_patternPath;
         return s;
     }
 
     void setSettings(const DitherSettings& s)
     {
         m_updating = true;
-        m_algorithm->blockSignals(true);
+        m_algorithm->setValue(s.algorithm);   // silent
 
-        // Find the item whose UserRole data matches the algorithm enum value.
-        const int target = int(s.algorithm);
-        for (int i = 0; i < m_algorithm->count(); ++i) {
-            const QVariant data = m_algorithm->itemData(i, Qt::UserRole);
-            if (data.isValid() && data.toInt() == target) {
-                m_algorithm->setCurrentIndex(i);
-                break;
-            }
-        }
-        m_algorithm->blockSignals(false);
-
-        const bool showMatrix = (s.algorithm == DitherAlgorithm::Bayer
-                               || s.algorithm == DitherAlgorithm::ClusteredDot);
-        const bool isThr = (s.algorithm == DitherAlgorithm::Threshold);
-        m_matrixRow->setVisible(showMatrix);
-        m_threshold->setVisible(isThr);
-        m_strength->setVisible(!isThr);
+        updateConditionalRows();
         updateDescription();
 
         int mi = 2;
@@ -770,24 +923,29 @@ public:
         m_matrix->setCurrentIndex(mi);
         m_matrix->blockSignals(false);
 
+        m_scan->blockSignals(true);
+        m_scan->setCurrentIndex(s.serpentine ? 0 : 1);
+        m_scan->blockSignals(false);
+
         m_pixelSize->setValue(s.pixelSize);
         m_strength->setValue(s.strength);
         m_threshold->setValue(s.threshold);
         m_opacity->setValue(qRound(s.opacity * 100));
         m_cornerRadius->setValue(qRound(s.cornerRadius));
+        m_levels->setValue(s.levels);
+        m_lineAngle->setValue(qRound(s.lineAngle));
+        m_lineSpacing->setValue(s.lineSpacing);
+        if (m_patternPath != s.patternPath) {
+            m_patternPath = s.patternPath;
+            updatePatternRow();
+        }
         m_updating = false;
     }
 
 private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
-    DitherAlgorithm currentAlgorithm() const
-    {
-        const QVariant v = m_algorithm->currentData(Qt::UserRole);
-        return v.isValid()
-            ? static_cast<DitherAlgorithm>(v.toInt())
-            : DitherAlgorithm::FloydSteinberg;
-    }
+    DitherAlgorithm currentAlgorithm() const { return m_algorithm->value(); }
 
     void updateDescription()
     {
@@ -801,13 +959,65 @@ private:
         m_description->clear();
     }
 
-    NoWheelComboBox* m_algorithm  = nullptr;
+    // Show only the rows that apply to the current algorithm.
+    void updateConditionalRows()
+    {
+        const DitherAlgorithm a = currentAlgorithm();
+        const bool isThr = (a == DitherAlgorithm::Threshold);
+        const bool showScan =
+               a == DitherAlgorithm::FloydSteinberg
+            || a == DitherAlgorithm::FalseFloydSteinberg
+            || a == DitherAlgorithm::Atkinson
+            || a == DitherAlgorithm::Burkes
+            || a == DitherAlgorithm::Sierra
+            || a == DitherAlgorithm::SierraLite
+            || a == DitherAlgorithm::JarvisJudiceNinke
+            || a == DitherAlgorithm::Stucki
+            || a == DitherAlgorithm::Ostromoukhov;
+        m_matrixRow->setVisible(a == DitherAlgorithm::Bayer
+                             || a == DitherAlgorithm::ClusteredDot);
+        m_scanRow->setVisible(showScan);
+        m_lineRow->setVisible(a == DitherAlgorithm::LineHatch);
+        m_patternRow->setVisible(a == DitherAlgorithm::CustomPattern);
+        m_threshold->setVisible(isThr);
+        m_strength->setVisible(!isThr);
+    }
+
+    // No file → full-width accent "Choose image"; loaded → thumb + name box.
+    void updatePatternRow()
+    {
+        const bool has = !m_patternPath.isEmpty();
+        m_patternNameBox->setVisible(has);
+        if (has) {
+            m_patternPreview->setPixmap(QPixmap(m_patternPath).scaled(
+                Ui::px(22), Ui::px(22),
+                Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            m_patternName->setFullText(QFileInfo(m_patternPath).completeBaseName());
+            m_patternBtn->setText("Change image");
+        } else {
+            m_patternBtn->setText("Choose image");
+        }
+    }
+
+    AlgoPicker*      m_algorithm  = nullptr;
     QLabel*          m_description = nullptr;
     QWidget*         m_matrixRow  = nullptr;
     NoWheelComboBox* m_matrix     = nullptr;
+    QWidget*         m_scanRow    = nullptr;
+    NoWheelComboBox* m_scan       = nullptr;
+    QWidget*         m_lineRow     = nullptr;
+    SliderRow*       m_lineAngle   = nullptr;
+    SliderRow*       m_lineSpacing = nullptr;
+    QWidget*         m_patternRow     = nullptr;
+    QFrame*          m_patternNameBox = nullptr;
+    QLabel*          m_patternPreview = nullptr;
+    ElidedLabel*     m_patternName    = nullptr;
+    QPushButton*     m_patternBtn     = nullptr;
+    QString          m_patternPath;
     SliderRow*       m_pixelSize  = nullptr;
     SliderRow*       m_strength   = nullptr;
     SliderRow*       m_threshold  = nullptr;
+    SliderRow*       m_levels     = nullptr;
     DragSpinBox*     m_opacity      = nullptr;
     DragSpinBox*     m_cornerRadius = nullptr;
     bool m_updating = false;
@@ -848,15 +1058,59 @@ public:
             m_customEdit->setVisible(false);
             sl->addWidget(m_customEdit);
 
-            m_invert = new QPushButton("Invert");
-            m_invert->setCheckable(true);
-            m_invert->setFixedHeight(26);
-            m_invert->setStyleSheet(
+            // Font family + weight. Fixed-pitch families plus the bundled
+            // display font; coverage measurement adapts to any of them.
+            sl->addWidget(makeParamLabel("Font"));
+            auto* fontRow = new QHBoxLayout;
+            fontRow->setContentsMargins(0, 0, 0, 0);
+            fontRow->setSpacing(6);
+            m_font = new NoWheelComboBox;
+            {
+                QStringList fams;
+                for (const QString& f : QFontDatabase::families())
+                    if (QFontDatabase::isFixedPitch(f) && !f.startsWith('@'))
+                        fams << f;
+                if (!fams.contains("Funnel Display")) fams << "Funnel Display";
+                fams.sort(Qt::CaseInsensitive);
+                m_font->addItems(fams);
+                m_font->setCurrentText("Consolas");
+            }
+            // Long family names must not widen the page past the 70px gutter:
+            // cap the closed box's minimum width (the popup still shows full names).
+            m_font->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+            m_font->setMinimumContentsLength(6);
+            m_font->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            m_font->setMinimumWidth(Ui::px(60));
+            m_weight = new NoWheelComboBox;
+            m_weight->addItems({ "Regular", "Medium", "DemiBold", "Bold" });
+            m_weight->setCurrentIndex(2);
+            m_weight->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+            m_weight->setMinimumContentsLength(6);
+            m_weight->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            m_weight->setMinimumWidth(Ui::px(60));
+            fontRow->addWidget(m_font, 2);
+            fontRow->addWidget(m_weight, 1);
+            sl->addLayout(fontRow);
+
+            const char* kToggleQss =
                 "QPushButton{background:#3B3B3B;border:1px solid #5D5D5D;border-radius:4px;"
                 "color:#B2B2B2;font-size:8pt;padding:0 10px;}"
                 "QPushButton:checked{background:#484848;border-color:#828282;color:#E3E3E3;}"
-                "QPushButton:hover{border-color:#828282;}");
-            sl->addWidget(m_invert);
+                "QPushButton:hover{border-color:#828282;}";
+            auto* toggleRow = new QHBoxLayout;
+            toggleRow->setContentsMargins(0, 0, 0, 0);
+            toggleRow->setSpacing(6);
+            m_invert = new QPushButton("Invert");
+            m_cellBg = new QPushButton("Cell fill");
+            m_cellBg->setToolTip("Fill each cell with the ink colour and punch\n"
+                                 "the glyph out (inverse video / negative space).");
+            for (QPushButton* b : { m_invert, m_cellBg }) {
+                b->setCheckable(true);
+                b->setFixedHeight(26);
+                b->setStyleSheet(kToggleQss);
+                toggleRow->addWidget(b, 1);
+            }
+            sl->addLayout(toggleRow);
 
             connect(m_charset, QOverload<int>::of(&QComboBox::currentIndexChanged),
                     this, [this](int idx) {
@@ -864,13 +1118,16 @@ public:
                 fire();
             });
             connect(m_customEdit, &QLineEdit::textChanged, this, [this](const QString&) { fire(); });
+            connect(m_font, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [this](int) { fire(); });
+            connect(m_weight, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [this](int) { fire(); });
             connect(m_invert, &QPushButton::toggled, this, [this](bool) { fire(); });
+            connect(m_cellBg, &QPushButton::toggled, this, [this](bool) { fire(); });
         }
-        vl->addWidget(new CollapsibleSection("Settings", settingsContent));
-
-        vl->addSpacing(16);
-        vl->addWidget(makeSeparatorLine());
-        vl->addSpacing(16);
+        auto* settingsSec = new PanelSection("Settings", /*collapsible*/ false, true);
+        settingsSec->body()->addWidget(settingsContent);
+        vl->addWidget(settingsSec);
 
         // ── Parameters ──────────────────────────────────────
         auto* paramsContent = new QWidget;
@@ -881,22 +1138,32 @@ public:
 
             m_cellSize = new SliderRow("Cell size", 4, 48, 12);
             m_gamma    = new SliderRow("Gamma",    10, 500, 100);
-            for (SliderRow* r : { m_cellSize, m_gamma }) {
+            m_edges    = new SliderRow("Edges",     0, 100,  0);
+            m_edges->setToolTip("Contour glyphs (- / | \\) on detected edges.\n"
+                                "0 = off; higher picks up softer edges.");
+            for (SliderRow* r : { m_cellSize, m_gamma, m_edges }) {
                 r->onValueChanged = [this](int) { fire(); };
                 pl->addWidget(r);
             }
         }
-        vl->addWidget(new CollapsibleSection("Parameters", paramsContent));
+        auto* paramsSec = new PanelSection("Parameters", /*collapsible*/ false, true);
+        paramsSec->body()->addWidget(paramsContent);
+        vl->addWidget(paramsSec);
     }
 
     AsciiSettings settings() const
     {
+        static const int kWeights[] = { 400, 500, 600, 700 };
         AsciiSettings s;
-        s.charsetPreset = m_charset->currentIndex();
-        s.customCharset = m_customEdit->text();
-        s.cellSize      = m_cellSize->value();
-        s.gamma         = m_gamma->value() / 100.0f;
-        s.invert        = m_invert->isChecked();
+        s.charsetPreset  = m_charset->currentIndex();
+        s.customCharset  = m_customEdit->text();
+        s.cellSize       = m_cellSize->value();
+        s.gamma          = m_gamma->value() / 100.0f;
+        s.invert         = m_invert->isChecked();
+        s.fontFamily     = m_font->currentText();
+        s.fontWeight     = kWeights[qBound(0, m_weight->currentIndex(), 3)];
+        s.edges          = m_edges->value();
+        s.cellBackground = m_cellBg->isChecked();
         return s;
     }
 
@@ -912,9 +1179,24 @@ public:
         m_customEdit->setVisible(s.charsetPreset >= int(asciiCharsetPresets().size()));
         m_cellSize->setValue(s.cellSize);
         m_gamma->setValue(qRound(s.gamma * 100));
+        m_edges->setValue(s.edges);
+        m_font->blockSignals(true);
+        m_font->setCurrentText(s.fontFamily);
+        m_font->blockSignals(false);
+        m_weight->blockSignals(true);
+        int wi = 2;
+        if      (s.fontWeight <= 400) wi = 0;
+        else if (s.fontWeight <= 500) wi = 1;
+        else if (s.fontWeight <= 600) wi = 2;
+        else                          wi = 3;
+        m_weight->setCurrentIndex(wi);
+        m_weight->blockSignals(false);
         m_invert->blockSignals(true);
         m_invert->setChecked(s.invert);
         m_invert->blockSignals(false);
+        m_cellBg->blockSignals(true);
+        m_cellBg->setChecked(s.cellBackground);
+        m_cellBg->blockSignals(false);
         m_updating = false;
     }
 
@@ -923,9 +1205,13 @@ private:
 
     NoWheelComboBox* m_charset    = nullptr;
     QLineEdit*       m_customEdit = nullptr;
+    NoWheelComboBox* m_font       = nullptr;
+    NoWheelComboBox* m_weight     = nullptr;
     QPushButton*     m_invert     = nullptr;
+    QPushButton*     m_cellBg     = nullptr;
     SliderRow*       m_cellSize   = nullptr;
     SliderRow*       m_gamma      = nullptr;
+    SliderRow*       m_edges      = nullptr;
     bool m_updating = false;
 };
 
