@@ -4,7 +4,6 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QGridLayout>
 #include <QScrollArea>
 #include <QStackedWidget>
 #include <QFileDialog>
@@ -96,6 +95,31 @@ const BlendItem kBlend[] = {
     { BlendMode::Hue, "Hue", true }, { BlendMode::Saturation, "Saturation", false },
     { BlendMode::Color, "Color", false }, { BlendMode::Luminosity, "Luminosity", false },
 };
+
+// Photoshop-style group name for the blend mode that starts each group.
+QString blendGroupName(BlendMode m)
+{
+    switch (m) {
+        case BlendMode::Darken:     return "Darken";
+        case BlendMode::Lighten:    return "Lighten";
+        case BlendMode::Overlay:    return "Contrast";
+        case BlendMode::Difference: return "Comparative";
+        case BlendMode::Hue:        return "Component";
+        default:                    return QString();
+    }
+}
+
+// Fusion picker entries, shared by every mode page's Fusion control.
+QVector<PopupPickerEntry> blendPickerEntries()
+{
+    QVector<PopupPickerEntry> out;
+    for (const auto& e : kBlend) {
+        if (out.isEmpty()) out.push_back({ QVariant(), QString(), "Normal", QString() });
+        if (e.groupStart)  out.push_back({ QVariant(), QString(), blendGroupName(e.mode), QString() });
+        out.push_back({ int(e.mode), QString::fromUtf8(e.name), QString(), QString() });
+    }
+    return out;
+}
 
 bool fillSectionOpenFor(const TonalSettings& tonal)
 {
@@ -227,9 +251,17 @@ public:
             auto* sl = settings->body();
 
             sl->addWidget(makeParamLabel("Grid"));
-            m_gridType = new NoWheelComboBox;
-            m_gridType->addItems({ "Square", "Hexagonal", "Brick", "Wave",
-                                   "Radial", "Phyllotaxis" });
+            m_gridType = new PopupPicker(1);
+            m_gridType->setEntries({
+                { int(GridType::Square),      "Square",      QString(), QString() },
+                { int(GridType::Hexagonal),   "Hexagonal",   QString(), QString() },
+                { int(GridType::Brick),       "Brick",       QString(), QString() },
+                { int(GridType::Wave),        "Wave",        QString(), QString() },
+                { int(GridType::Radial),      "Radial",      QString(), QString() },
+                { int(GridType::Phyllotaxis), "Phyllotaxis", QString(), QString() },
+            });
+            m_gridType->setValue(int(GridType::Square));
+            m_gridType->onSelected = [this](QVariant) { fire(); };
             sl->addWidget(m_gridType);
             sl->addSpacing(Ui::px(8));   // breathing room before the sliders
 
@@ -251,15 +283,13 @@ public:
 
             // Fusion (blend mode of the active layer) — moved here.
             sl->addWidget(makeParamLabel("Fusion"));
-            m_fusion = new NoWheelComboBox;
-            for (const auto& e : kBlend) {
-                if (e.groupStart && m_fusion->count() > 0)
-                    m_fusion->insertSeparator(m_fusion->count());
-                m_fusion->addItem(QString::fromUtf8(e.name), int(e.mode));
-            }
+            m_fusion = new PopupPicker(1);
+            m_fusion->setEntries(blendPickerEntries());
+            m_fusion->setValue(int(BlendMode::Normal));
+            m_fusion->onSelected = [this](QVariant) {
+                if (!m_updating && onBlendChanged) onBlendChanged();
+            };
             sl->addWidget(m_fusion);
-            connect(m_fusion, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int) { if (!m_updating && onBlendChanged) onBlendChanged(); });
 
             // Opacity + Corner radius (two icon boxes side by side).
             auto* labels = new QHBoxLayout;
@@ -279,25 +309,12 @@ public:
             row->addWidget(m_opacity, 1);
             row->addWidget(m_cornerRadius, 1);
             sl->addLayout(row);
-
-            connect(m_gridType, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int) { fire(); });
         }
         vl->addWidget(settings);
     }
 
-    BlendMode blend() const
-    {
-        const QVariant v = m_fusion->currentData();
-        return v.isValid() ? BlendMode(v.toInt()) : BlendMode::Normal;
-    }
-    void setBlend(BlendMode m)
-    {
-        for (int i = 0; i < m_fusion->count(); ++i) {
-            const QVariant v = m_fusion->itemData(i);
-            if (v.isValid() && v.toInt() == int(m)) { m_fusion->setCurrentIndex(i); break; }
-        }
-    }
+    BlendMode blend() const { return BlendMode(m_fusion->value().toInt()); }
+    void setBlend(BlendMode m) { m_fusion->setValue(int(m)); }
 
     HalftoneSettings settings() const
     {
@@ -306,14 +323,14 @@ public:
         s.shapes.clear();
         for (const auto& slot : m_shapeSlots) {
             ShapeEntry e;
-            e.shape   = static_cast<HalftoneShape>(slot.combo->currentIndex());
+            e.shape   = static_cast<HalftoneShape>(slot.combo->value().toInt());
             e.svgPath = slot.svgPath;
             s.shapes.push_back(e);
         }
         if (s.shapes.empty()) s.shapes.push_back(ShapeEntry{});
         s.multiThreshold = 128;
 
-        s.grid.type          = static_cast<GridType>(m_gridType->currentIndex());
+        s.grid.type          = static_cast<GridType>(m_gridType->value().toInt());
         s.grid.spacing       = float(m_spacing->value());   // real px (matches UI)
         s.grid.rotation      = m_rotation->value() / 100.0f * 360.0f;
         s.grid.diameter      = 0.1f + m_diameter->value() / 100.0f * 2.9f;
@@ -336,7 +353,7 @@ public:
         const int n = shapes.empty() ? 1 : int(shapes.size());
         if (m_shapeSlots.size() != n) return false;
         for (int i = 0; i < int(shapes.size()); ++i)
-            if (m_shapeSlots[i].combo->currentIndex() != int(shapes[i].shape)
+            if (m_shapeSlots[i].combo->value().toInt() != int(shapes[i].shape)
              || m_shapeSlots[i].svgPath != shapes[i].svgPath) return false;
         return true;
     }
@@ -353,9 +370,7 @@ public:
                     addShapeSlot(e.shape, e.svgPath, true);
         }
 
-        m_gridType->blockSignals(true);
-        m_gridType->setCurrentIndex(int(s.grid.type));
-        m_gridType->blockSignals(false);
+        m_gridType->setValue(int(s.grid.type));   // silent
         m_spacing->setValue(qRound(s.grid.spacing));
         m_rotation->setValue(qRound(s.grid.rotation / 360.0f * 100.0f));
         m_diameter->setValue(qRound((s.grid.diameter - 0.1f) / 2.9f * 100.0f));
@@ -372,7 +387,7 @@ private:
 
     struct ShapeSlot {
         QWidget*         widget     = nullptr;
-        NoWheelComboBox* combo      = nullptr;
+        PopupPicker*     combo      = nullptr;
         QPushButton*     minusBtn   = nullptr;
         QWidget*         svgRow     = nullptr;   // whole Custom-SVG row (toggled)
         QFrame*          svgNameBox = nullptr;   // left box: preview + name
@@ -436,9 +451,15 @@ private:
         auto* rowl = new QHBoxLayout;
         rowl->setContentsMargins(0, 0, 0, 0);
         rowl->setSpacing(0);
-        slot.combo = new NoWheelComboBox;
-        slot.combo->addItems({ "Triangle", "Circle", "Square", "Star", "Custom SVG" });
-        slot.combo->setCurrentIndex(int(shape));
+        slot.combo = new PopupPicker(1);
+        slot.combo->setEntries({
+            { int(HalftoneShape::Triangle),  "Triangle",   QString(), QString() },
+            { int(HalftoneShape::Circle),    "Circle",     QString(), QString() },
+            { int(HalftoneShape::Square),    "Square",     QString(), QString() },
+            { int(HalftoneShape::Star),      "Star",       QString(), QString() },
+            { int(HalftoneShape::CustomSVG), "Custom SVG", QString(), QString() },
+        });
+        slot.combo->setValue(int(shape));
         rowl->addWidget(slot.combo, 1);
 
         auto* gut = new QWidget;
@@ -498,13 +519,13 @@ private:
         refreshMinusButtons();
 
         QWidget*         w      = slot.widget;
-        NoWheelComboBox* combo  = slot.combo;
+        PopupPicker*     combo  = slot.combo;
         QWidget*         svgRow = slot.svgRow;
         QPushButton*     svgBtn = slot.svgBtn;
-        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, svgRow](int idx) {
-            svgRow->setVisible(idx == int(HalftoneShape::CustomSVG));
+        combo->onSelected = [this, svgRow](QVariant v) {
+            svgRow->setVisible(v.toInt() == int(HalftoneShape::CustomSVG));
             fire();
-        });
+        };
         connect(slot.minusBtn, &QPushButton::clicked, this, [this, w]() { removeShapeSlot(w); });
         connect(svgBtn, &QPushButton::clicked, this, [this, w]() {
             const QString p = QFileDialog::getOpenFileName(this, "Load SVG", "", "SVG files (*.svg)");
@@ -535,14 +556,14 @@ private:
     QVBoxLayout*       m_shapesLayout = nullptr;
     QVector<ShapeSlot> m_shapeSlots;
 
-    NoWheelComboBox* m_gridType     = nullptr;
+    PopupPicker*     m_gridType     = nullptr;
     SliderRow*       m_spacing      = nullptr;
     SliderRow*       m_rotation     = nullptr;
     SliderRow*       m_gamma        = nullptr;
     SliderRow*       m_diameter     = nullptr;
     SliderRow*       m_weight       = nullptr;
     SliderRow*       m_jitter       = nullptr;
-    NoWheelComboBox* m_fusion       = nullptr;
+    PopupPicker*     m_fusion       = nullptr;
     DragSpinBox*     m_opacity      = nullptr;
     DragSpinBox*     m_cornerRadius = nullptr;
 
@@ -605,109 +626,19 @@ const AlgoEntry kAlgoEntries[] = {
         "Hard black/white cut by a level (no dithering). Pair with Pixel size and Corner radius for smooth poster shapes." },
 };
 
-// Combo-look button that opens a 2-column grid popup of boxed algorithm
-// entries with pill group headers (clearer than a flat dropdown list).
-class AlgoPicker : public QPushButton
+// Dither algorithm picker entries (drives the shared PopupPicker widget).
+QVector<PopupPickerEntry> algoPickerEntries()
 {
-public:
-    std::function<void(DitherAlgorithm)> onSelected;   // user pick only, not setValue
-
-    AlgoPicker(QWidget* parent = nullptr) : QPushButton(parent)
-    {
-        setObjectName("algoBox");
-        setCursor(Qt::PointingHandCursor);
-        setFixedHeight(Ui::px(48));
-
-        // Chevron overlay in the right padding (the button text stays left).
-        auto* hl = new QHBoxLayout(this);
-        hl->setContentsMargins(0, 0, Ui::px(14), 0);
-        hl->addStretch(1);
-        m_arrow = new QLabel;
-        m_arrow->setAttribute(Qt::WA_TransparentForMouseEvents);
-        m_arrow->setStyleSheet("background:transparent; border:none;");
-        hl->addWidget(m_arrow);
-        setArrowOpen(false);
-
-        connect(this, &QPushButton::clicked, this, [this]() { openPopup(); });
-        setValue(DitherAlgorithm::FloydSteinberg);
+    QVector<PopupPickerEntry> out;
+    for (const auto& e : kAlgoEntries) {
+        if (e.label == nullptr)
+            out.push_back({ QVariant(), QString(), QString::fromUtf8(e.description), QString() });
+        else
+            out.push_back({ int(e.algo), QString::fromUtf8(e.label), QString(),
+                             QString::fromUtf8(e.description) });
     }
-
-    DitherAlgorithm value() const { return m_value; }
-
-    void setValue(DitherAlgorithm a)   // silent — no onSelected
-    {
-        m_value = a;
-        for (const auto& e : kAlgoEntries)
-            if (e.label && e.algo == a) { setText(QString::fromUtf8(e.label)); break; }
-    }
-
-private:
-    void setArrowOpen(bool open)
-    {
-        m_arrow->setPixmap(QIcon(open ? ":/icons/arrow_up.svg" : ":/icons/arrow.svg")
-                               .pixmap(Ui::px(14), Ui::px(8)));
-    }
-
-    void openPopup()
-    {
-        auto* pop = new QFrame(this, Qt::Popup);
-        pop->setObjectName("algoPopup");
-        pop->setAttribute(Qt::WA_DeleteOnClose);
-
-        auto* gl = new QGridLayout(pop);
-        gl->setContentsMargins(Ui::px(12), Ui::px(12), Ui::px(12), Ui::px(12));
-        gl->setHorizontalSpacing(Ui::px(10));
-        gl->setVerticalSpacing(Ui::px(10));
-
-        int row = 0, col = 0;
-        for (const auto& e : kAlgoEntries) {
-            if (e.label == nullptr) {                       // group header pill
-                if (col) { ++row; col = 0; }
-                auto* h = new QLabel(QString::fromUtf8(e.description));
-                h->setObjectName("algoHeader");
-                h->setAlignment(Qt::AlignCenter);
-                gl->addWidget(h, row++, 0, 1, 2);
-            } else {
-                auto* b = new QPushButton(QString::fromUtf8(e.label));
-                b->setObjectName("algoCell");
-                b->setCursor(Qt::PointingHandCursor);
-                b->setCheckable(true);
-                b->setChecked(e.algo == m_value);
-                b->setToolTip(QString::fromUtf8(e.description));
-                b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-                const DitherAlgorithm algo = e.algo;
-                connect(b, &QPushButton::clicked, this, [this, algo, pop]() {
-                    pop->close();
-                    if (algo == m_value) return;
-                    setValue(algo);
-                    if (onSelected) onSelected(algo);
-                });
-                gl->addWidget(b, row, col);
-                if (++col == 2) { col = 0; ++row; }
-            }
-        }
-
-        pop->setMinimumWidth(width());
-        pop->adjustSize();
-
-        // Below the box; pulled above it if it would run off the screen.
-        QPoint pos = mapToGlobal(QPoint(0, height() + Ui::px(4)));
-        const QRect avail = screen()->availableGeometry();
-        if (pos.y() + pop->height() > avail.bottom())
-            pos.setY(qMax(avail.top(),
-                          mapToGlobal(QPoint(0, 0)).y() - pop->height() - Ui::px(4)));
-        if (pos.x() + pop->width() > avail.right())
-            pos.setX(avail.right() - pop->width());
-        pop->move(pos);
-
-        setArrowOpen(true);
-        connect(pop, &QObject::destroyed, this, [this]() { setArrowOpen(false); });
-        pop->show();
-    }
-
-    QLabel*         m_arrow = nullptr;
-    DitherAlgorithm m_value = DitherAlgorithm::FloydSteinberg;
-};
+    return out;
+}
 
 } // namespace
 
@@ -715,6 +646,7 @@ class DitherPage : public QWidget
 {
 public:
     std::function<void()> onChanged;
+    std::function<void()> onBlendChanged;
 
     DitherPage(QWidget* parent = nullptr)
         : QWidget(parent)
@@ -731,7 +663,9 @@ public:
             sl->setSpacing(10);
 
             sl->addWidget(makeParamLabel("Algorithm"));
-            m_algorithm = new AlgoPicker;
+            m_algorithm = new PopupPicker(1);
+            m_algorithm->setEntries(algoPickerEntries());
+            m_algorithm->setValue(int(DitherAlgorithm::FloydSteinberg));
             sl->addWidget(m_algorithm);
 
             // Per-algorithm description label.
@@ -834,7 +768,7 @@ public:
             updatePatternRow();
             sl->addWidget(m_patternRow);
 
-            m_algorithm->onSelected = [this](DitherAlgorithm) {
+            m_algorithm->onSelected = [this](QVariant) {
                 updateConditionalRows();
                 updateDescription();
                 fire();
@@ -870,6 +804,15 @@ public:
                 pl->addWidget(r);
             }
             m_threshold->setVisible(false);   // shown only for the Threshold algorithm
+
+            pl->addWidget(makeParamLabel("Fusion"));
+            m_fusion = new PopupPicker(1);
+            m_fusion->setEntries(blendPickerEntries());
+            m_fusion->setValue(int(BlendMode::Normal));
+            m_fusion->onSelected = [this](QVariant) {
+                if (!m_updating && onBlendChanged) onBlendChanged();
+            };
+            pl->addWidget(m_fusion);
 
             auto* row = new QHBoxLayout;
             row->setContentsMargins(0, 0, 0, 0);
@@ -909,7 +852,7 @@ public:
     void setSettings(const DitherSettings& s)
     {
         m_updating = true;
-        m_algorithm->setValue(s.algorithm);   // silent
+        m_algorithm->setValue(int(s.algorithm));   // silent
 
         updateConditionalRows();
         updateDescription();
@@ -942,10 +885,13 @@ public:
         m_updating = false;
     }
 
+    BlendMode blend() const { return BlendMode(m_fusion->value().toInt()); }
+    void setBlend(BlendMode m) { m_fusion->setValue(int(m)); }
+
 private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
-    DitherAlgorithm currentAlgorithm() const { return m_algorithm->value(); }
+    DitherAlgorithm currentAlgorithm() const { return DitherAlgorithm(m_algorithm->value().toInt()); }
 
     void updateDescription()
     {
@@ -999,7 +945,7 @@ private:
         }
     }
 
-    AlgoPicker*      m_algorithm  = nullptr;
+    PopupPicker*     m_algorithm  = nullptr;
     QLabel*          m_description = nullptr;
     QWidget*         m_matrixRow  = nullptr;
     NoWheelComboBox* m_matrix     = nullptr;
@@ -1018,6 +964,7 @@ private:
     SliderRow*       m_strength   = nullptr;
     SliderRow*       m_threshold  = nullptr;
     SliderRow*       m_levels     = nullptr;
+    PopupPicker*     m_fusion       = nullptr;
     DragSpinBox*     m_opacity      = nullptr;
     DragSpinBox*     m_cornerRadius = nullptr;
     bool m_updating = false;
@@ -1031,6 +978,7 @@ class AsciiPage : public QWidget
 {
 public:
     std::function<void()> onChanged;
+    std::function<void()> onBlendChanged;
 
     AsciiPage(QWidget* parent = nullptr)
         : QWidget(parent)
@@ -1047,10 +995,16 @@ public:
             sl->setSpacing(8);
 
             sl->addWidget(makeParamLabel("Charset"));
-            m_charset = new NoWheelComboBox;
-            for (const auto& preset : asciiCharsetPresets())
-                m_charset->addItem(preset.name);
-            m_charset->addItem("Custom");
+            m_charset = new PopupPicker(1);
+            {
+                QVector<PopupPickerEntry> entries;
+                int idx = 0;
+                for (const auto& preset : asciiCharsetPresets())
+                    entries.push_back({ idx++, preset.name, QString(), preset.chars });
+                entries.push_back({ idx, "Custom", QString(), QString() });
+                m_charset->setEntries(entries);
+                m_charset->setValue(0);
+            }
             sl->addWidget(m_charset);
 
             m_customEdit = new QLineEdit;
@@ -1064,7 +1018,7 @@ public:
             auto* fontRow = new QHBoxLayout;
             fontRow->setContentsMargins(0, 0, 0, 0);
             fontRow->setSpacing(6);
-            m_font = new NoWheelComboBox;
+            m_font = new PopupPicker(1);
             {
                 QStringList fams;
                 for (const QString& f : QFontDatabase::families())
@@ -1072,13 +1026,12 @@ public:
                         fams << f;
                 if (!fams.contains("Funnel Display")) fams << "Funnel Display";
                 fams.sort(Qt::CaseInsensitive);
-                m_font->addItems(fams);
-                m_font->setCurrentText("Consolas");
+                QVector<PopupPickerEntry> entries;
+                for (const QString& f : fams)
+                    entries.push_back({ f, f, QString(), QString() });
+                m_font->setEntries(entries);
+                m_font->setValue("Consolas");
             }
-            // Long family names must not widen the page past the 70px gutter:
-            // cap the closed box's minimum width (the popup still shows full names).
-            m_font->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-            m_font->setMinimumContentsLength(6);
             m_font->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             m_font->setMinimumWidth(Ui::px(60));
             m_weight = new NoWheelComboBox;
@@ -1112,14 +1065,12 @@ public:
             }
             sl->addLayout(toggleRow);
 
-            connect(m_charset, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int idx) {
-                m_customEdit->setVisible(idx >= int(asciiCharsetPresets().size()));
+            m_charset->onSelected = [this](QVariant v) {
+                m_customEdit->setVisible(v.toInt() >= int(asciiCharsetPresets().size()));
                 fire();
-            });
+            };
             connect(m_customEdit, &QLineEdit::textChanged, this, [this](const QString&) { fire(); });
-            connect(m_font, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int) { fire(); });
+            m_font->onSelected = [this](QVariant) { fire(); };
             connect(m_weight, QOverload<int>::of(&QComboBox::currentIndexChanged),
                     this, [this](int) { fire(); });
             connect(m_invert, &QPushButton::toggled, this, [this](bool) { fire(); });
@@ -1145,6 +1096,15 @@ public:
                 r->onValueChanged = [this](int) { fire(); };
                 pl->addWidget(r);
             }
+
+            pl->addWidget(makeParamLabel("Fusion"));
+            m_fusion = new PopupPicker(1);
+            m_fusion->setEntries(blendPickerEntries());
+            m_fusion->setValue(int(BlendMode::Normal));
+            m_fusion->onSelected = [this](QVariant) {
+                if (!m_updating && onBlendChanged) onBlendChanged();
+            };
+            pl->addWidget(m_fusion);
         }
         auto* paramsSec = new PanelSection("Parameters", /*collapsible*/ false, true);
         paramsSec->body()->addWidget(paramsContent);
@@ -1155,12 +1115,12 @@ public:
     {
         static const int kWeights[] = { 400, 500, 600, 700 };
         AsciiSettings s;
-        s.charsetPreset  = m_charset->currentIndex();
+        s.charsetPreset  = m_charset->value().toInt();
         s.customCharset  = m_customEdit->text();
         s.cellSize       = m_cellSize->value();
         s.gamma          = m_gamma->value() / 100.0f;
         s.invert         = m_invert->isChecked();
-        s.fontFamily     = m_font->currentText();
+        s.fontFamily     = m_font->value().toString();
         s.fontWeight     = kWeights[qBound(0, m_weight->currentIndex(), 3)];
         s.edges          = m_edges->value();
         s.cellBackground = m_cellBg->isChecked();
@@ -1170,9 +1130,7 @@ public:
     void setSettings(const AsciiSettings& s)
     {
         m_updating = true;
-        m_charset->blockSignals(true);
-        m_charset->setCurrentIndex(qBound(0, s.charsetPreset, m_charset->count() - 1));
-        m_charset->blockSignals(false);
+        m_charset->setValue(qBound(0, s.charsetPreset, int(asciiCharsetPresets().size())));
         m_customEdit->blockSignals(true);
         m_customEdit->setText(s.customCharset);
         m_customEdit->blockSignals(false);
@@ -1180,9 +1138,7 @@ public:
         m_cellSize->setValue(s.cellSize);
         m_gamma->setValue(qRound(s.gamma * 100));
         m_edges->setValue(s.edges);
-        m_font->blockSignals(true);
-        m_font->setCurrentText(s.fontFamily);
-        m_font->blockSignals(false);
+        m_font->setValue(s.fontFamily);
         m_weight->blockSignals(true);
         int wi = 2;
         if      (s.fontWeight <= 400) wi = 0;
@@ -1200,18 +1156,22 @@ public:
         m_updating = false;
     }
 
+    BlendMode blend() const { return BlendMode(m_fusion->value().toInt()); }
+    void setBlend(BlendMode m) { m_fusion->setValue(int(m)); }
+
 private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
-    NoWheelComboBox* m_charset    = nullptr;
+    PopupPicker*     m_charset    = nullptr;
     QLineEdit*       m_customEdit = nullptr;
-    NoWheelComboBox* m_font       = nullptr;
+    PopupPicker*     m_font       = nullptr;
     NoWheelComboBox* m_weight     = nullptr;
     QPushButton*     m_invert     = nullptr;
     QPushButton*     m_cellBg     = nullptr;
     SliderRow*       m_cellSize   = nullptr;
     SliderRow*       m_gamma      = nullptr;
     SliderRow*       m_edges      = nullptr;
+    PopupPicker*     m_fusion     = nullptr;
     bool m_updating = false;
 };
 
@@ -1297,6 +1257,12 @@ ModePanel::ModePanel(QWidget* parent)
     m_asciiPage->onChanged    = [this]() { if (!m_updating) emit paramsChanged(); };
     m_halftonePage->onBlendChanged = [this]() {
         if (!m_updating) emit blendChanged(m_halftonePage->blend());
+    };
+    m_ditherPage->onBlendChanged = [this]() {
+        if (!m_updating) emit blendChanged(m_ditherPage->blend());
+    };
+    m_asciiPage->onBlendChanged = [this]() {
+        if (!m_updating) emit blendChanged(m_asciiPage->blend());
     };
 
     cl->addWidget(m_halftonePage);
@@ -1440,6 +1406,8 @@ void ModePanel::setFromLayer(const Layer& layer)
     m_ditherPage->setSettings(layer.dither);
     m_asciiPage->setSettings(layer.ascii);
     m_halftonePage->setBlend(layer.blend);
+    m_ditherPage->setBlend(layer.blend);
+    m_asciiPage->setBlend(layer.blend);
 
     // Fill (tonal) mirrors the active layer's mode tonal.
     TonalSettings tonal;

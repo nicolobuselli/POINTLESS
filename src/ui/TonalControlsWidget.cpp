@@ -112,29 +112,35 @@ public:
 
     void setCurrentName(const QString& n) { m_currentName = n; }
 
-    void showBelow(QWidget* anchor)
+    // Opens to the left of the whole right column (over the canvas), top-
+    // aligned with the header — same placement convention as PopupPicker,
+    // so long palette names have room to breathe instead of squeezing into
+    // the narrow column.
+    void showLeftOfColumn(QWidget* anchor)
     {
         m_pendingDelete = -1;
         reload();
         build();
-        // Anchored under the palette box (so it stays within the right panel)
-        // but wider than the box so names are readable; kept fully on-screen,
-        // flipping above the box if it would overflow the bottom.
         setFixedWidth(Ui::px(330));
         // Size the scroll to its content (QScrollArea's own sizeHint is tiny,
         // which opened the popup one-row short); cap it, then scroll.
         const int content = m_scroll->widget()->sizeHint().height() + Ui::px(4);
         m_scroll->setFixedHeight(qMin(content, Ui::px(680)));
         adjustSize();
+
+        QWidget* column = anchor;
+        while (column->parentWidget() && column->objectName() != "sidePanel")
+            column = column->parentWidget();
+        const int columnLeftGlobalX = column->mapToGlobal(QPoint(0, 0)).x();
+
         QScreen* scr = anchor->screen() ? anchor->screen() : QGuiApplication::primaryScreen();
         const QRect a = scr->availableGeometry();
-        const QPoint below = anchor->mapToGlobal(QPoint(0, anchor->height() + Ui::px(4)));
-        int x = qBound(a.left() + 6, below.x(), a.right() - width() - 6);
-        int y = below.y();
-        if (y + height() > a.bottom() - 6) {
-            const int above = anchor->mapToGlobal(QPoint(0, 0)).y() - height() - Ui::px(4);
-            y = (above >= a.top() + 6) ? above : qMax(a.top() + 6, a.bottom() - 6 - height());
-        }
+        int x = columnLeftGlobalX - width();
+        int y = anchor->mapToGlobal(QPoint(0, 0)).y();
+        if (x < a.left() + 6)              x = a.left() + 6;
+        if (x + width() > a.right() - 6)   x = a.right() - 6 - width();
+        if (y + height() > a.bottom() - 6) y = a.bottom() - 6 - height();
+        if (y < a.top() + 6)               y = a.top() + 6;
         move(x, y);
         show();
     }
@@ -744,7 +750,7 @@ void TonalControlsWidget::openPalettePopup()
     if (QDateTime::currentMSecsSinceEpoch() - m_lastPopupClose < 200) return;
     m_paletteChevron->setDirection(ChevronButton::Up);
     m_palettePopup->setCurrentName(matchLibraryName());
-    m_palettePopup->showBelow(m_paletteHeader);
+    m_palettePopup->showLeftOfColumn(m_paletteHeader);
 }
 
 void TonalControlsWidget::applyPalette(const std::vector<QColor>& colors, const QString& name,

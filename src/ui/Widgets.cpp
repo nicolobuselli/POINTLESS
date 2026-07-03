@@ -22,6 +22,9 @@
 #include <QStyle>
 #include <QScrollBar>
 #include <QAbstractScrollArea>
+#include <QScrollArea>
+#include <QGridLayout>
+#include <QHideEvent>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
 #include <QTimer>
@@ -1347,4 +1350,189 @@ void installOverlayScrollbar(QAbstractScrollArea* area)
     eff->setOpacity(0.0);
     over->setGraphicsEffect(eff);
     new OverlayScrollCtl(area, over, eff);
+}
+
+// ============================================================
+//  PopupPicker
+// ============================================================
+
+namespace {
+// Reports when the popup closes, so the toggle button can tell "outside
+// click closed me" apart from "user wants me open again".
+class PopupPickerFrame : public QFrame {
+public:
+    std::function<void()> onHide;
+    using QFrame::QFrame;
+protected:
+    void hideEvent(QHideEvent* e) override { QFrame::hideEvent(e); if (onHide) onHide(); }
+};
+} // namespace
+
+PopupPicker::PopupPicker(int columns, QWidget* parent)
+    : QPushButton(parent), m_columns(columns)
+{
+    setObjectName("algoBox");
+    setCursor(Qt::PointingHandCursor);
+    setFixedHeight(Ui::px(48));
+
+    auto* hl = new QHBoxLayout(this);
+    hl->setContentsMargins(0, 0, Ui::px(14), 0);
+    hl->addStretch(1);
+    m_arrow = new QLabel;
+    m_arrow->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_arrow->setStyleSheet("background:transparent; border:none;");
+    hl->addWidget(m_arrow);
+    setArrowOpen(false);
+
+    connect(this, &QPushButton::clicked, this, [this]() {
+        // Qt closes the popup (outside-click grab) *before* this button's
+        // own clicked fires for the same press — without this guard the
+        // click that closes it immediately reopens it.
+        if (m_lastCloseTimer.isValid() && m_lastCloseTimer.elapsed() < 250)
+            return;
+        openPopup();
+    });
+}
+
+void PopupPicker::setEntries(const QVector<PopupPickerEntry>& entries)
+{
+    m_entries = entries;
+}
+
+void PopupPicker::setValue(const QVariant& v)
+{
+    m_value = v;
+    for (const auto& e : m_entries)
+        if (!e.label.isEmpty() && e.value == v) { setText(e.label); break; }
+}
+
+void PopupPicker::setArrowOpen(bool open)
+{
+    m_arrow->setPixmap(QIcon(open ? ":/icons/arrow_up.svg" : ":/icons/arrow.svg")
+                           .pixmap(Ui::px(14), Ui::px(8)));
+}
+
+void PopupPicker::openPopup()
+{
+    auto* pop = new PopupPickerFrame(this, Qt::Popup);
+    pop->setObjectName("algoPopup");
+    pop->setAttribute(Qt::WA_DeleteOnClose);
+    pop->onHide = [this]() { m_lastCloseTimer.start(); };
+
+    auto* outer = new QVBoxLayout(pop);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* scroll = new QScrollArea;
+    scroll->setObjectName("algoPopupScroll");
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    outer->addWidget(scroll);
+
+    auto* body = new QWidget;
+    body->setObjectName("algoPopupBody");
+    auto* gl = new QGridLayout(body);
+    gl->setContentsMargins(Ui::px(12), Ui::px(12), Ui::px(12), Ui::px(12));
+    gl->setHorizontalSpacing(Ui::px(10));
+    gl->setVerticalSpacing(Ui::px(10));
+    scroll->setWidget(body);
+
+    QVector<QWidget*> measureWidgets;   // cells + headers, for true sizeHint() width
+
+    int row = 0, col = 0;
+    for (const auto& e : m_entries) {
+        if (e.label.isEmpty()) {                        // group header pill
+            if (col) { ++row; col = 0; }
+            auto* h = new QLabel(e.header);
+            h->setObjectName("algoHeader");
+            h->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            gl->addWidget(h, row++, 0, 1, m_columns);
+            measureWidgets.push_back(h);
+        } else {
+            auto* b = new QPushButton(e.label);
+            b->setObjectName("algoCell");
+            b->setCursor(Qt::PointingHandCursor);
+            b->setCheckable(true);
+            b->setChecked(e.value == m_value);
+            if (!e.tooltip.isEmpty()) b->setToolTip(e.tooltip);
+            b->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+            const QVariant val = e.value;
+            connect(b, &QPushButton::clicked, this, [this, val, pop]() {
+                pop->close();
+                if (val == m_value) return;
+                setValue(val);
+                if (onSelected) onSelected(val);
+            });
+            // AlignLeft keeps the button hugging its own text (a tight pill)
+            // instead of stretching its border to the shared column width.
+            gl->addWidget(b, row, col, Qt::AlignLeft | Qt::AlignVCenter);
+            measureWidgets.push_back(b);
+            if (++col == m_columns) { col = 0; ++row; }
+        }
+    }
+
+    pop->layout()->activate();
+
+    QScreen* scr = screen() ? screen() : QGuiApplication::primaryScreen();
+    const QRect avail = scr->availableGeometry();
+
+    // Short lists size the popup down to fit; long lists cap at a fixed
+    // height (roughly the old two-column Algorithm popup's height) and
+    // scroll for the rest.
+    constexpr int kMaxPopupContentHeight = 700;
+    const int contentH = body->sizeHint().height() + Ui::px(4);
+    const int maxH = qMin(Ui::px(kMaxPopupContentHeight), avail.height() - Ui::px(24));
+    const bool willScroll = contentH > maxH;
+    scroll->setFixedHeight(qMin(contentH, maxH));
+
+    // Width: sizeHint() lies here — the native style pads checkable buttons
+    // far beyond the QSS cell look. Measure each cell's text with its real
+    // post-QSS font (ensurePolished applies the stylesheet font), add the
+    // known QSS horizontal padding (s(15) each side, see #algoCell/#algoHeader),
+    // and pin the widget to exactly that, so every pill hugs its own text.
+    // When the list will scroll, the vertical scrollbar (10px, see QSS) is
+    // reserved on top of the widest pill — otherwise QScrollArea shrinks the
+    // viewport by the scrollbar's width, squeezing text against it.
+    const int cellPaddingX = Ui::px(15) * 2 + 2 /*cell border*/;
+    int maxCellW = 0;
+    for (QWidget* w : measureWidgets) {
+        w->ensurePolished();
+        const QString text = w->property("text").toString();
+        maxCellW = qMax(maxCellW, w->fontMetrics().horizontalAdvance(text) + cellPaddingX);
+    }
+    for (QWidget* w : measureWidgets)   // uniform boxes, text left-aligned via QSS
+        w->setFixedWidth(maxCellW);
+    const int gridMarginsX = Ui::px(12) * 2;   // grid body left+right margins
+    int contentW = maxCellW + gridMarginsX + 2 /*border*/;
+    if (willScroll) contentW += Ui::px(10);
+    scroll->setFixedWidth(qMax(contentW, Ui::px(100)));
+    // NOT adjustSize(): for top-level widgets whose layout expands
+    // horizontally, Qt clamps adjustSize() to a 200px minimum width
+    // (QWidgetPrivate::adjustedSize), silently re-widening small popups.
+    pop->resize(pop->sizeHint());
+
+    // Right-aligned to the right column's left edge, top-aligned with the
+    // box, so the popup sits over the canvas rather than overlapping the
+    // (narrow) column.
+    QWidget* column = this;
+    while (column->parentWidget() && column->objectName() != "sidePanel")
+        column = column->parentWidget();
+    const int columnLeftGlobalX = column->mapToGlobal(QPoint(0, 0)).x();
+
+    QPoint pos(columnLeftGlobalX - pop->width(), mapToGlobal(QPoint(0, 0)).y());
+    if (pos.y() + pop->height() > avail.bottom())
+        pos.setY(avail.bottom() - pop->height());
+    if (pos.y() < avail.top())
+        pos.setY(avail.top());
+    if (pos.x() < avail.left())
+        pos.setX(avail.left());
+    if (pos.x() + pop->width() > avail.right())
+        pos.setX(avail.right() - pop->width());
+    pop->move(pos);
+
+    setArrowOpen(true);
+    connect(pop, &QObject::destroyed, this, [this]() { setArrowOpen(false); });
+    pop->show();
 }

@@ -9,6 +9,9 @@
 #include <QPushButton>
 #include <QLineEdit>
 #include <QColor>
+#include <QVariant>
+#include <QVector>
+#include <QElapsedTimer>
 #include <functional>
 #include <array>
 
@@ -232,6 +235,42 @@ private:
     QLineEdit*         m_opacityInput = nullptr;
     float m_h = 0.f, m_s = 1.f, m_v = 1.f, m_a = 1.f;
     QPoint m_dragOffset;
+};
+
+// ── PopupPicker ──────────────────────────────────────────────
+// Combo-look button that opens a boxed grid popup of value entries, with
+// optional pill group headers (used for Algorithm, Shape, Grid, Fusion,
+// Charset, Font…). The popup opens to the left of the ancestor named
+// "sidePanel" (the right mode column), top-aligned with the button, so long
+// option names/lists have room over the canvas instead of squeezing into the
+// narrow column. Scrolls internally if the entry list doesn't fit on screen.
+
+struct PopupPickerEntry {
+    QVariant value;    // selectable value; ignored for headers
+    QString  label;    // cell text; empty marks this entry as a header
+    QString  header;   // header pill text (used when label is empty)
+    QString  tooltip;  // optional per-cell tooltip
+};
+
+class PopupPicker : public QPushButton {
+public:
+    std::function<void(QVariant)> onSelected;   // user pick only, not setValue
+
+    explicit PopupPicker(int columns = 2, QWidget* parent = nullptr);
+
+    void setEntries(const QVector<PopupPickerEntry>& entries);
+    QVariant value() const { return m_value; }
+    void setValue(const QVariant& v);   // silent — no onSelected
+
+private:
+    void setArrowOpen(bool open);
+    void openPopup();
+
+    int                        m_columns;
+    QVector<PopupPickerEntry>  m_entries;
+    QVariant                   m_value;
+    QLabel*                    m_arrow = nullptr;
+    QElapsedTimer              m_lastCloseTimer;
 };
 
 // ── Small helpers ────────────────────────────────────────────
