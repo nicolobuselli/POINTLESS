@@ -129,6 +129,9 @@ void compositeManual(QImage& base, const QImage& layer, BlendMode mode)
 {
     QImage b = base.convertToFormat(QImage::Format_ARGB32);
     QImage s = layer.convertToFormat(QImage::Format_ARGB32);
+    // convertToFormat is a shallow copy when the format already matches; the
+    // parallel scanLine() writes below must not copy-on-write across threads.
+    b.detach();
 
     const int w = b.width();
     const int h = b.height();

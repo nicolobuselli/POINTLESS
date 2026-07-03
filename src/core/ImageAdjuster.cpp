@@ -21,6 +21,11 @@ inline quint32 hash2d(quint32 x, quint32 y)
 // Parallel per-pixel LUT on RGB, alpha preserved (shared by the point ops).
 void applyLut(QImage& img, const uint8_t* lut)
 {
+    // If img still shares data (convertToFormat on an already-ARGB32 source is
+    // a shallow copy), the non-const scanLine() below would copy-on-write
+    // *inside* the parallel loop: N threads racing detach() = heap corruption.
+    // Detach once here, on the calling thread. Same guard in every mutator below.
+    img.detach();
     const int w = img.width(), h = img.height();
     parallelRows(h, [&](int y0, int y1) {
         for (int y = y0; y < y1; ++y) {
@@ -111,6 +116,7 @@ void ImageAdjuster::boxBlur(QImage& img, int radius)
     const int w = img.width();
     const int h = img.height();
     if (w < 3 || h < 3) return;
+    img.detach();   // see applyLut: no COW inside parallel loops
 
     std::vector<quint32> tmp(size_t(w) * size_t(h));
 
@@ -166,6 +172,7 @@ void ImageAdjuster::boxBlur(QImage& img, int radius)
 
 void ImageAdjuster::blend(QImage& dst, const QImage& other, float t)
 {
+    dst.detach();   // see applyLut: no COW inside parallel loops
     const int w = dst.width(), h = dst.height();
     const int ti = qBound(0, qRound(t * 256.0f), 256);
     parallelRows(h, [&](int y0, int y1) {
@@ -227,6 +234,7 @@ void ImageAdjuster::applyLevels(QImage& img, int blackPoint, float midPoint, int
 void ImageAdjuster::saturate(QImage& img, int saturation)
 {
     const int s = qBound(0, 100 + saturation, 200);   // 0..200, 100 = identity
+    img.detach();   // see applyLut: no COW inside parallel loops
     const int w = img.width(), h = img.height();
     parallelRows(h, [&](int y0, int y1) {
     for (int y = y0; y < y1; ++y) {
@@ -268,6 +276,7 @@ void ImageAdjuster::edgeEnhance(QImage& img, int amount)
 
     // Blend the Laplacian response back; scale so 100% gives a strong but not
     // destructive boost (max response ~4*255=1020, we add at most ~30% of that).
+    img.detach();   // see applyLut: no COW inside parallel loops
     const float strength = amount / 100.0f * 0.30f;
     parallelRows(h, [&](int y0, int y1) {
     for (int y = y0; y < y1; ++y) {
@@ -289,6 +298,7 @@ void ImageAdjuster::unsharpMask(QImage& img, int strength, int radius)
     QImage blurred = img;
     boxBlur(blurred, qMax(1, radius));
 
+    img.detach();   // see applyLut: `blurred = img` above re-shares the buffer
     const float amount = strength / 100.0f * 1.5f;
     const int w = img.width(), h = img.height();
     parallelRows(h, [&](int y0, int y1) {
@@ -308,6 +318,7 @@ void ImageAdjuster::unsharpMask(QImage& img, int strength, int radius)
 void ImageAdjuster::addGrain(QImage& img, int amount)
 {
     const float amp = amount * 1.6f;
+    img.detach();   // see applyLut: no COW inside parallel loops
     const int w = img.width(), h = img.height();
     parallelRows(h, [&](int y0, int y1) {
     for (int y = y0; y < y1; ++y) {
@@ -343,6 +354,7 @@ void ImageAdjuster::applyThreshold(QImage& img, int threshold)
     // threshold == 0 means disabled (checked by caller, but guard here too)
     if (threshold <= 0) return;
 
+    img.detach();   // see applyLut: no COW inside parallel loops
     const int w = img.width(), h = img.height();
     parallelRows(h, [&](int y0, int y1) {
     for (int y = y0; y < y1; ++y) {
