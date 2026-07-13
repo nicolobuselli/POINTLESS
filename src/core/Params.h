@@ -80,6 +80,7 @@ struct Adjustments {
     int sharpenStrength = 0;    // 0..100
     int sharpenRadius   = 1;    // 1..10 px
     int edgeEnhancement = 0;    // 0..100
+    bool invert         = false; // invert RGB (applied before blur)
     int blur            = 0;    // 0..100
     int grain           = 0;    // 0..100   (was: noise)
     int posterize       = 256;  // 2..256   (256 = disabled)
@@ -95,6 +96,7 @@ inline bool operator==(const Adjustments& a, const Adjustments& b) {
         && a.sharpenStrength == b.sharpenStrength
         && a.sharpenRadius == b.sharpenRadius
         && a.edgeEnhancement == b.edgeEnhancement
+        && a.invert == b.invert
         && a.blur == b.blur && a.grain == b.grain
         && a.posterize == b.posterize && a.threshold == b.threshold;
 }
@@ -393,11 +395,13 @@ struct AsciiSettings {
     QString customCharset;
     int     cellSize      = 12;       // 4..48 px
     float   gamma         = 1.0f;
-    bool    invert        = false;
     QString fontFamily    = QStringLiteral("Consolas");
     int     fontWeight    = 600;      // QFont::Weight (400/500/600/700)
     int     edges         = 0;        // 0..100 — contour glyphs (/ - \ |); 0 = off
-    bool    cellBackground = false;   // fill the cell with the ink, punch the glyph out
+    int     stipple       = 0;        // 0..100 — organic per-cell darkness jitter; 0 = off
+    bool    orderedDither = false;    // Bayer-threshold glyph pick instead of nearest-coverage
+    int     contour       = 0;        // 0..100 — isoline-only mask (topographic look); 0 = off
+    int     hatching      = 0;        // 0..100 — directional engraving strokes shading shadows; 0 = off
 
     TonalSettings tonal { ToneMode::FixedTones,
                           { ToneEntry{ QColor(0xC0, 0xC0, 0xC0), 0 } } };
@@ -416,9 +420,10 @@ struct AsciiSettings {
 inline bool operator==(const AsciiSettings& a, const AsciiSettings& b) {
     return a.charsetPreset == b.charsetPreset && a.customCharset == b.customCharset
         && a.cellSize == b.cellSize && a.gamma == b.gamma
-        && a.invert == b.invert
         && a.fontFamily == b.fontFamily && a.fontWeight == b.fontWeight
-        && a.edges == b.edges && a.cellBackground == b.cellBackground
+        && a.edges == b.edges && a.stipple == b.stipple
+        && a.orderedDither == b.orderedDither
+        && a.contour == b.contour && a.hatching == b.hatching
         && a.tonal == b.tonal;
 }
 
@@ -439,7 +444,7 @@ struct LayerTransform {
     float xPct     = 0.0f;     // -1..1 — horizontal centre offset (fraction of frame)
     float yPct     = 0.0f;     // -1..1 — vertical centre offset
     float scalePct = 100.0f;   // uniform scale (100 = native pixels)
-    float rotation = 0.0f;     // 0..360 deg
+    float rotation = 0.0f;     // -180..180 deg
     bool  flipH    = false;    // mirror about the vertical (y) axis — left/right
     bool  flipV    = false;    // mirror about the horizontal (x) axis — top/bottom
 };

@@ -340,8 +340,14 @@ PatternMask patternMask(const QString& path)
         }
         std::vector<int> order(static_cast<size_t>(N));
         std::iota(order.begin(), order.end(), 0);
+        // Descending luminance: the pattern's darkest pixels (where its own
+        // "ink" is) get the HIGHEST threshold, so they're the easiest to ink
+        // (lum < t is satisfied over the widest source-tone range) — matching
+        // the ink rule `lum < t → ink` used everywhere else. Ascending order
+        // would ink the pattern's brightest pixels instead, rendering the
+        // tonal negative of the loaded texture.
         std::stable_sort(order.begin(), order.end(),
-                         [&](int a, int b) { return lum[size_t(a)] < lum[size_t(b)]; });
+                         [&](int a, int b) { return lum[size_t(a)] > lum[size_t(b)]; });
         m.t.resize(static_cast<size_t>(N));
         for (int r = 0; r < N; ++r)
             m.t[size_t(order[size_t(r)])] = (r + 0.5f) / float(N);
@@ -606,6 +612,25 @@ int DitherRenderer::paintMergedRects(const QImage& input, const DitherSettings& 
     const double cw = targetW / W, ch = targetH / H;
     const float  op = qBound(0.0f, s.opacity, 1.0f);
 
+    // Corner rounding (mirrors render()'s raster path): only the ink colour's
+    // region gets rounded, and only when there IS a single well-defined ink
+    // colour (Image-colors/Palette have none). Radius converts from output-px
+    // units (same as pixelSize) to the cell-unit space these paths are built
+    // in, so it matches the raster path's rounding exactly after the later
+    // cell→target scale.
+    const bool skipInk = (s.tonal.mode == ToneMode::ImageColors)
+                      || (s.tonal.mode == ToneMode::Palette);
+    quint32 inkRgb = 0;
+    bool hasInk = false;
+    if (!skipInk && !s.tonal.tones.empty()) {
+        const ToneEntry* darkest = &s.tonal.tones[0];
+        for (const auto& t : s.tonal.tones)
+            if (t.level < darkest->level) darkest = &t;
+        inkRgb = quint32(darkest->color.rgb()) & 0x00FFFFFFu;
+        hasInk = true;
+    }
+    const float crCells = qMin(s.cornerRadius, float(ps) * 0.5f) / float(qMax(1, ps));
+
     std::vector<char> used(size_t(W) * H, 0);
     auto px = [&](int x, int y) { return reinterpret_cast<const QRgb*>(grid.constScanLine(y))[x]; };
 
@@ -649,7 +674,9 @@ int DitherRenderer::paintMergedRects(const QImage& input, const DitherSettings& 
         if (op < 1.0f) col.setAlphaF(col.alphaF() * op);
         // simplified(): unite abutting/overlapping subpaths into the region's
         // outline, removing the internal seams the editor was drawing.
-        const QPainterPath outline = it.value().simplified();
+        QPainterPath outline = it.value().simplified();
+        if (s.cornerRadius > 0.0f && hasInk && (quint32(it.key()) & 0x00FFFFFFu) == inkRgb)
+            outline = roundCorners(outline, crCells);
         out.setBrush(col);
         out.drawPath(toTarget.map(outline));
     }

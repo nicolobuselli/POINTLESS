@@ -69,6 +69,13 @@ public:
     // for building the playback frame cache cheaply.
     static QImage renderPreview(const QImage& source, const SessionParams& params, int maxPx,
                                 const QHash<int, QImage>& layerSrc = {});
+    // Same as renderPreview, but reuses this instance's layer cache across
+    // repeated calls: a playback pre-render loop over many frames only pays
+    // for a full renderLayer() when a layer's content-affecting params (or
+    // scale) actually changed frame-to-frame — position/rotation/flip-only
+    // differences just recomposite the cached raster.
+    QImage renderPreviewCached(const QImage& source, const SessionParams& params, int maxPx,
+                               const QHash<int, QImage>& layerSrc = {});
     // One layer's renderer, into an open painter (used for SVG export).
     // `adjusted` must already have the layer's adjustments applied.
     static void   renderLayerInto(QPainter& painter, const QImage& adjusted,

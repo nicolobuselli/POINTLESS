@@ -1,10 +1,15 @@
 #pragma once
 
 #include "../core/Params.h"
+#include "../core/AnimParams.h"
 #include "Widgets.h"
 #include <QWidget>
 #include <QLineEdit>
 #include <QImage>
+#include <QSet>
+#include <QHash>
+
+class QPushButton;
 
 /**
  * AdjustmentsPanel (left column)
@@ -27,6 +32,15 @@ public:
     // Compute luminance histogram from source image and push to Levels widget.
     void setSourceImage(const QImage& img);
 
+    // Tint the label of every visible row whose ParamId is in the set (has a
+    // keyframe track on the active layer). Rows with no visible control
+    // (removed-from-UI Adjustments fields) are silently skipped.
+    void setAnimatedParams(const QSet<ParamId>& ids);
+
+    // Row widget → ParamId, for hover-to-keyframe ("I" key). Same rows as
+    // setAnimatedParams touches.
+    QHash<QWidget*, ParamId> paramWidgets() const;
+
 signals:
     void adjustmentsChanged();
     void resetRequested();
@@ -43,6 +57,7 @@ private:
     SliderRow* m_sharpenStrength  = nullptr;
     SliderRow* m_sharpenRadius    = nullptr;
     SliderRow* m_edgeEnhancement  = nullptr;
+    QPushButton* m_invert         = nullptr;
     SliderRow* m_blur             = nullptr;
     SliderRow* m_grain            = nullptr;
 

@@ -8,6 +8,7 @@
 #include <QMutex>
 #include <QPainter>
 #include <QtMath>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -149,22 +150,31 @@ const std::vector<float>& glyphCoverage(const QFont& font, const QString& charse
     return cache.insert(key, std::move(cov)).value();
 }
 
-// Fill the cell with the pen, then punch the glyph out (inverse video —
-// the glyph becomes a transparent window onto whatever is behind the layer).
 void drawCell(QPainter& output, const QRectF& rect, const QChar& c,
-              const QColor& pen, bool cellBackground)
+              const QColor& pen)
 {
-    if (cellBackground) {
-        output.fillRect(rect, pen);
-        if (c != QChar(' ')) {
-            output.setCompositionMode(QPainter::CompositionMode_Clear);
-            output.drawText(rect, Qt::AlignCenter | Qt::TextDontClip, QString(c));
-            output.setCompositionMode(QPainter::CompositionMode_SourceOver);
-        }
-    } else if (c != QChar(' ')) {
-        output.setPen(pen);
-        output.drawText(rect, Qt::AlignCenter | Qt::TextDontClip, QString(c));
-    }
+    output.setPen(pen);
+    output.drawText(rect, Qt::AlignCenter | Qt::TextDontClip, QString(c));
+}
+
+// Deterministic per-cell pseudo-random value (0..1), stable across renders —
+// used by Stipple so the noise doesn't flicker frame to frame.
+float cellNoise(int col, int row)
+{
+    quint32 h = quint32(col) * 374761393u + quint32(row) * 668265263u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    h ^= (h >> 16);
+    return float(h % 100000u) / 100000.0f;
+}
+
+// 4x4 Bayer matrix, normalised threshold per cell (0..1).
+float bayerThreshold(int col, int row)
+{
+    static const int kBayer4[4][4] = {
+        { 0, 8, 2,10}, {12, 4,14, 6},
+        { 3,11, 1, 9}, {15, 7,13, 5},
+    };
+    return (kBayer4[row & 3][col & 3] + 0.5f) / 16.0f;
 }
 
 // ============================================================
@@ -225,20 +235,19 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
                     const int x1 = cx + (dc + 1) * cw / 2;
                     if (x1 <= x0 || y1 <= y0) continue;
                     const float lum = cellLuminosity(rgb, x0, y0, x1 - x0, y1 - y0);
-                    float darkness  = params.invert ? lum : 1.0f - lum;
+                    float darkness  = 1.0f - lum;
                     darkness = std::pow(qBound(0.0f, darkness, 1.0f), invGamma);
                     if (darkness > kDotThr[dr][dc]) bits |= 1 << kDotBit[dr][dc];
                 }
             }
 
             const QChar glyph(0x2800 + bits);
-            if (bits == 0 && !params.cellBackground) continue;
+            if (bits == 0) continue;
 
             const float lumLin  = cellLuminosity(rgb, cx, cy, cw, ch);
             const float lumPerc = ColorMath::linearToSrgb8(lumLin) / 255.0f;
             const QColor pen    = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
-            drawCell(output, QRectF(cx, cy, cellW, cellH),
-                     bits == 0 ? QChar(' ') : glyph, pen, params.cellBackground);
+            drawCell(output, QRectF(cx, cy, cellW, cellH), glyph, pen);
         }
     }
 
@@ -283,6 +292,14 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
 
     const std::vector<float>& coverage = glyphCoverage(font, charset, cellW, cellH);
 
+    // Ascending-by-coverage index order, for Ordered dither's bracket search
+    // (the charset itself — presets or user-typed custom text — isn't
+    // guaranteed to already be light→dark).
+    std::vector<int> byCoverage(static_cast<size_t>(nChars));
+    for (int i = 0; i < nChars; ++i) byCoverage[size_t(i)] = i;
+    std::sort(byCoverage.begin(), byCoverage.end(),
+              [&](int a, int b) { return coverage[size_t(a)] < coverage[size_t(b)]; });
+
     // Pass 1 — per-cell perceptual luminosity grid (also feeds the Sobel
     // pass, which needs neighbour cells).
     std::vector<float> lumLinGrid(size_t(cols) * rows);
@@ -312,6 +329,43 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
         return lumPercGrid[size_t(qBound(0, row, rows - 1)) * cols
                          + qBound(0, col, cols - 1)];
     };
+    // Sobel gradient shared by Edges and Hatching (direction only, magnitude
+    // is used by Edges to gate its threshold).
+    auto sobel = [&](int col, int row, float& gx, float& gy) {
+        gx = lumAt(col + 1, row - 1) + 2.0f * lumAt(col + 1, row) + lumAt(col + 1, row + 1)
+           - lumAt(col - 1, row - 1) - 2.0f * lumAt(col - 1, row) - lumAt(col - 1, row + 1);
+        gy = lumAt(col - 1, row + 1) + 2.0f * lumAt(col, row + 1) + lumAt(col + 1, row + 1)
+           - lumAt(col - 1, row - 1) - 2.0f * lumAt(col, row - 1) - lumAt(col + 1, row - 1);
+    };
+    auto edgeDirGlyph = [&](float gx, float gy) -> QChar {
+        // Direction = perpendicular to the gradient (runs along the isophote,
+        // not across it); y grows downward, so gy's sign is flipped for screen
+        // angles.
+        float deg = qRadiansToDegrees(std::atan2(-gy, gx)) + 90.0f;
+        deg = std::fmod(std::fmod(deg, 180.0f) + 180.0f, 180.0f);
+        return kEdgeGlyphs[qRound(deg / 45.0f) % 4];
+    };
+
+    // Hatching — directional strokes shade the shadows (darkness above a
+    // threshold that falls as intensity rises), like copper-engraving
+    // cross-hatch; highlights stay untouched by the ramp above them.
+    const bool  hatchOn    = params.hatching > 0;
+    const float hatchThr   = 1.0f - qBound(0, params.hatching, 100) / 100.0f;
+    const float hatchCross = qMin(1.0f, hatchThr + 0.3f);   // darkest shadows → solid crosshatch
+
+    // Contour — isoline mask: a cell only draws (whatever glyph the rest of
+    // the pipeline picked) when its tonal band differs from a neighbour's,
+    // leaving flat regions blank (topographic-map look). Band count scales
+    // with intensity so higher values trace more (finer) isolines.
+    const bool contourOn = params.contour > 0;
+    const int  bands     = qBound(2, 2 + qRound(qBound(0, params.contour, 100) / 100.0f * 30.0f), 32);
+    auto bandAt = [&](int col, int row) {
+        return int(qBound(0.0f, lumAt(col, row), 0.999f) * bands);
+    };
+
+    // Stipple — deterministic per-cell darkness jitter; breaks up clean ramp
+    // bands into an organic, hand-stippled scatter.
+    const float stippleAmt = qBound(0, params.stipple, 100) / 100.0f * 0.5f;
 
     output.save();
     output.setClipRect(0, 0, imgW, imgH);
@@ -326,48 +380,79 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
             const int cx = col * cellW;
             const int cw = qMin(cellW, imgW - cx);
 
+            if (contourOn) {
+                const int b = bandAt(col, row);
+                const bool boundary = b != bandAt(col - 1, row) || b != bandAt(col + 1, row)
+                                    || b != bandAt(col, row - 1) || b != bandAt(col, row + 1);
+                if (!boundary) continue;
+            }
+
             const float lumLin  = lumLinGrid [size_t(row) * cols + col];
             const float lumPerc = lumPercGrid[size_t(row) * cols + col];
-            float darkness      = params.invert ? lumLin : 1.0f - lumLin;
+            float darkness      = 1.0f - lumLin;
             darkness            = std::pow(qBound(0.0f, darkness, 1.0f), invGamma);
+            if (stippleAmt > 0.0f)
+                darkness = qBound(0.0f, darkness + (cellNoise(col, row) - 0.5f) * stippleAmt, 1.0f);
 
             QChar c;
             bool  isEdge = false;
             if (edgesOn) {
-                const float gx =
-                      lumAt(col + 1, row - 1) + 2.0f * lumAt(col + 1, row) + lumAt(col + 1, row + 1)
-                    - lumAt(col - 1, row - 1) - 2.0f * lumAt(col - 1, row) - lumAt(col - 1, row + 1);
-                const float gy =
-                      lumAt(col - 1, row + 1) + 2.0f * lumAt(col, row + 1) + lumAt(col + 1, row + 1)
-                    - lumAt(col - 1, row - 1) - 2.0f * lumAt(col, row - 1) - lumAt(col + 1, row - 1);
+                float gx, gy;
+                sobel(col, row, gx, gy);
                 const float mag = std::sqrt(gx * gx + gy * gy) / 4.0f;
                 if (mag > edgeThr) {
-                    // Edge direction = perpendicular to the gradient; y grows
-                    // downward, so the sign of gy is flipped for screen angles.
-                    float deg = qRadiansToDegrees(std::atan2(-gy, gx)) + 90.0f;
-                    deg = std::fmod(std::fmod(deg, 180.0f) + 180.0f, 180.0f);
-                    c = kEdgeGlyphs[qRound(deg / 45.0f) % 4];
+                    c = edgeDirGlyph(gx, gy);
                     isEdge = true;
                 }
             }
 
-            if (!isEdge) {
-                // Pick the glyph whose measured ink coverage best matches the
-                // target darkness (handles non-linear glyph weights).
-                int   idx  = 0;
-                float best = 2.0f;
-                for (int i = 0; i < nChars; ++i) {
-                    const float d = std::fabs(coverage[size_t(i)] - darkness);
-                    if (d < best) { best = d; idx = i; }
+            if (!isEdge && hatchOn && darkness > hatchThr) {
+                if (darkness > hatchCross) {
+                    c = QLatin1Char('#');
+                } else {
+                    float gx, gy;
+                    sobel(col, row, gx, gy);
+                    c = edgeDirGlyph(gx, gy);
                 }
-                c = charset.at(idx);
+                isEdge = true;   // reuses the "glyph already chosen" skip below
             }
 
-            if (c == QChar(' ') && !params.cellBackground) continue;
+            if (!isEdge) {
+                if (params.orderedDither) {
+                    // Bracket the two ramp glyphs whose coverage straddles the
+                    // target darkness, then dither between them with a Bayer
+                    // threshold instead of always snapping to the nearest —
+                    // smoother gradients without a denser charset.
+                    int lo = 0, hi = nChars - 1;
+                    while (lo < hi - 1) {
+                        const int mid = (lo + hi) / 2;
+                        if (coverage[size_t(byCoverage[size_t(mid)])] <= darkness) lo = mid;
+                        else hi = mid;
+                    }
+                    const float covLo = coverage[size_t(byCoverage[size_t(lo)])];
+                    const float covHi = coverage[size_t(byCoverage[size_t(hi)])];
+                    const float span  = covHi - covLo;
+                    const float frac  = span > 1e-4f ? qBound(0.0f, (darkness - covLo) / span, 1.0f) : 0.0f;
+                    const int   idx   = (frac > bayerThreshold(col, row)) ? byCoverage[size_t(hi)]
+                                                                          : byCoverage[size_t(lo)];
+                    c = charset.at(idx);
+                } else {
+                    // Pick the glyph whose measured ink coverage best matches the
+                    // target darkness (handles non-linear glyph weights).
+                    int   idx  = 0;
+                    float best = 2.0f;
+                    for (int i = 0; i < nChars; ++i) {
+                        const float d = std::fabs(coverage[size_t(i)] - darkness);
+                        if (d < best) { best = d; idx = i; }
+                    }
+                    c = charset.at(idx);
+                }
+            }
+
+            if (c == QChar(' ')) continue;
 
             const QColor pen = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
-            drawCell(output, QRectF(cx, cy, cellW, cellH), c, pen,
-                     params.cellBackground);
+            drawCell(output, QRectF(cx, cy, cellW, cellH), c, pen);
         }
     }
 

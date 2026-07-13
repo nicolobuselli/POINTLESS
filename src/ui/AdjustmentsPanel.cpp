@@ -53,6 +53,21 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     m_levels->onChanged = [this]() { emit adjustmentsChanged(); };
     vlay->addWidget(m_levels);
 
+    // Invert: checkable box, same visual language as the DragSpinBox boxes.
+    m_invert = new QPushButton("Invert");
+    m_invert->setCheckable(true);
+    m_invert->setCursor(Qt::PointingHandCursor);
+    m_invert->setFixedHeight(Ui::px(48));
+    m_invert->setStyleSheet(QString(
+        "QPushButton{background:#3B3B3B;border:1px solid #5D5D5D;border-radius:%1px;"
+        "color:#B2B2B2;font-size:%2px;font-weight:500;}"
+        "QPushButton:hover{border-color:#828282;}"
+        "QPushButton:checked{background:#484848;border-color:#828282;color:#E3E3E3;}")
+        .arg(Ui::px(8)).arg(Ui::px(18)));
+    connect(m_invert, &QPushButton::toggled, this,
+            [this](bool) { emit adjustmentsChanged(); });
+    vlay->addWidget(m_invert);
+
     addRow(m_blur,      "Blur",      0, 100,   0);
     addRow(m_grain,     "Grain",     0, 100,   0);
     addRow(m_posterize, "Posterize", 2, 256, 256);
@@ -107,6 +122,7 @@ Adjustments AdjustmentsPanel::adjustments() const
     a.sharpenStrength = m_sharpenStrength->value();
     a.sharpenRadius   = m_sharpenRadius->value();
     a.edgeEnhancement = m_edgeEnhancement->value();
+    a.invert          = m_invert->isChecked();
     a.blur            = m_blur->value();
     a.grain           = m_grain->value();
     a.posterize       = m_posterize->value();
@@ -125,6 +141,9 @@ void AdjustmentsPanel::setAdjustments(const Adjustments& a)
     m_sharpenStrength->setValue(a.sharpenStrength);
     m_sharpenRadius->setValue(a.sharpenRadius);
     m_edgeEnhancement->setValue(a.edgeEnhancement);
+    m_invert->blockSignals(true);
+    m_invert->setChecked(a.invert);
+    m_invert->blockSignals(false);
     m_blur->setValue(a.blur);
     m_grain->setValue(a.grain);
     m_posterize->setValue(a.posterize);
@@ -152,4 +171,26 @@ void AdjustmentsPanel::setSourceImage(const QImage& img)
         }
     }
     m_levels->setHistogram(h);
+}
+
+void AdjustmentsPanel::setAnimatedParams(const QSet<ParamId>& ids)
+{
+    m_brightness->setAnimated(ids.contains(ParamId::AdjBrightness));
+    m_contrast->setAnimated(ids.contains(ParamId::AdjContrast));
+    m_gamma->setAnimated(ids.contains(ParamId::AdjGamma));
+    m_blur->setAnimated(ids.contains(ParamId::AdjBlur));
+    m_grain->setAnimated(ids.contains(ParamId::AdjGrain));
+    m_posterize->setAnimated(ids.contains(ParamId::AdjPosterize));
+}
+
+QHash<QWidget*, ParamId> AdjustmentsPanel::paramWidgets() const
+{
+    return {
+        { m_brightness, ParamId::AdjBrightness },
+        { m_contrast,   ParamId::AdjContrast },
+        { m_gamma,      ParamId::AdjGamma },
+        { m_blur,       ParamId::AdjBlur },
+        { m_grain,      ParamId::AdjGrain },
+        { m_posterize,  ParamId::AdjPosterize },
+    };
 }

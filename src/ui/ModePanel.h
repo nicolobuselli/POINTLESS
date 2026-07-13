@@ -1,10 +1,13 @@
 #pragma once
 
 #include "../core/Params.h"
+#include "../core/AnimParams.h"
 #include "Widgets.h"
 #include <QWidget>
 #include <QImage>
 #include <QColor>
+#include <QSet>
+#include <QHash>
 #include <functional>
 
 class HalftonePage;
@@ -49,6 +52,13 @@ public:
     QString outputFormat()   const;
 
     void setFromLayer(const Layer& layer);   // silent
+
+    // Tint the label of every visible mode-page row whose ParamId is in the
+    // set (has a keyframe track on the active layer).
+    void setAnimatedParams(const QSet<ParamId>& ids);
+
+    // Active mode page's control widgets → ParamId, for hover-to-keyframe.
+    QHash<QWidget*, ParamId> paramWidgets() const;
 
 signals:
     void paramsChanged();

@@ -1,5 +1,6 @@
 #include "Animation.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -79,4 +80,21 @@ void upsertKey(Animation& anim, int layerId, ParamId param, int frame,
     auto it = t->keys.begin();
     while (it != t->keys.end() && it->frame < frame) ++it;
     t->keys.insert(it, nk);
+}
+
+void removeLayerTracks(Animation& anim, int layerId)
+{
+    auto& tracks = anim.tracks;
+    tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
+                 [layerId](const Track& t) { return t.layerId == layerId; }),
+                 tracks.end());
+}
+
+QSet<ParamId> animatedParamIds(const Animation& anim, int layerId)
+{
+    QSet<ParamId> out;
+    for (const Track& t : anim.tracks)
+        if (t.layerId == layerId && !t.keys.empty())
+            out.insert(t.param);
+    return out;
 }

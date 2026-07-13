@@ -24,6 +24,11 @@ const std::array<ParamDesc, int(ParamId::Count)> kDescs = {{
     { "Posterize",          2,   256,  true,  ParamScope::AllLayers },
     { "Threshold",          0,   255,  true,  ParamScope::AllLayers },
 
+    { "Position X",         -1,     1,  false, ParamScope::AllLayers },
+    { "Position Y",         -1,     1,  false, ParamScope::AllLayers },
+    { "Scale",              10,  1000,  false, ParamScope::AllLayers },
+    { "Rotation",         -180,   180,  false, ParamScope::AllLayers },
+
     { "Spacing",            2,   500,  false, ParamScope::Halftone },
     { "Point spacing",      2,   200,  false, ParamScope::Halftone },
     { "Rotation",           0,   360,  false, ParamScope::Halftone },
@@ -50,6 +55,9 @@ const std::array<ParamDesc, int(ParamId::Count)> kDescs = {{
     { "Cell size",          4,    48,  true,  ParamScope::Ascii },
     { "Gamma",            0.1,   5.0,  false, ParamScope::Ascii },
     { "Edges",              0,   100,  true,  ParamScope::Ascii },
+    { "Hatching",            0,   100,  true,  ParamScope::Ascii },
+    { "Stipple",             0,   100,  true,  ParamScope::Ascii },
+    { "Contour",             0,   100,  true,  ParamScope::Ascii },
 
     { "Threshold 1",        0,   255,  true,  ParamScope::Tonal },
     { "Threshold 2",        0,   255,  true,  ParamScope::Tonal },
@@ -117,6 +125,11 @@ double getParam(const Layer& l, ParamId id)
         case ParamId::AdjPosterize:       return l.adjustments.posterize;
         case ParamId::AdjThreshold:       return l.adjustments.threshold;
 
+        case ParamId::TfX:        return l.transform.xPct;
+        case ParamId::TfY:        return l.transform.yPct;
+        case ParamId::TfScale:    return l.transform.scalePct;
+        case ParamId::TfRotation: return l.transform.rotation;
+
         case ParamId::HtGridSpacing:       return l.halftone.grid.spacing;
         case ParamId::HtGridPointSpacing:  return l.halftone.grid.pointSpacing;
         case ParamId::HtGridRotation:      return l.halftone.grid.rotation;
@@ -143,6 +156,9 @@ double getParam(const Layer& l, ParamId id)
         case ParamId::AsCellSize: return l.ascii.cellSize;
         case ParamId::AsGamma:    return l.ascii.gamma;
         case ParamId::AsEdges:    return l.ascii.edges;
+        case ParamId::AsHatching: return l.ascii.hatching;
+        case ParamId::AsStipple:  return l.ascii.stipple;
+        case ParamId::AsContour:  return l.ascii.contour;
 
         default: return 0.0;   // Document params handled elsewhere
     }
@@ -178,6 +194,11 @@ void setParam(Layer& l, ParamId id, double v)
         case ParamId::AdjPosterize:       l.adjustments.posterize       = iv; break;
         case ParamId::AdjThreshold:       l.adjustments.threshold       = iv; break;
 
+        case ParamId::TfX:        l.transform.xPct     = fv; break;
+        case ParamId::TfY:        l.transform.yPct     = fv; break;
+        case ParamId::TfScale:    l.transform.scalePct = fv; break;
+        case ParamId::TfRotation: l.transform.rotation = fv; break;
+
         case ParamId::HtGridSpacing:       l.halftone.grid.spacing       = fv; break;
         case ParamId::HtGridPointSpacing:  l.halftone.grid.pointSpacing  = fv; break;
         case ParamId::HtGridRotation:      l.halftone.grid.rotation      = fv; break;
@@ -204,6 +225,9 @@ void setParam(Layer& l, ParamId id, double v)
         case ParamId::AsCellSize: l.ascii.cellSize = iv; break;
         case ParamId::AsGamma:    l.ascii.gamma    = fv; break;
         case ParamId::AsEdges:    l.ascii.edges    = iv; break;
+        case ParamId::AsHatching: l.ascii.hatching = iv; break;
+        case ParamId::AsStipple:  l.ascii.stipple  = iv; break;
+        case ParamId::AsContour:  l.ascii.contour  = iv; break;
 
         default: break;   // Document params handled elsewhere
     }
@@ -240,6 +264,7 @@ std::vector<ParamId> animatableParams(const Layer& layer)
     std::vector<ParamId> out;
     for (int i = 0; i < int(ParamId::Count); ++i) {
         const ParamId id = ParamId(i);
+        if (id == ParamId::HtInputDpi) continue;   // no UI control; ModePanel hardcodes it to 300
         const ParamScope s = paramDesc(id).scope;
         if (s == ParamScope::AllLayers || s == kindScope)
             out.push_back(id);

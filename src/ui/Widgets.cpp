@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QProgressBar>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QMouseEvent>
@@ -101,6 +102,13 @@ void DragSpinBox::setCompact()
         "background:transparent; color:#A6A6A6; font-size:%1px; font-weight:500; border:none; padding:0; min-height:0;")
         .arg(Ui::px(14)));
     // Re-polish so the new objectName picks up its QSS rule.
+    style()->unpolish(this);
+    style()->polish(this);
+}
+
+void DragSpinBox::setAnimated(bool on)
+{
+    setProperty("animated", on);
     style()->unpolish(this);
     style()->polish(this);
 }
@@ -256,6 +264,11 @@ void SliderRow::setValue(int v)
     m_slider->blockSignals(false);
     m_box->setValue(m_slider->value());
     m_updating = false;
+}
+
+void SliderRow::setAnimated(bool on)
+{
+    m_box->setAnimated(on);
 }
 
 // ============================================================
@@ -1205,6 +1218,76 @@ QPushButton* makeIconButton(const QString& iconRes)
     btn->setIconSize(QSize(14, 14));
     btn->setFixedSize(24, 24);
     return btn;
+}
+
+// ── AnimProgressDialog ───────────────────────────────────────
+
+AnimProgressDialog::AnimProgressDialog(const QString& labelText, int maxValue, QWidget* parent)
+    : QDialog(parent, Qt::FramelessWindowHint | Qt::Dialog)
+{
+    setAttribute(Qt::WA_TranslucentBackground);
+    setModal(true);
+    setWindowModality(Qt::WindowModal);
+    m_elapsed.start();
+
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(Ui::px(28), Ui::px(24), Ui::px(28), Ui::px(20));
+    root->setSpacing(Ui::px(16));
+
+    m_label = new QLabel(labelText);
+    m_label->setObjectName("paramLabel");
+    root->addWidget(m_label);
+
+    m_bar = new QProgressBar;
+    m_bar->setObjectName("animProgressBar");
+    m_bar->setRange(0, maxValue);
+    m_bar->setTextVisible(true);
+    m_bar->setFixedHeight(Ui::px(28));
+    root->addWidget(m_bar);
+
+    auto* btnRow = new QHBoxLayout;
+    btnRow->addStretch(1);
+    auto* cancelBtn = new QPushButton("Cancel");
+    cancelBtn->setObjectName("resetBtn");
+    cancelBtn->setCursor(Qt::PointingHandCursor);
+    cancelBtn->setFixedHeight(Ui::px(36));
+    connect(cancelBtn, &QPushButton::clicked, this, [this] { m_canceled = true; });
+    btnRow->addWidget(cancelBtn);
+    root->addLayout(btnRow);
+
+    setFixedWidth(Ui::px(760));
+    if (parent)
+        move(parent->window()->frameGeometry().center() - QPoint(width() / 2, sizeHint().height() / 2));
+}
+
+void AnimProgressDialog::setValue(int v)
+{
+    m_bar->setValue(v);
+    if (!isVisible()) {
+        if (m_elapsed.elapsed() < m_minDurationMs) return;
+        show();
+        raise();
+    }
+    QCoreApplication::processEvents();
+}
+
+void AnimProgressDialog::setLabelText(const QString& text)
+{
+    m_label->setText(text);
+}
+
+void AnimProgressDialog::setRange(int lo, int hi)
+{
+    m_bar->setRange(lo, hi);
+}
+
+void AnimProgressDialog::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(QColor("#5D5D5D"), 1));
+    p.setBrush(QColor("#1E1E1E"));
+    p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
 }
 
 // ── Auto-hide scrollbar ──────────────────────────────────────

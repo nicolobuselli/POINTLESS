@@ -55,6 +55,9 @@ public:
     void setCompact();   // half-height variant with smaller font
     void setTextLabel(const QString& text);   // bold letter (e.g. "W") instead of an icon
 
+    // Tints the box's stroke to flag "this parameter has a keyframe track".
+    void setAnimated(bool on);
+
 protected:
     void mousePressEvent(QMouseEvent* e) override;
     void mouseMoveEvent(QMouseEvent* e) override;
@@ -143,6 +146,10 @@ public:
 
     int  value() const;
     void setValue(int v);                 // silent (no callback)
+
+    // Tints the value box's stroke to flag "this parameter has a keyframe
+    // track" (timeline auto-key orange).
+    void setAnimated(bool on);
 
 private:
     NoWheelSlider* m_slider = nullptr;
@@ -235,6 +242,35 @@ private:
     QLineEdit*         m_opacityInput = nullptr;
     float m_h = 0.f, m_s = 1.f, m_v = 1.f, m_a = 1.f;
     QPoint m_dragOffset;
+};
+
+// ── AnimProgressDialog ───────────────────────────────────────
+// Frameless, dark-themed replacement for QProgressDialog (used by playback
+// pre-render and frame export), styled like ColorPickerDialog instead of the
+// native OS chrome. Same call pattern as QProgressDialog: construct, call
+// setValue() in a loop, check wasCanceled().
+
+class QProgressBar;
+
+class AnimProgressDialog : public QDialog {
+public:
+    AnimProgressDialog(const QString& labelText, int maxValue, QWidget* parent = nullptr);
+
+    void setMinimumDuration(int ms) { m_minDurationMs = ms; }
+    void setValue(int v);
+    void setLabelText(const QString& text);
+    void setRange(int lo, int hi);   // (0,0) = indeterminate/busy
+    bool wasCanceled() const { return m_canceled; }
+
+protected:
+    void paintEvent(QPaintEvent*) override;
+
+private:
+    QLabel*       m_label      = nullptr;
+    QProgressBar* m_bar        = nullptr;
+    QElapsedTimer m_elapsed;
+    int  m_minDurationMs = 0;
+    bool m_canceled      = false;
 };
 
 // ── PopupPicker ──────────────────────────────────────────────

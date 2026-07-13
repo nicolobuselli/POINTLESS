@@ -137,6 +137,9 @@ private:
     void onPlayToggled(bool playing);
     bool buildPlayCache();                // pre-render all frames for smooth playback
     void autoKeyChanged(const SessionParams& before, const SessionParams& after);
+    void autoKeyTransform(int layerId, const LayerTransform& before, const LayerTransform& after);
+    void refreshAnimationIndicators();   // push "has a keyframe track" state to the panels
+    bool insertKeyframeUnderCursor();    // "I" key: keyframe whatever control is under the mouse
     void exportSequence(const QString& baseName);
     void exportVideoMp4(const QString& baseName);
     void exportSvg(const QString& baseName);
@@ -188,4 +191,10 @@ private:
     bool            m_playing = false;
     QVector<QImage> m_playCache;             // pre-rendered frames for playback
     bool            m_playCacheValid = false;
+
+    // Bottom Timeline/Library panel: collapses to just its tab titles when
+    // dragged down past a threshold (see MainWindow ctor).
+    bool m_bottomCollapsed  = false;
+    int  m_bottomExpandedH  = 220;   // default height restored when a title is clicked from collapsed
+    int  m_bottomLastPage   = 0;     // 0=Timeline, 1=Library — restored when re-expanding via drag
 };

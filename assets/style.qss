@@ -320,6 +320,21 @@ QPushButton#resetBtn:pressed {
     background-color: #2E2E2E;
 }
 
+/* ── Animation progress bar (playback prep / frame export) ─────── */
+QProgressBar#animProgressBar {
+    background-color: #3B3B3B;
+    border: 1px solid #5D5D5D;
+    border-radius: s(8)px;
+    text-align: center;
+    color: #E3E3E3;
+    font-size: s(14)px;
+    font-weight: 500;
+}
+QProgressBar#animProgressBar::chunk {
+    background-color: #FD5A1F;
+    border-radius: s(8)px;
+}
+
 /* ── Accent button (Confirm / Generate / destructive confirm) ──── */
 QPushButton#accentBtn {
     background-color: #FD5A1F;
@@ -586,6 +601,11 @@ QSlider::handle:horizontal:hover {
 }
 #dragSpinBox:hover {
     border-color: #828282;
+}
+/* Animated-parameter indicator: tint the value box's stroke when it has a
+   keyframe track (same orange as the timeline auto-key dot). */
+#dragSpinBox[animated="true"] {
+    border-color: #FF6A00;
 }
 
 /* Compact variant (Levels number boxes) */

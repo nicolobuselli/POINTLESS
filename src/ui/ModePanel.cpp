@@ -316,6 +316,28 @@ public:
     BlendMode blend() const { return BlendMode(m_fusion->value().toInt()); }
     void setBlend(BlendMode m) { m_fusion->setValue(int(m)); }
 
+    void setAnimatedParams(const QSet<ParamId>& ids)
+    {
+        m_spacing->setAnimated(ids.contains(ParamId::HtGridSpacing));
+        m_rotation->setAnimated(ids.contains(ParamId::HtGridRotation));
+        m_gamma->setAnimated(ids.contains(ParamId::HtGamma));
+        m_diameter->setAnimated(ids.contains(ParamId::HtGridDiameter));
+        m_weight->setAnimated(ids.contains(ParamId::HtWeight));
+        m_jitter->setAnimated(ids.contains(ParamId::HtJitter));
+        m_opacity->setAnimated(ids.contains(ParamId::HtOpacity));
+        m_cornerRadius->setAnimated(ids.contains(ParamId::HtCornerRadius));
+    }
+
+    QHash<QWidget*, ParamId> paramWidgets() const
+    {
+        return {
+            { m_spacing, ParamId::HtGridSpacing }, { m_rotation, ParamId::HtGridRotation },
+            { m_gamma, ParamId::HtGamma },         { m_diameter, ParamId::HtGridDiameter },
+            { m_weight, ParamId::HtWeight },       { m_jitter, ParamId::HtJitter },
+            { m_opacity, ParamId::HtOpacity },     { m_cornerRadius, ParamId::HtCornerRadius },
+        };
+    }
+
     HalftoneSettings settings() const
     {
         HalftoneSettings s;
@@ -830,6 +852,28 @@ public:
         vl->addWidget(paramsSec);
     }
 
+    void setAnimatedParams(const QSet<ParamId>& ids)
+    {
+        m_pixelSize->setAnimated(ids.contains(ParamId::DiPixelSize));
+        m_strength->setAnimated(ids.contains(ParamId::DiStrength));
+        m_threshold->setAnimated(ids.contains(ParamId::DiThreshold));
+        m_levels->setAnimated(ids.contains(ParamId::DiLevels));
+        m_lineAngle->setAnimated(ids.contains(ParamId::DiLineAngle));
+        m_lineSpacing->setAnimated(ids.contains(ParamId::DiLineSpacing));
+        m_opacity->setAnimated(ids.contains(ParamId::DiOpacity));
+        m_cornerRadius->setAnimated(ids.contains(ParamId::DiCornerRadius));
+    }
+
+    QHash<QWidget*, ParamId> paramWidgets() const
+    {
+        return {
+            { m_pixelSize, ParamId::DiPixelSize }, { m_strength, ParamId::DiStrength },
+            { m_threshold, ParamId::DiThreshold }, { m_levels, ParamId::DiLevels },
+            { m_lineAngle, ParamId::DiLineAngle }, { m_lineSpacing, ParamId::DiLineSpacing },
+            { m_opacity, ParamId::DiOpacity },     { m_cornerRadius, ParamId::DiCornerRadius },
+        };
+    }
+
     DitherSettings settings() const
     {
         DitherSettings s;
@@ -927,6 +971,10 @@ private:
         m_patternRow->setVisible(a == DitherAlgorithm::CustomPattern);
         m_threshold->setVisible(isThr);
         m_strength->setVisible(!isThr);
+        // renderThreshold() takes a hard cut straight from s.tonal.tones and
+        // never reads s.levels (see DitherRenderer.cpp) — dragging this would
+        // have zero visible effect, so hide it rather than mislead.
+        m_levels->setVisible(!isThr);
     }
 
     // No file → full-width accent "Choose image"; loaded → thumb + name box.
@@ -1045,26 +1093,6 @@ public:
             fontRow->addWidget(m_weight, 1);
             sl->addLayout(fontRow);
 
-            const char* kToggleQss =
-                "QPushButton{background:#3B3B3B;border:1px solid #5D5D5D;border-radius:4px;"
-                "color:#B2B2B2;font-size:8pt;padding:0 10px;}"
-                "QPushButton:checked{background:#484848;border-color:#828282;color:#E3E3E3;}"
-                "QPushButton:hover{border-color:#828282;}";
-            auto* toggleRow = new QHBoxLayout;
-            toggleRow->setContentsMargins(0, 0, 0, 0);
-            toggleRow->setSpacing(6);
-            m_invert = new QPushButton("Invert");
-            m_cellBg = new QPushButton("Cell fill");
-            m_cellBg->setToolTip("Fill each cell with the ink colour and punch\n"
-                                 "the glyph out (inverse video / negative space).");
-            for (QPushButton* b : { m_invert, m_cellBg }) {
-                b->setCheckable(true);
-                b->setFixedHeight(26);
-                b->setStyleSheet(kToggleQss);
-                toggleRow->addWidget(b, 1);
-            }
-            sl->addLayout(toggleRow);
-
             m_charset->onSelected = [this](QVariant v) {
                 m_customEdit->setVisible(v.toInt() >= int(asciiCharsetPresets().size()));
                 fire();
@@ -1073,8 +1101,6 @@ public:
             m_font->onSelected = [this](QVariant) { fire(); };
             connect(m_weight, QOverload<int>::of(&QComboBox::currentIndexChanged),
                     this, [this](int) { fire(); });
-            connect(m_invert, &QPushButton::toggled, this, [this](bool) { fire(); });
-            connect(m_cellBg, &QPushButton::toggled, this, [this](bool) { fire(); });
         }
         auto* settingsSec = new PanelSection("Settings", /*collapsible*/ false, true);
         settingsSec->body()->addWidget(settingsContent);
@@ -1092,10 +1118,34 @@ public:
             m_edges    = new SliderRow("Edges",     0, 100,  0);
             m_edges->setToolTip("Contour glyphs (- / | \\) on detected edges.\n"
                                 "0 = off; higher picks up softer edges.");
-            for (SliderRow* r : { m_cellSize, m_gamma, m_edges }) {
+            m_hatching = new SliderRow("Hatching",  0, 100,  0);
+            m_hatching->setToolTip("Directional strokes shade the shadows, like\n"
+                                   "copper-engraving cross-hatch. 0 = off.");
+            m_stipple  = new SliderRow("Stipple",   0, 100,  0);
+            m_stipple->setToolTip("Organic per-cell darkness jitter — breaks up\n"
+                                  "clean ramp bands into a hand-stippled scatter.");
+            m_contour  = new SliderRow("Contour",   0, 100,  0);
+            m_contour->setToolTip("Isoline-only mask (topographic-map look): only\n"
+                                  "tonal-band edges draw, flat regions stay blank.");
+            for (SliderRow* r : { m_cellSize, m_gamma, m_edges, m_hatching, m_stipple, m_contour }) {
                 r->onValueChanged = [this](int) { fire(); };
                 pl->addWidget(r);
             }
+
+            m_orderedDither = new QPushButton("Ordered dither");
+            m_orderedDither->setCheckable(true);
+            m_orderedDither->setCursor(Qt::PointingHandCursor);
+            m_orderedDither->setFixedHeight(Ui::px(48));
+            m_orderedDither->setToolTip("Bayer-threshold glyph pick instead of nearest-\n"
+                                       "coverage — smoother gradients, no denser charset.");
+            m_orderedDither->setStyleSheet(QString(
+                "QPushButton{background:#3B3B3B;border:1px solid #5D5D5D;border-radius:%1px;"
+                "color:#B2B2B2;font-size:%2px;font-weight:500;}"
+                "QPushButton:hover{border-color:#828282;}"
+                "QPushButton:checked{background:#484848;border-color:#828282;color:#E3E3E3;}")
+                .arg(Ui::px(8)).arg(Ui::px(18)));
+            connect(m_orderedDither, &QPushButton::toggled, this, [this](bool) { fire(); });
+            pl->addWidget(m_orderedDither);
 
             pl->addWidget(makeParamLabel("Fusion"));
             m_fusion = new PopupPicker(1);
@@ -1111,6 +1161,28 @@ public:
         vl->addWidget(paramsSec);
     }
 
+    void setAnimatedParams(const QSet<ParamId>& ids)
+    {
+        m_cellSize->setAnimated(ids.contains(ParamId::AsCellSize));
+        m_gamma->setAnimated(ids.contains(ParamId::AsGamma));
+        m_edges->setAnimated(ids.contains(ParamId::AsEdges));
+        m_hatching->setAnimated(ids.contains(ParamId::AsHatching));
+        m_stipple->setAnimated(ids.contains(ParamId::AsStipple));
+        m_contour->setAnimated(ids.contains(ParamId::AsContour));
+    }
+
+    QHash<QWidget*, ParamId> paramWidgets() const
+    {
+        return {
+            { m_cellSize, ParamId::AsCellSize },
+            { m_gamma,    ParamId::AsGamma },
+            { m_edges,    ParamId::AsEdges },
+            { m_hatching, ParamId::AsHatching },
+            { m_stipple,  ParamId::AsStipple },
+            { m_contour,  ParamId::AsContour },
+        };
+    }
+
     AsciiSettings settings() const
     {
         static const int kWeights[] = { 400, 500, 600, 700 };
@@ -1119,11 +1191,13 @@ public:
         s.customCharset  = m_customEdit->text();
         s.cellSize       = m_cellSize->value();
         s.gamma          = m_gamma->value() / 100.0f;
-        s.invert         = m_invert->isChecked();
         s.fontFamily     = m_font->value().toString();
         s.fontWeight     = kWeights[qBound(0, m_weight->currentIndex(), 3)];
         s.edges          = m_edges->value();
-        s.cellBackground = m_cellBg->isChecked();
+        s.hatching       = m_hatching->value();
+        s.stipple        = m_stipple->value();
+        s.contour        = m_contour->value();
+        s.orderedDither  = m_orderedDither->isChecked();
         return s;
     }
 
@@ -1138,6 +1212,12 @@ public:
         m_cellSize->setValue(s.cellSize);
         m_gamma->setValue(qRound(s.gamma * 100));
         m_edges->setValue(s.edges);
+        m_hatching->setValue(s.hatching);
+        m_stipple->setValue(s.stipple);
+        m_contour->setValue(s.contour);
+        m_orderedDither->blockSignals(true);
+        m_orderedDither->setChecked(s.orderedDither);
+        m_orderedDither->blockSignals(false);
         m_font->setValue(s.fontFamily);
         m_weight->blockSignals(true);
         int wi = 2;
@@ -1147,12 +1227,6 @@ public:
         else                          wi = 3;
         m_weight->setCurrentIndex(wi);
         m_weight->blockSignals(false);
-        m_invert->blockSignals(true);
-        m_invert->setChecked(s.invert);
-        m_invert->blockSignals(false);
-        m_cellBg->blockSignals(true);
-        m_cellBg->setChecked(s.cellBackground);
-        m_cellBg->blockSignals(false);
         m_updating = false;
     }
 
@@ -1166,11 +1240,13 @@ private:
     QLineEdit*       m_customEdit = nullptr;
     PopupPicker*     m_font       = nullptr;
     NoWheelComboBox* m_weight     = nullptr;
-    QPushButton*     m_invert     = nullptr;
-    QPushButton*     m_cellBg     = nullptr;
     SliderRow*       m_cellSize   = nullptr;
     SliderRow*       m_gamma      = nullptr;
     SliderRow*       m_edges      = nullptr;
+    SliderRow*       m_hatching   = nullptr;
+    SliderRow*       m_stipple    = nullptr;
+    SliderRow*       m_contour    = nullptr;
+    QPushButton*     m_orderedDither = nullptr;
     PopupPicker*     m_fusion     = nullptr;
     bool m_updating = false;
 };
@@ -1444,4 +1520,24 @@ void ModePanel::setFromLayer(const Layer& layer)
     m_fillSection->setVisible(hasMode);
 
     m_updating = false;
+}
+
+void ModePanel::setAnimatedParams(const QSet<ParamId>& ids)
+{
+    m_halftonePage->setAnimatedParams(ids);
+    m_ditherPage->setAnimatedParams(ids);
+    m_asciiPage->setAnimatedParams(ids);
+}
+
+QHash<QWidget*, ParamId> ModePanel::paramWidgets() const
+{
+    // Only the active page's controls are visible/hit-testable; the other
+    // two pages' widgets are hidden, so including them is harmless but
+    // pointless — return just the one matching the current mode.
+    switch (m_mode) {
+        case RenderMode::Halftone: return m_halftonePage->paramWidgets();
+        case RenderMode::Dither:   return m_ditherPage->paramWidgets();
+        case RenderMode::Ascii:    return m_asciiPage->paramWidgets();
+    }
+    return {};
 }

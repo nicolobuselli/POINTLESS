@@ -12,6 +12,7 @@
 #include "../core/VideoIO.h"
 
 #include <QApplication>
+#include <QCursor>
 #include <QClipboard>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -22,7 +23,6 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPainter>
-#include <QProgressDialog>
 #include <QPushButton>
 #include <QShortcut>
 #include <QSplitter>
@@ -167,10 +167,11 @@ MainWindow::MainWindow(QWidget* parent)
     m_timeline  = new TimelineWidget;
     m_preview->setMinimumHeight(160);   // keep panes from collapsing to nothing
 
-    // Bottom panel: "Timeline | Library" tabs over a stacked area.
+    // Bottom panel: "Timeline | Library" tabs over a stacked area. Dragging the
+    // splitter handle down past the tab row collapses it to just the two
+    // titles; dragging back up, or clicking a title, re-expands it.
     auto* bottomPanel = new QWidget;
     bottomPanel->setObjectName("bottomBar");
-    bottomPanel->setMinimumHeight(130);   // never collapses away
     auto* bp = new QVBoxLayout(bottomPanel);
     bp->setContentsMargins(0, 0, 0, 0);
     bp->setSpacing(0);
@@ -201,8 +202,6 @@ MainWindow::MainWindow(QWidget* parent)
     auto* bottomStack = new QStackedWidget;
     bottomStack->addWidget(m_timeline);    // page 0 (default)
     bottomStack->addWidget(m_filmstrip);   // page 1 (Library)
-    connect(tabTimeline, &QPushButton::clicked, this, [bottomStack] { bottomStack->setCurrentIndex(0); });
-    connect(tabLibrary,  &QPushButton::clicked, this, [bottomStack] { bottomStack->setCurrentIndex(1); });
     bottomStack->setCurrentIndex(0);   // default to Timeline
 
     auto* underTabs = new QFrame;
@@ -221,7 +220,67 @@ MainWindow::MainWindow(QWidget* parent)
     centerSplit->addWidget(bottomPanel);
     centerSplit->setStretchFactor(0, 1);
     centerSplit->setStretchFactor(1, 0);
-    centerSplit->setSizes({ 600, 220 });
+    centerSplit->setSizes({ 600, m_bottomExpandedH });
+
+    // collapsedH = tab row + its two 1px band lines, nothing else. Use
+    // minimumHeight() (set by setFixedHeight above), not height(): the widgets
+    // aren't shown/laid out yet at this point in the constructor, so height()
+    // would still read a stale/default size. This stays the panel's minimum
+    // height permanently — it's the collapse floor, never raised again — so
+    // the splitter can always be dragged back down to it.
+    const int collapsedH = topLine->minimumHeight() + tabRow->sizeHint().height() + underTabs->minimumHeight();
+    bottomPanel->setMinimumHeight(collapsedH);
+
+    // Sets only the visual/logical collapsed state (stack visibility + which
+    // tab, if any, looks checked). Deliberately does NOT touch centerSplit's
+    // sizes: called from splitterMoved mid-drag, forcing a size there would
+    // fight the live drag and desync QSplitterHandle's internal tracking.
+    // Qt's own minimumHeight floor (set once, above) already stops the drag
+    // from going below collapsedH — no manual snapping needed.
+    auto setBottomCollapsed = [this, bottomStack, tabTimeline, tabLibrary](bool collapsed, int page) {
+        m_bottomCollapsed = collapsed;
+        if (!collapsed) m_bottomLastPage = page;
+        bottomStack->setVisible(!collapsed);
+        // autoExclusive refuses to uncheck the last checked button in the
+        // group (see ModePanel::setFromLayer for the same workaround), so
+        // drop it momentarily to actually clear both when collapsing.
+        for (QPushButton* b : { tabTimeline, tabLibrary }) {
+            b->setAutoExclusive(false);
+            b->setChecked(false);
+            b->setAutoExclusive(true);
+        }
+        if (!collapsed) {
+            (page == 0 ? tabTimeline : tabLibrary)->setChecked(true);
+            bottomStack->setCurrentIndex(page);
+        }
+    };
+
+    // Clicking a title is not a drag: force-grow from collapsed to the
+    // original/default height here, since there's no ongoing drag for the
+    // floor alone to relax.
+    auto onTabClicked = [this, centerSplit, collapsedH, setBottomCollapsed](int page) {
+        const bool wasCollapsed = m_bottomCollapsed;
+        setBottomCollapsed(false, page);
+        if (wasCollapsed) {
+            QList<int> sizes = centerSplit->sizes();
+            if (sizes.size() == 2) {
+                sizes[0] -= (m_bottomExpandedH - sizes[1]);
+                sizes[1] = m_bottomExpandedH;
+                centerSplit->setSizes(sizes);
+            }
+        }
+    };
+    connect(tabTimeline, &QPushButton::clicked, this, [onTabClicked] { onTabClicked(0); });
+    connect(tabLibrary,  &QPushButton::clicked, this, [onTabClicked] { onTabClicked(1); });
+    connect(centerSplit, &QSplitter::splitterMoved, this,
+            [this, bottomPanel, collapsedH, setBottomCollapsed](int, int) {
+        const int h = bottomPanel->height();
+        if (!m_bottomCollapsed && h <= collapsedH + 4) {
+            setBottomCollapsed(true, m_bottomLastPage);
+        } else if (m_bottomCollapsed && h > collapsedH + 4) {
+            setBottomCollapsed(false, m_bottomLastPage);
+        }
+    });
 
     // Layers now live embedded at the top of the left column.
     m_layersPanel = m_left->layers();
@@ -286,6 +345,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_transformDragging = false;
         scheduleRender();        // one full-quality pass now that the gesture is done
         m_previewTimer.start();  // refresh layer thumbnails
+        syncTimeline();   // dopesheet catches up once the gesture ends
         m_undoTimer.start();
     });
     connect(m_preview, &PreviewWidget::selectionChanged, this, &MainWindow::onCanvasSelectionChanged);
@@ -548,6 +608,15 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
                 event->accept();
                 return true;
             }
+            // Blender-style "I": hover a parameter control, press I, insert a
+            // keyframe there at the current value — no drag/edit needed.
+            if (keyEvent->key() == Qt::Key_I && keyEvent->modifiers() == Qt::NoModifier
+                && !keyEvent->isAutoRepeat()) {
+                if (insertKeyframeUnderCursor()) {
+                    event->accept();
+                    return true;
+                }
+            }
         } else if (event->type() == QEvent::KeyRelease) {
             auto* keyEvent = static_cast<QKeyEvent*>(event);
             if (!keyEvent->isAutoRepeat()) {
@@ -743,6 +812,7 @@ void MainWindow::commitStructuralChange()
     syncBoardSource(m_images[m_current]);
     applyParams(st);
     syncLayersPanel();
+    syncTimeline();
     scheduleRender();
     m_undoTimer.start();
 }
@@ -790,6 +860,7 @@ void MainWindow::applyParams(const SessionParams& p)
     // background is shared and set explicitly.
     m_right->setBackground(p.background, p.backgroundOpacity);
     m_right->setFromLayer(l);
+    refreshAnimationIndicators();
 }
 
 void MainWindow::syncLayersPanel()
@@ -827,10 +898,10 @@ void MainWindow::onParamsChanged()
     const SessionParams after = collectParams();
     img.state = after;
 
-    if (m_autoKey) {
-        autoKeyChanged(before, after);
-        syncTimeline();   // tracks may have appeared/changed
-    }
+    // Always run: autoKeyChanged only writes a key when Auto Key is on OR the
+    // param already has a track (once animated via "I", it stays animated).
+    autoKeyChanged(before, after);
+    syncTimeline();   // tracks may have appeared/changed
 
     scheduleRender();         // centre preview updates live
     m_previewTimer.start();   // layer thumbs catch up once edits settle
@@ -839,6 +910,9 @@ void MainWindow::onParamsChanged()
 
 // Auto-key: write a keyframe at the playhead for every numeric parameter
 // whose value changed between the shown baseline and the new panel values.
+// Writes when Auto Key is on, OR when the param already has a track — once a
+// parameter is animated (e.g. via the "I" key), further edits keep keying it
+// even with Auto Key off, matching how "I" is expected to behave afterwards.
 void MainWindow::autoKeyChanged(const SessionParams& before, const SessionParams& after)
 {
     if (m_current < 0) return;
@@ -847,7 +921,8 @@ void MainWindow::autoKeyChanged(const SessionParams& before, const SessionParams
 
     const double bgB = getDocParam(before, ParamId::BackgroundOpacity);
     const double bgA = getDocParam(after,  ParamId::BackgroundOpacity);
-    if (bgB != bgA) upsertKey(anim, -1, ParamId::BackgroundOpacity, frame, bgA);
+    if (bgB != bgA && (m_autoKey || findTrack(anim, -1, ParamId::BackgroundOpacity)))
+        upsertKey(anim, -1, ParamId::BackgroundOpacity, frame, bgA);
 
     // Only the ACTIVE layer can be edited from the panels. collectParams()
     // leaves the other layers at their base values, so comparing them against
@@ -860,9 +935,47 @@ void MainWindow::autoKeyChanged(const SessionParams& before, const SessionParams
     const Layer& la = after.layers[size_t(ia)];
     const Layer& lb = before.layers[size_t(ib)];
     for (ParamId id : animatableParams(la)) {
-        if (getParam(lb, id) != getParam(la, id))
-            upsertKey(anim, aid, id, frame, getParam(la, id));
+        // Transform is keyed separately (autoKeyTransform, from the canvas/box
+        // drag handlers): collectParams() never round-trips l.transform, so
+        // after.layers[ia].transform is the raw model value, not "as of this
+        // frame" — diffing it here against the interpolated baseline would
+        // write a spurious keyframe (wrong value) at whatever frame another
+        // param happens to be edited on.
+        if (id == ParamId::TfX || id == ParamId::TfY
+            || id == ParamId::TfScale || id == ParamId::TfRotation)
+            continue;
+        // Float params are shown through 0..100-step percent sliders (see
+        // ModePanel::settings()/setFromLayer()), so an interpolated value gets
+        // quantized to ~101 steps on the round-trip through the widget. Compare
+        // with half that step as tolerance, or every OTHER param edit at a
+        // non-keyframe frame falsely looks "changed" and spams a keyframe here.
+        const ParamDesc& d = paramDesc(id);
+        const double eps = d.isInt ? 0.0 : (d.hi - d.lo) / 200.0;
+        const double a = getParam(la, id), b = getParam(lb, id);
+        if (qAbs(a - b) > eps && (m_autoKey || findTrack(anim, aid, id)))
+            upsertKey(anim, aid, id, frame, a);
     }
+}
+
+// Transform edits (canvas drag) bypass collectParams()/onParamsChanged for
+// drag-performance reasons (see onLayerTransformChanged), so they need their
+// own auto-key diff instead of going through autoKeyChanged.
+void MainWindow::autoKeyTransform(int layerId, const LayerTransform& before, const LayerTransform& after)
+{
+    if (m_current < 0) return;
+    Animation& anim = m_images[m_current].anim;
+    const int frame = anim.playhead;
+
+    // Writes when Auto Key is on, OR the field already has a track (same
+    // "stays animated once keyed" rule as autoKeyChanged).
+    auto key = [&](ParamId id, bool changed, float value) {
+        if (changed && (m_autoKey || findTrack(anim, layerId, id)))
+            upsertKey(anim, layerId, id, frame, value);
+    };
+    key(ParamId::TfX,        before.xPct     != after.xPct,     after.xPct);
+    key(ParamId::TfY,        before.yPct     != after.yPct,     after.yPct);
+    key(ParamId::TfScale,    before.scalePct != after.scalePct, after.scalePct);
+    key(ParamId::TfRotation, before.rotation != after.rotation, after.rotation);
 }
 
 void MainWindow::setPlayhead(int frame)
@@ -884,6 +997,47 @@ void MainWindow::setPlayhead(int frame)
 void MainWindow::syncTimeline()
 {
     m_timeline->setAnimation(m_current >= 0 ? m_images[m_current].anim : Animation{});
+    refreshAnimationIndicators();
+}
+
+// Pushes "this ParamId has a keyframe track on the active layer" to the
+// left/right panels, so their labels can tint (see SliderRow::setAnimated).
+void MainWindow::refreshAnimationIndicators()
+{
+    const Layer* l = activeLayer();
+    const QSet<ParamId> ids = (m_current >= 0 && l)
+        ? animatedParamIds(m_images[m_current].anim, l->id) : QSet<ParamId>{};
+    m_left->setAnimatedParams(ids);
+    m_right->setAnimatedParams(ids);
+}
+
+bool MainWindow::insertKeyframeUnderCursor()
+{
+    if (m_current < 0) return false;
+    Layer* l = activeLayer();
+    if (!l) return false;
+
+    QWidget* w = QApplication::widgetAt(QCursor::pos());
+    if (!w) return false;
+
+    QHash<QWidget*, ParamId> map = m_left->paramWidgets();
+    const QHash<QWidget*, ParamId> rightMap = m_right->paramWidgets();
+    for (auto it = rightMap.constBegin(); it != rightMap.constEnd(); ++it)
+        map.insert(it.key(), it.value());
+
+    ParamId id = ParamId::AdjBrightness;
+    bool found = false;
+    for (QWidget* p = w; p; p = p->parentWidget()) {
+        auto it = map.constFind(p);
+        if (it != map.constEnd()) { id = it.value(); found = true; break; }
+    }
+    if (!found) return false;
+
+    SessionImage& img = m_images[m_current];
+    upsertKey(img.anim, l->id, id, img.anim.playhead, getParam(*l, id));
+    syncTimeline();   // also refreshes the animation indicators
+    m_undoTimer.start();
+    return true;
 }
 
 void MainWindow::onTimelineEdited()
@@ -891,6 +1045,7 @@ void MainWindow::onTimelineEdited()
     if (m_current < 0) return;
     m_playCacheValid = false;
     m_images[m_current].anim = m_timeline->animation();
+    refreshAnimationIndicators();
     scheduleRender();
     m_undoTimer.start();
 }
@@ -941,8 +1096,7 @@ bool MainWindow::buildPlayCache()
     m_playCache.clear();
     m_playCache.reserve(count);
 
-    QProgressDialog progress("Preparing playback…", "Cancel", 0, count, this);
-    progress.setWindowModality(Qt::WindowModal);
+    AnimProgressDialog progress("Preparing playback…", count, this);
     progress.setMinimumDuration(300);
 
     for (int i = 0; i < count; ++i) {
@@ -956,8 +1110,8 @@ bool MainWindow::buildPlayCache()
         const SessionParams p = bakeGroupVisibility(img.anim.hasAnimation()
             ? paramsAtFrame(img.state, img.anim, frame)
             : img.state);
-        m_playCache.append(RenderWorker::renderPreview(src, p, RenderWorker::FAST_MAX_PX,
-                                                       layerSourcesAt(img, frame)));
+        m_playCache.append(m_worker->renderPreviewCached(src, p, RenderWorker::FAST_MAX_PX,
+                                                         layerSourcesAt(img, frame)));
     }
     progress.setValue(count);
     m_playCacheValid = true;
@@ -1134,6 +1288,7 @@ void MainWindow::onLayerDeleteRequested(int layerId)
     const bool wasActive = (st.activeLayerId == layerId);
     const int  mediaId   = st.layers[idx].mediaId;
     st.layers.erase(st.layers.begin() + idx);
+    removeLayerTracks(m_images[m_current].anim, layerId);
 
     const bool stillUsed = std::any_of(st.layers.begin(), st.layers.end(),
         [mediaId](const Layer& l){ return l.mediaId == mediaId; });
@@ -1147,6 +1302,7 @@ void MainWindow::onLayerDeleteRequested(int layerId)
 
     syncBoardSource(m_images[m_current]);
     syncLayersPanel();
+    syncTimeline();
     scheduleRender();
     m_undoTimer.start();
 }
@@ -1186,7 +1342,9 @@ void MainWindow::onLayerTransformChanged(const LayerTransform& t)
     Layer* l = activeLayer();
     if (!l || l->transform == t) return;
 
+    const LayerTransform old = l->transform;
     l->transform = t;
+    autoKeyTransform(l->id, old, t);   // cheap: just upserts a float; no-op unless keyed already or Auto Key is on
     m_playCacheValid = false;
     m_left->setTransform(t);   // keep the numeric boxes in sync (silent)
     pushPreviewTransform();
@@ -1199,7 +1357,10 @@ void MainWindow::onLayerTransformChanged(const LayerTransform& t)
     // drag preview that visibly sharpens a beat after release.
     const bool preview = m_transformDragging && !m_preview->isSnapped();
     scheduleRender(preview);
-    if (!preview) m_previewTimer.start();   // thumbs catch up after edits
+    if (!preview) {
+        m_previewTimer.start();   // thumbs catch up after edits
+        syncTimeline();   // dopesheet catches up too, not every drag frame
+    }
     m_undoTimer.start();
 }
 
@@ -1211,7 +1372,9 @@ void MainWindow::onGroupTransformChanged(const QHash<int, LayerTransform>& byId)
     for (auto it = byId.cbegin(); it != byId.cend(); ++it) {
         const int idx = findLayerById(st.layers, it.key());
         if (idx >= 0 && !(st.layers[idx].transform == it.value())) {
+            const LayerTransform old = st.layers[idx].transform;
             st.layers[idx].transform = it.value();
+            autoKeyTransform(it.key(), old, it.value());
             any = true;
         }
     }
@@ -1222,7 +1385,10 @@ void MainWindow::onGroupTransformChanged(const QHash<int, LayerTransform>& byId)
     pushPreviewTransform();
     const bool preview = m_transformDragging && !m_preview->isSnapped();
     scheduleRender(preview);
-    if (!preview) m_previewTimer.start();
+    if (!preview) {
+        m_previewTimer.start();
+        syncTimeline();
+    }
     m_undoTimer.start();
 }
 
@@ -1462,6 +1628,8 @@ void MainWindow::onDeleteParentRequested(int mediaId)
     // Remove the source from the COMPOSITION (its layers + group), but keep it
     // in the library (board.media + filmstrip) so it can be re-added. Use the
     // filmstrip ✕ to remove it from the library entirely.
+    for (const Layer& l : st.layers)
+        if (l.mediaId == mediaId) removeLayerTracks(board.anim, l.id);
     st.layers.erase(std::remove_if(st.layers.begin(), st.layers.end(),
                     [mediaId](const Layer& l){ return l.mediaId == mediaId; }),
                     st.layers.end());
@@ -1649,6 +1817,7 @@ void MainWindow::undo()
     --img.undoIndex;
     img.state = img.undoStack[img.undoIndex].params;
     img.anim  = img.undoStack[img.undoIndex].anim;
+    syncBoardSource(img);
     m_playCacheValid = false;
     applyParams(img.state);
     syncLayersPanel();
@@ -1674,6 +1843,7 @@ void MainWindow::redo()
     ++img.undoIndex;
     img.state = img.undoStack[img.undoIndex].params;
     img.anim  = img.undoStack[img.undoIndex].anim;
+    syncBoardSource(img);
     m_playCacheValid = false;
     applyParams(img.state);
     syncLayersPanel();
@@ -1956,6 +2126,8 @@ void MainWindow::onThumbCloseRequested(int mediaId)
         if (reply != QMessageBox::Yes) return;
     }
 
+    for (const Layer& l : st.layers)
+        if (l.mediaId == mediaId) removeLayerTracks(board.anim, l.id);
     st.layers.erase(std::remove_if(st.layers.begin(), st.layers.end(),
                     [mediaId](const Layer& l){ return l.mediaId == mediaId; }),
                     st.layers.end());
@@ -2085,9 +2257,7 @@ void MainWindow::exportSequence(const QString& baseName)
     if (dir.isEmpty()) return;
 
     const int digits = qMax(4, QString::number(f1).size());
-    QProgressDialog progress("Rendering frames…", "Cancel", 0, count, this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(0);
+    AnimProgressDialog progress("Rendering frames…", count, this);
 
     int written = 0;
     for (int i = 0; i < count; ++i) {
@@ -2140,9 +2310,7 @@ void MainWindow::exportVideoMp4(const QString& baseName)
         return;
     }
 
-    QProgressDialog progress("Rendering frames…", "Cancel", 0, count, this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(0);
+    AnimProgressDialog progress("Rendering frames…", count, this);
     for (int i = 0; i < count; ++i) {
         progress.setValue(i);
         if (progress.wasCanceled()) return;

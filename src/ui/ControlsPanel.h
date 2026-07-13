@@ -1,9 +1,13 @@
 #pragma once
 
 #include "../core/Params.h"
+#include "../core/AnimParams.h"
 #include <QWidget>
 #include <QImage>
 #include <QColor>
+#include <QSet>
+#include <QHash>
+#include <QLabel>
 
 class AdjustmentsPanel;
 class LayersPanel;
@@ -44,6 +48,12 @@ public:
 
     // Active layer placement on the frame (X/Y in px from centre, scale %, rotation °).
     void setTransform(const LayerTransform& t);         // silent
+
+    // Tint Parameters/Transform labels whose ParamId has a keyframe track.
+    void setAnimatedParams(const QSet<ParamId>& ids);
+
+    // Control widget → ParamId (Parameters + Transform), for hover-to-keyframe.
+    QHash<QWidget*, ParamId> paramWidgets() const;
 
 signals:
     void adjustmentsChanged();

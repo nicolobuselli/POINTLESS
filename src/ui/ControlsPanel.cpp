@@ -12,6 +12,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSlider>
+#include <QStyle>
 #include <QDoubleValidator>
 #include <QSignalBlocker>
 #include <QIcon>
@@ -393,6 +394,36 @@ void ControlsPanel::setTransform(const LayerTransform& t)
     if (m_flipH) m_flipH->setChecked(t.flipH);
     if (m_flipV) m_flipV->setChecked(t.flipV);
     m_updating = false;
+}
+
+namespace {
+void tintBox(QWidget* w, bool on)
+{
+    if (!w) return;
+    w->setProperty("animated", on);
+    w->style()->unpolish(w);
+    w->style()->polish(w);
+}
+}
+
+void ControlsPanel::setAnimatedParams(const QSet<ParamId>& ids)
+{
+    m_adjust->setAnimatedParams(ids);
+    if (m_tfX) m_tfX->setAnimated(ids.contains(ParamId::TfX));
+    if (m_tfY) m_tfY->setAnimated(ids.contains(ParamId::TfY));
+    if (m_tfRot) m_tfRot->setAnimated(ids.contains(ParamId::TfRotation));
+    tintBox(m_tfScaleEdit, ids.contains(ParamId::TfScale));   // plain QLineEdit, not a DragSpinBox
+}
+
+QHash<QWidget*, ParamId> ControlsPanel::paramWidgets() const
+{
+    QHash<QWidget*, ParamId> m = m_adjust->paramWidgets();
+    if (m_tfX) m.insert(m_tfX, ParamId::TfX);
+    if (m_tfY) m.insert(m_tfY, ParamId::TfY);
+    if (m_tfRot) m.insert(m_tfRot, ParamId::TfRotation);
+    if (m_tfScaleSlider) m.insert(m_tfScaleSlider, ParamId::TfScale);
+    if (m_tfScaleEdit) m.insert(m_tfScaleEdit, ParamId::TfScale);
+    return m;
 }
 
 void ControlsPanel::setScale(float scalePct)

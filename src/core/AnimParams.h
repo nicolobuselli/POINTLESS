@@ -26,6 +26,8 @@ enum class ParamId {
     AdjBrightness, AdjContrast, AdjGamma, AdjLevelsBlack, AdjLevelsMid,
     AdjLevelsWhite, AdjSaturation, AdjSizePct, AdjSharpenStrength, AdjSharpenRadius,
     AdjEdgeEnhancement, AdjBlur, AdjGrain, AdjPosterize, AdjThreshold,
+    // Transform (every layer)
+    TfX, TfY, TfScale, TfRotation,
     // Halftone (grid + own)
     HtGridSpacing, HtGridPointSpacing, HtGridRotation, HtGridDiameter,
     HtGridStretchFactor, HtGridStretchAngle, HtInputDpi, HtMultiThreshold,
@@ -34,7 +36,7 @@ enum class ParamId {
     DiPixelSize, DiStrength, DiOpacity, DiCornerRadius, DiThreshold,
     DiLevels, DiLineAngle, DiLineSpacing,
     // Ascii
-    AsCellSize, AsGamma, AsEdges,
+    AsCellSize, AsGamma, AsEdges, AsHatching, AsStipple, AsContour,
     // Tonal — per-colour threshold of the active effect's palette (only the
     // first N are animatable, N = current tone count). MUST stay contiguous.
     ToneLevel1, ToneLevel2, ToneLevel3, ToneLevel4,

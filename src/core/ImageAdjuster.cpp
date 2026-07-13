@@ -43,7 +43,8 @@ void applyLut(QImage& img, const uint8_t* lut)
 // ---------------------------------------------------------------------------
 // Public entry point
 // Pipeline: resize → brightness → contrast → gamma → levels → saturation →
-//           blur → edge enhancement → sharpen → grain → posterize → threshold
+//           invert → blur → edge enhancement → sharpen → grain → posterize →
+//           threshold
 // ---------------------------------------------------------------------------
 
 QImage ImageAdjuster::apply(const QImage& src, const Adjustments& a)
@@ -75,7 +76,14 @@ QImage ImageAdjuster::apply(const QImage& src, const Adjustments& a)
     if (a.saturation != 0)
         saturate(img, a.saturation);
 
-    // 6. Blur
+    // 6. Invert
+    if (a.invert) {
+        uint8_t lut[256];
+        for (int i = 0; i < 256; ++i) lut[i] = uint8_t(255 - i);
+        applyLut(img, lut);
+    }
+
+    // 7. Blur
     if (a.blur > 0) {
         int radius = qMax(1, qRound(a.blur * 0.35f));
         int passes = 2 + a.blur / 35;
@@ -83,23 +91,23 @@ QImage ImageAdjuster::apply(const QImage& src, const Adjustments& a)
             boxBlur(img, radius);
     }
 
-    // 7. Edge Enhancement
+    // 8. Edge Enhancement
     if (a.edgeEnhancement > 0)
         edgeEnhance(img, a.edgeEnhancement);
 
-    // 8. Sharpen (unsharp mask)
+    // 9. Sharpen (unsharp mask)
     if (a.sharpenStrength > 0)
         unsharpMask(img, a.sharpenStrength, a.sharpenRadius);
 
-    // 9. Grain
+    // 10. Grain
     if (a.grain > 0)
         addGrain(img, a.grain);
 
-    // 10. Posterize
+    // 11. Posterize
     if (a.posterize < 256)
         applyPosterize(img, a.posterize);
 
-    // 11. Threshold
+    // 12. Threshold
     if (a.threshold > 0)
         applyThreshold(img, a.threshold);
 

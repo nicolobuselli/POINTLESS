@@ -3,6 +3,7 @@
 #include "AnimParams.h"
 #include "Params.h"
 #include <vector>
+#include <QSet>
 
 // ============================================================
 //  Animation — keyframe model over the addressable parameters.
@@ -59,3 +60,11 @@ SessionParams paramsAtFrame(const SessionParams& base, const Animation& anim, in
 Track* findTrack(Animation& anim, int layerId, ParamId param);
 void   upsertKey(Animation& anim, int layerId, ParamId param, int frame,
                  double value, Easing easing = Easing::Linear);
+
+// Drop every track belonging to a deleted layer, so its keyframes don't
+// linger as orphaned/invisible tracks in the timeline.
+void removeLayerTracks(Animation& anim, int layerId);
+
+// Which params currently have a keyframe track for this layer (-1 = document),
+// for UI "this parameter is animated" indicators.
+QSet<ParamId> animatedParamIds(const Animation& anim, int layerId);

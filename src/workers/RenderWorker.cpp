@@ -597,6 +597,27 @@ QImage RenderWorker::renderPreview(const QImage& source, const SessionParams& pa
     return renderDocument(small, p, scaledLayerSrc(layerSrc, k));
 }
 
+QImage RenderWorker::renderPreviewCached(const QImage& source, const SessionParams& params, int maxPx,
+                                         const QHash<int, QImage>& layerSrc)
+{
+    const int maxDim = qMax(source.width(), source.height());
+    if (source.isNull() || maxDim <= maxPx || maxDim <= 0)
+        return renderDocumentImpl(source, params, layerSrc, &m_layerCache, &m_layerCacheMutex);
+
+    const float k = float(maxPx) / float(maxDim);
+    const QImage small = source.scaled(maxPx, maxPx, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    SessionParams p = scaledForPreview(params, k);
+    for (Layer& l : p.layers) {
+        if (l.kind != LayerKind::Halftone) continue;
+        const float requested = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
+        const float maxBySize = 6000.0f / float(maxDim);
+        const float minBySize = 16.0f   / float(maxDim);
+        const float eff = qBound(minBySize, requested, maxBySize);
+        l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
+    }
+    return renderDocumentImpl(small, p, scaledLayerSrc(layerSrc, k), &m_layerCache, &m_layerCacheMutex);
+}
+
 SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float scale)
 {
     SessionParams p = params;
