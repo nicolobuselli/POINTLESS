@@ -113,6 +113,8 @@ public:
     std::function<void(const QString&)> onRenamed;
     std::function<void()>            onDeleteRequested;
     std::function<void()>            onRemoveEditsRequested;
+    std::function<void()>            onCopyRequested;
+    std::function<void()>            onPasteRequested;
 
     void setDeletable(bool d) { m_deletable = d; }
     void setHasEdits(bool h)  { m_hasEdits = h; }
@@ -258,12 +260,18 @@ protected:
 
     void contextMenuEvent(QContextMenuEvent* e) override
     {
-        if (!m_deletable) return;
         QMenu menu(this);
-        QAction* del = menu.addAction("Delete layer");
-        QAction* rmEdits = m_hasEdits ? menu.addAction("Remove edits") : nullptr;
+        QAction* copy  = menu.addAction("Copy layer");
+        QAction* paste = menu.addAction("Paste layer");
+        menu.addSeparator();
+        QAction* del     = m_deletable ? menu.addAction("Delete layer")  : nullptr;
+        QAction* rmEdits = m_hasEdits  ? menu.addAction("Remove edits") : nullptr;
         QAction* chosen = menu.exec(e->globalPos());
-        if (chosen == del && onDeleteRequested)
+        if (chosen == copy && onCopyRequested)
+            onCopyRequested();
+        else if (chosen == paste && onPasteRequested)
+            onPasteRequested();
+        else if (chosen && chosen == del && onDeleteRequested)
             onDeleteRequested();
         else if (chosen && chosen == rmEdits && onRemoveEditsRequested)
             onRemoveEditsRequested();
@@ -338,6 +346,7 @@ public:
     };
 
     std::function<void(int, int)> onChildReorder;    // layerId, insertIndex
+    std::function<void(int, int)> onChildDuplicate;  // layerId, insertIndex (Alt+drag)
     std::function<void(int, int)> onParentReorder;   // mediaId, insertIndex
     std::function<void(int)>      onAddChild;         // mediaId
     std::function<void(int)>      onMediaDropped;     // library source → new layer
@@ -393,7 +402,9 @@ protected:
         const QPoint pos = e->position().toPoint();
         if (e->mimeData()->hasFormat(kLayerMime)) {
             const int id = e->mimeData()->data(kLayerMime).toInt();
-            if (onChildReorder) onChildReorder(id, childInsertIndexAt(pos));
+            if (e->modifiers() & Qt::AltModifier) {
+                if (onChildDuplicate) onChildDuplicate(id, childInsertIndexAt(pos));
+            } else if (onChildReorder) onChildReorder(id, childInsertIndexAt(pos));
         } else if (e->mimeData()->hasFormat(kParentMime)) {
             const int mid = e->mimeData()->data(kParentMime).toInt();
             const int zone = childZoneMediaAt(pos);
@@ -801,7 +812,8 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         m_rowsScroll = scroll;
 
         m_rowsArea = new RowsArea;
-        m_rowsArea->onChildReorder  = [this](int id,  int idx) { emit reorderRequested(id, idx); };
+        m_rowsArea->onChildReorder    = [this](int id,  int idx) { emit reorderRequested(id, idx); };
+        m_rowsArea->onChildDuplicate  = [this](int id,  int idx) { emit duplicateChildRequested(id, idx); };
         m_rowsArea->onParentReorder = [this](int mid, int idx) { emit parentReordered(mid, idx); };
         m_rowsArea->onAddChild      = [this](int mid)          { emit addChildRequested(mid); };
         m_rowsArea->onMediaDropped  = [this](int mid)          { emit mediaDroppedAsLayer(mid); };
@@ -859,7 +871,8 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         vl->addWidget(m_headerWidget);
 
         m_rowsArea = new RowsArea;
-        m_rowsArea->onChildReorder  = [this](int id,  int idx) { emit reorderRequested(id, idx); };
+        m_rowsArea->onChildReorder    = [this](int id,  int idx) { emit reorderRequested(id, idx); };
+        m_rowsArea->onChildDuplicate  = [this](int id,  int idx) { emit duplicateChildRequested(id, idx); };
         m_rowsArea->onParentReorder = [this](int mid, int idx) { emit parentReordered(mid, idx); };
         m_rowsArea->onAddChild      = [this](int mid)          { emit addChildRequested(mid); };
         m_rowsArea->onMediaDropped  = [this](int mid)          { emit mediaDroppedAsLayer(mid); };
@@ -1048,6 +1061,8 @@ void LayersPanel::buildTree()
         row->onRenamed         = [this, id](const QString& n){ emit layerRenamed(id, n); };
         row->onDeleteRequested = [this, id]()                { emit deleteRequested(id); };
         row->onRemoveEditsRequested = [this, id]()           { emit removeEditsRequested(id); };
+        row->onCopyRequested   = [this, id]()                { emit copyLayerRequested(id); };
+        row->onPasteRequested  = [this, id]()                { emit pasteLayerRequested(id); };
         lay->addWidget(row);
         m_rows.append(row);
         model.push_back({ row, false, layer.mediaId, id });

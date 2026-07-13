@@ -65,6 +65,9 @@ signals:
     void blendModeChanged(int layerId, BlendMode mode);
     void addLayerRequested();
     void reorderRequested(int layerId, int insertIndex);
+    void duplicateChildRequested(int layerId, int insertIndex);   // Alt+drag
+    void copyLayerRequested(int layerId);    // context menu "Copy layer"
+    void pasteLayerRequested(int layerId);   // context menu "Paste layer"
     // Parent (group) signals
     void addChildRequested(int mediaId);
     void parentReordered(int mediaId, int insertIndex);

@@ -42,6 +42,10 @@ const std::array<ParamDesc, int(ParamId::Count)> kDescs = {{
     { "Jitter",             0,     1,  false, ParamScope::Halftone },
     { "Opacity",            0,     1,  false, ParamScope::Halftone },
     { "Corner radius",      0,   100,  false, ParamScope::Halftone },
+    { "Loc X",              0,     1,  false, ParamScope::Halftone },
+    { "Loc Y",              0,     1,  false, ParamScope::Halftone },
+    { "Loc rotation",    -180,   180,  false, ParamScope::Halftone },
+    { "Loc scale",        0.1,    10,  false, ParamScope::Halftone },
 
     { "Pixel size",         1,    16,  true,  ParamScope::Dither },
     { "Strength",           0,   100,  true,  ParamScope::Dither },
@@ -143,6 +147,10 @@ double getParam(const Layer& l, ParamId id)
         case ParamId::HtJitter:            return l.halftone.jitter;
         case ParamId::HtOpacity:           return l.halftone.opacity;
         case ParamId::HtCornerRadius:      return l.halftone.cornerRadius;
+        case ParamId::HtLocX:             return l.halftone.diameterLoc.posX;
+        case ParamId::HtLocY:              return l.halftone.diameterLoc.posY;
+        case ParamId::HtLocRotation:       return l.halftone.diameterLoc.rotation;
+        case ParamId::HtLocScale:          return l.halftone.diameterLoc.scale;
 
         case ParamId::DiPixelSize:    return l.dither.pixelSize;
         case ParamId::DiStrength:     return l.dither.strength;
@@ -212,6 +220,10 @@ void setParam(Layer& l, ParamId id, double v)
         case ParamId::HtJitter:            l.halftone.jitter             = fv; break;
         case ParamId::HtOpacity:           l.halftone.opacity            = fv; break;
         case ParamId::HtCornerRadius:      l.halftone.cornerRadius       = fv; break;
+        case ParamId::HtLocX:              l.halftone.diameterLoc.posX     = fv; break;
+        case ParamId::HtLocY:              l.halftone.diameterLoc.posY     = fv; break;
+        case ParamId::HtLocRotation:       l.halftone.diameterLoc.rotation = fv; break;
+        case ParamId::HtLocScale:          l.halftone.diameterLoc.scale    = fv; break;
 
         case ParamId::DiPixelSize:    l.dither.pixelSize    = iv; break;
         case ParamId::DiStrength:     l.dither.strength     = iv; break;

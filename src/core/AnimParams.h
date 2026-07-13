@@ -32,6 +32,7 @@ enum class ParamId {
     HtGridSpacing, HtGridPointSpacing, HtGridRotation, HtGridDiameter,
     HtGridStretchFactor, HtGridStretchAngle, HtInputDpi, HtMultiThreshold,
     HtGamma, HtWeight, HtJitter, HtOpacity, HtCornerRadius,
+    HtLocX, HtLocY, HtLocRotation, HtLocScale,
     // Dither
     DiPixelSize, DiStrength, DiOpacity, DiCornerRadius, DiThreshold,
     DiLevels, DiLineAngle, DiLineSpacing,

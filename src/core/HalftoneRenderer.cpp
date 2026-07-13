@@ -126,12 +126,35 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
     // up to ~spacing away; widen the per-band cull by that reach to avoid seams.
     const float jitterReach = params.jitter * sp * 2.0f;
 
+    // Localized diameter override: a spotlight. Inside the falloff (dashed)
+    // radius the dot-size multiplier is loc.scale (1.0 = the Diameter slider's
+    // normal value); it fades to 0 — dots vanish — at the outer ring, and
+    // stays 0 beyond it. Position/radius are normalized to the image size.
+    const HalftoneLocPoint& loc = params.diameterLoc;
+    const float locCx  = loc.posX * imgW;
+    const float locCy  = loc.posY * imgH;
+    const float locOut = loc.radius * qMin(imgW, imgH);
+    const float locIn  = locOut * (1.0f - qBound(0.0f, loc.falloff, 1.0f));
+    auto locDiameterMul = [&](float x, float y) -> float {
+        if (!loc.enabled) return 1.0f;
+        const float d = std::hypot(x - locCx, y - locCy);
+        float t;   // 1 inside the falloff radius, fading to 0 at/beyond the outer ring
+        if (d <= locIn) t = 1.0f;
+        else if (d >= locOut || locOut <= locIn) t = 0.0f;
+        else { const float u = (locOut - d) / (locOut - locIn); t = u * u * (3.0f - 2.0f * u); }
+        return loc.scale * t;
+    };
+
+    // A localized scale > 1 can grow a dot past baseR: widen the band cull by
+    // the largest possible multiplier so those dots aren't clipped at a seam.
+    const float maxR = baseR * (loc.enabled ? qMax(1.0f, loc.scale) : 1.0f);
+
     std::unique_ptr<QSvgRenderer> svgCache;
     QString cachedSvgPath;
 
     for (const GridSample& s : samples) {
-        if (s.y + baseR + jitterReach < bandTop
-         || s.y - baseR - jitterReach > bandBot) continue;   // band cull (+ jitter drift)
+        if (s.y + maxR + jitterReach < bandTop
+         || s.y - maxR - jitterReach > bandBot) continue;   // band cull (+ jitter drift)
 
         int cx, cy, cw, ch;
         cellAround(s.x, s.y, cellPx, imgW, imgH, cx, cy, cw, ch);
@@ -139,10 +162,11 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
         const float lumPerc  = ColorMath::linearToSrgb8(lumLin) / 255.0f;
         const float darkness = 1.0f - lumLin;
         const float cov      = std::pow(darkness, invGamma);
-        if (baseR * std::sqrt(cov) < 0.5f) continue;     // cull empty cells by true coverage
+        const float locR     = baseR * locDiameterMul(s.x, s.y);
+        if (locR * std::sqrt(cov) < 0.5f) continue;     // cull empty cells by true coverage
         // weight lifts every visible symbol toward full size; at 1.0 all are equal.
         const float covW     = cov + params.weight * (1.0f - cov);
-        const float r        = baseR * std::sqrt(covW);  // dot area ∝ ink coverage
+        const float r        = locR * std::sqrt(covW);  // dot area ∝ ink coverage
 
         HalftoneShape shape   = shapesVec.empty() ? HalftoneShape::Circle : shapesVec[0].shape;
         QString       svgPath = shapesVec.empty() ? QString()             : shapesVec[0].svgPath;

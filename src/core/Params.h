@@ -281,6 +281,27 @@ inline bool operator==(const GridSettings& a, const GridSettings& b) {
         && a.followGridRotation == b.followGridRotation;
 }
 
+// A single localized override of the halftone diameter: a circular area (drawn
+// and dragged on-canvas) where dot size is multiplied by `scale` instead of
+// staying uniform. Position/rotation/scale mirror LayerTransform so they slot
+// into the same keyframe system; radius/falloff are static, set only by
+// dragging the on-canvas rings (not animatable, for now).
+struct HalftoneLocPoint {
+    bool  enabled  = false;
+    float posX     = 0.5f;   // 0..1, normalized frame space
+    float posY     = 0.5f;   // 0..1, normalized frame space
+    float rotation = 0.0f;   // -180..180 — reserved, no visual effect on a circular falloff
+    float scale    = 1.0f;   // 0.1..10 — diameter multiplier applied inside the influence area
+    float radius   = 0.15f;  // 0..1 — influence radius, fraction of the frame's shorter side
+    float falloff  = 0.3f;   // 0..1 — fraction of radius that is a soft transition
+};
+
+inline bool operator==(const HalftoneLocPoint& a, const HalftoneLocPoint& b) {
+    return a.enabled == b.enabled && a.posX == b.posX && a.posY == b.posY
+        && a.rotation == b.rotation && a.scale == b.scale
+        && a.radius == b.radius && a.falloff == b.falloff;
+}
+
 struct HalftoneSettings {
     int                     inputDpi       = 72;   // 18..300 — render resolution
     std::vector<ShapeEntry> shapes         = { ShapeEntry{} };
@@ -292,6 +313,7 @@ struct HalftoneSettings {
     float jitter       = 0.0f;
     float opacity      = 1.0f;
     float cornerRadius = 0.0f;
+    HalftoneLocPoint diameterLoc;
 
     TonalSettings tonal { ToneMode::FixedTones, defaultAccentTones(1) };
 };
@@ -301,7 +323,8 @@ inline bool operator==(const HalftoneSettings& a, const HalftoneSettings& b) {
         && a.multiThreshold == b.multiThreshold && a.grid == b.grid
         && a.gamma == b.gamma && a.weight == b.weight
         && a.jitter == b.jitter && a.opacity == b.opacity
-        && a.cornerRadius == b.cornerRadius && a.tonal == b.tonal;
+        && a.cornerRadius == b.cornerRadius && a.diameterLoc == b.diameterLoc
+        && a.tonal == b.tonal;
 }
 
 // ============================================================

@@ -61,9 +61,14 @@ private slots:
     void onLayerBlendChanged(int layerId, BlendMode mode);
     void onLayerTransformChanged(const LayerTransform& t);
     void onGroupTransformChanged(const QHash<int, LayerTransform>& byId);
+    void onLocalizationChanged(const HalftoneLocPoint& pt);
+    void onLocalizationToggleRequested();
     void onCanvasSelectionChanged(const QSet<int>& ids, int activeId);
     void onAddLayerRequested();
     void onLayerReordered(int layerId, int insertIndex);
+    void onLayerDuplicateRequested(int layerId, int insertIndex);   // Alt+drag
+    void onCopyLayerRequested(int layerId);
+    void onPasteLayerRequested(int layerId);
     // Cascade (parent/child) operations driven by the layer tree.
     void onAddChildRequested(int mediaId);
     void onParentReordered(int mediaId, int insertIndex);
@@ -116,7 +121,7 @@ private:
     void  commitStructuralChange();                     // sync panel + render + undo
     QSize activeLayerNativeSize() const;   // layer pixel size at 100% scale
     QSize layerNativeSize(const Layer& l) const;   // any layer's 100%-scale size
-    void  pushPreviewTransform();          // feed active transform + selection to the preview
+    void  pushPreviewTransform();          // feed active transform + selection + loc dot to the preview
     void selectLayerInternal(int layerId, bool makeVisible);
     QString uniqueLayerName(const SessionParams& p, LayerKind kind, int mediaId) const;
     void syncLayersPanel();
@@ -138,6 +143,7 @@ private:
     bool buildPlayCache();                // pre-render all frames for smooth playback
     void autoKeyChanged(const SessionParams& before, const SessionParams& after);
     void autoKeyTransform(int layerId, const LayerTransform& before, const LayerTransform& after);
+    void autoKeyLocalization(int layerId, const HalftoneLocPoint& before, const HalftoneLocPoint& after);
     void refreshAnimationIndicators();   // push "has a keyframe track" state to the panels
     bool insertKeyframeUnderCursor();    // "I" key: keyframe whatever control is under the mouse
     void exportSequence(const QString& baseName);
@@ -170,12 +176,15 @@ private:
     int                   m_current = -1;
     QSet<int>             m_selection;   // canvas multi-selection (runtime, not undone)
     int                   m_selAnchor = -1;   // anchor layer for shift-range selection
+    Layer                 m_layerClipboard;
+    bool                  m_hasLayerClipboard = false;
 
     QImage m_lastRender;
     QImage m_lastPreviewFrame;
     bool   m_capsLockActive = false;
     bool   m_spaceDown = false;
     bool   m_transformDragging = false;   // live on-canvas drag → cheap preview only
+    bool   m_locDragging = false;         // live loc-dot drag → cheap preview only
     QTimer m_undoTimer;
     QTimer m_previewTimer;   // debounce live preview until param edits settle
     QTimer m_zoomRenderTimer; // debounce re-render at higher res after zooming

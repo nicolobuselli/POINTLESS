@@ -348,6 +348,28 @@ MainWindow::MainWindow(QWidget* parent)
         syncTimeline();   // dopesheet catches up once the gesture ends
         m_undoTimer.start();
     });
+    connect(m_preview, &PreviewWidget::localizationChanged, this, [this](const HalftoneLocPoint& pt) {
+        m_locDragging = true;
+        onLocalizationChanged(pt);
+    });
+    connect(m_preview, &PreviewWidget::localizationEditFinished, this, [this]() {
+        m_locDragging = false;
+        scheduleRender();
+        m_previewTimer.start();
+        syncTimeline();
+        m_undoTimer.start();
+    });
+    connect(m_preview, &PreviewWidget::localizationDeleteRequested, this, [this]() {
+        Layer* l = activeLayer();
+        if (!l || l->kind != LayerKind::Halftone) return;
+        l->halftone.diameterLoc.enabled = false;
+        m_right->setHalftoneLoc(l->halftone.diameterLoc);
+        pushPreviewTransform();
+        scheduleRender();
+        m_previewTimer.start();
+        m_undoTimer.start();
+    });
+    connect(m_right, &ModePanel::localizationToggleRequested, this, &MainWindow::onLocalizationToggleRequested);
     connect(m_preview, &PreviewWidget::selectionChanged, this, &MainWindow::onCanvasSelectionChanged);
     connect(m_right, &ModePanel::paramsChanged,             this, &MainWindow::onParamsChanged);
     connect(m_right, &ModePanel::tonalChanged,              this, &MainWindow::onParamsChanged);
@@ -404,6 +426,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_layersPanel, &LayersPanel::blendModeChanged,  this, &MainWindow::onLayerBlendChanged);
     connect(m_layersPanel, &LayersPanel::addLayerRequested, this, &MainWindow::onAddLayerRequested);
     connect(m_layersPanel, &LayersPanel::reorderRequested,  this, &MainWindow::onLayerReordered);
+    connect(m_layersPanel, &LayersPanel::duplicateChildRequested, this, &MainWindow::onLayerDuplicateRequested);
+    connect(m_layersPanel, &LayersPanel::copyLayerRequested,  this, &MainWindow::onCopyLayerRequested);
+    connect(m_layersPanel, &LayersPanel::pasteLayerRequested, this, &MainWindow::onPasteLayerRequested);
     connect(m_layersPanel, &LayersPanel::addChildRequested,       this, &MainWindow::onAddChildRequested);
     connect(m_layersPanel, &LayersPanel::mediaDroppedAsLayer,     this, &MainWindow::onMediaDroppedAsLayer);
     connect(m_layersPanel, &LayersPanel::parentReordered,         this, &MainWindow::onParentReordered);
@@ -978,6 +1003,25 @@ void MainWindow::autoKeyTransform(int layerId, const LayerTransform& before, con
     key(ParamId::TfRotation, before.rotation != after.rotation, after.rotation);
 }
 
+// Radius/falloff are static (not in ParamId, never keyed) — only the
+// Transform-like fields (position/rotation/scale) are animatable, matching
+// the on-canvas layer transform.
+void MainWindow::autoKeyLocalization(int layerId, const HalftoneLocPoint& before, const HalftoneLocPoint& after)
+{
+    if (m_current < 0) return;
+    Animation& anim = m_images[m_current].anim;
+    const int frame = anim.playhead;
+
+    auto key = [&](ParamId id, bool changed, float value) {
+        if (changed && (m_autoKey || findTrack(anim, layerId, id)))
+            upsertKey(anim, layerId, id, frame, value);
+    };
+    key(ParamId::HtLocX,        before.posX     != after.posX,     after.posX);
+    key(ParamId::HtLocY,        before.posY     != after.posY,     after.posY);
+    key(ParamId::HtLocRotation, before.rotation != after.rotation, after.rotation);
+    key(ParamId::HtLocScale,    before.scale    != after.scale,    after.scale);
+}
+
 void MainWindow::setPlayhead(int frame)
 {
     if (m_current < 0) return;
@@ -1364,6 +1408,45 @@ void MainWindow::onLayerTransformChanged(const LayerTransform& t)
     m_undoTimer.start();
 }
 
+// Loc-dot edits bypass collectParams() for the same drag-performance reasons
+// as onLayerTransformChanged, but must also keep ModePanel's cached copy in
+// sync (halftoneSettings() round-trips diameterLoc, unlike l.transform).
+void MainWindow::onLocalizationChanged(const HalftoneLocPoint& pt)
+{
+    if (m_current < 0) return;
+    Layer* l = activeLayer();
+    if (!l || l->kind != LayerKind::Halftone || l->halftone.diameterLoc == pt) return;
+
+    const HalftoneLocPoint old = l->halftone.diameterLoc;
+    l->halftone.diameterLoc = pt;
+    autoKeyLocalization(l->id, old, pt);
+    m_playCacheValid = false;
+    m_right->setHalftoneLoc(pt);   // keep the panel's round-trip copy current
+    pushPreviewTransform();
+
+    const bool preview = m_locDragging;
+    scheduleRender(preview);
+    if (!preview) {
+        m_previewTimer.start();
+        syncTimeline();
+    }
+    m_undoTimer.start();
+}
+
+void MainWindow::onLocalizationToggleRequested()
+{
+    if (m_current < 0) return;
+    Layer* l = activeLayer();
+    if (!l || l->kind != LayerKind::Halftone) return;
+
+    l->halftone.diameterLoc.enabled = !l->halftone.diameterLoc.enabled;
+    m_right->setHalftoneLoc(l->halftone.diameterLoc);
+    pushPreviewTransform();
+    scheduleRender();
+    m_previewTimer.start();
+    m_undoTimer.start();
+}
+
 void MainWindow::onGroupTransformChanged(const QHash<int, LayerTransform>& byId)
 {
     if (m_current < 0) return;
@@ -1419,6 +1502,7 @@ void MainWindow::pushPreviewTransform()
         m_preview->setCanvasLayers({}, {});
         m_preview->setSelection({}, -1);
         m_preview->setActiveTransform({}, {}, {}, false);
+        m_preview->setHalftoneLoc({}, {}, false);
         return;
     }
     auto& st = m_images[m_current].state;
@@ -1447,6 +1531,9 @@ void MainWindow::pushPreviewTransform()
     const QSize native = activeLayerNativeSize();
     m_preview->setActiveTransform(l ? l->transform : LayerTransform{},
                                   native, frame, l != nullptr && !native.isEmpty());
+
+    const bool locVisible = l && l->kind == LayerKind::Halftone && l->halftone.diameterLoc.enabled;
+    m_preview->setHalftoneLoc(l ? l->halftone.diameterLoc : HalftoneLocPoint{}, frame, locVisible);
 }
 
 void MainWindow::onCanvasSelectionChanged(const QSet<int>& ids, int activeId)
@@ -1509,6 +1596,65 @@ void MainWindow::onLayerReordered(int layerId, int insertIndex)
     layers.insert(layers.begin() + insertIndex, moved);
     regroupLayers(m_images[m_current].state);   // keep composite order == tree order
 
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+// Alt+drag: like onLayerReordered, but the dragged layer is copied in place
+// (with a fresh id/name) instead of moved.
+void MainWindow::onLayerDuplicateRequested(int layerId, int insertIndex)
+{
+    if (m_current < 0) return;
+    auto& st = m_images[m_current].state;
+
+    const int from = findLayerById(st.layers, layerId);
+    if (from < 0) return;
+
+    Layer nl = st.layers[from];
+    nl.id   = st.nextLayerId++;
+    nl.name = uniqueLayerName(st, nl.kind, nl.mediaId);
+
+    insertIndex = qBound(0, insertIndex, int(st.layers.size()));
+    st.layers.insert(st.layers.begin() + insertIndex, nl);
+    st.activeLayerId = nl.id;
+    regroupLayers(st);
+
+    applyParams(st);
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+void MainWindow::onCopyLayerRequested(int layerId)
+{
+    if (m_current < 0) return;
+    const auto& layers = m_images[m_current].state.layers;
+    const int idx = findLayerById(layers, layerId);
+    if (idx < 0) return;
+
+    m_layerClipboard    = layers[idx];
+    m_hasLayerClipboard = true;
+    m_preview->setStatus("Layer copied");
+}
+
+void MainWindow::onPasteLayerRequested(int layerId)
+{
+    if (m_current < 0 || !m_hasLayerClipboard) return;
+    auto& st = m_images[m_current].state;
+
+    const int insertAt = findLayerById(st.layers, layerId);
+    if (insertAt < 0) return;   // need a reference row to paste next to
+
+    Layer nl = m_layerClipboard;
+    nl.id   = st.nextLayerId++;
+    nl.name = uniqueLayerName(st, nl.kind, nl.mediaId);
+
+    st.layers.insert(st.layers.begin() + insertAt, nl);
+    st.activeLayerId = nl.id;
+    regroupLayers(st);
+
+    applyParams(st);
     syncLayersPanel();
     scheduleRender();
     m_undoTimer.start();

@@ -14,6 +14,7 @@
 #include <QtMath>
 #include <QLineF>
 #include <QPainterPath>
+#include <QKeyEvent>
 
 namespace {
 
@@ -33,6 +34,8 @@ QStringList imagePathsFromMime(const QMimeData* mime)
 constexpr double kHandleHit    = 9.0;   // px radius for corner hit-test
 constexpr double kRotHandleHit = 11.0;
 constexpr double kRotArm       = 28.0;  // px from top edge to rotation handle
+constexpr double kLocRingHit   = 6.0;   // px hit tolerance for the loc radius/falloff rings
+constexpr double kLocDotHit    = 9.0;   // px radius for the loc centre-dot hit/hover test
 
 // Rotation handle position (widget space) given the widget-space quad
 // [TL,TR,BR,BL] and the widget-space centre.
@@ -54,6 +57,32 @@ PreviewWidget::PreviewWidget(QWidget* parent)
     setAcceptDrops(true);
     setMinimumSize(300, 200);
     setAttribute(Qt::WA_OpaquePaintEvent);
+    setFocusPolicy(Qt::StrongFocus);   // needed for Backspace to delete a selected loc dot
+    setMouseTracking(true);            // hover-grow the passive loc dot without a button held
+}
+
+void PreviewWidget::setHalftoneLoc(const HalftoneLocPoint& pt, QSize frame, bool visible)
+{
+    m_loc        = pt;
+    m_locFrame   = frame;
+    m_locVisible = visible;
+    if (!visible) { m_locSelected = false; m_locHovered = false; }
+    update();
+}
+
+QPointF PreviewWidget::locCentreFrame() const
+{
+    return QPointF(m_loc.posX * m_locFrame.width(), m_loc.posY * m_locFrame.height());
+}
+
+double PreviewWidget::locRadiusFramePx() const
+{
+    return double(m_loc.radius) * qMin(m_locFrame.width(), m_locFrame.height());
+}
+
+double PreviewWidget::locInnerFramePx() const
+{
+    return locRadiusFramePx() * (1.0 - qBound(0.0f, m_loc.falloff, 1.0f));
 }
 
 void PreviewWidget::setImage(const QImage& img)
@@ -355,6 +384,50 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
         const QPointF pos = event->position();
         const Qt::KeyboardModifiers mods = event->modifiers();
 
+        // -1. Halftone localize-diameter dot, if the active layer shows one.
+        //     Takes priority over everything else on the canvas.
+        if (m_locVisible) {
+            const QPointF centre = frameToWidget(locCentreFrame());
+            const double dist    = QLineF(pos, centre).length();
+
+            if (!m_locSelected) {
+                // Passive: only the plain centre dot is clickable. A hit both
+                // activates it (shows the radius/falloff rings) and starts
+                // moving it in the same gesture.
+                if (dist <= kLocDotHit) {
+                    m_locSelected   = true;
+                    m_locDrag       = LocDrag::Move;
+                    m_locGrabOffset = locCentreFrame() - widgetToFrame(pos);
+                    setFocus(Qt::MouseFocusReason);
+                    update(); event->accept(); return;
+                }
+                // Miss → stays passive, fall through to normal canvas handling.
+            } else {
+                // Active: rings are live.
+                const double outerR = locRadiusFramePx() * imageScale();
+                const double innerR = locInnerFramePx()  * imageScale();
+
+                if (std::abs(dist - outerR) <= kLocRingHit) {
+                    m_locDrag = LocDrag::Radius;
+                    setFocus(Qt::MouseFocusReason);
+                    update(); event->accept(); return;
+                }
+                if (std::abs(dist - innerR) <= kLocRingHit) {
+                    m_locDrag = LocDrag::Falloff;
+                    setFocus(Qt::MouseFocusReason);
+                    update(); event->accept(); return;
+                }
+                if (dist <= qMax(kLocDotHit, outerR)) {
+                    m_locDrag = LocDrag::Move;
+                    m_locGrabOffset = locCentreFrame() - widgetToFrame(pos);
+                    setFocus(Qt::MouseFocusReason);
+                    update(); event->accept(); return;
+                }
+                m_locSelected = false;   // clicked outside → back to passive, fall through
+                update();
+            }
+        }
+
         // 0. Group gizmo for a multi-layer selection. Plain drags only — Shift/Ctrl
         //    still add/remove layers from the selection.
         if (groupHandlesVisible() && !(mods & (Qt::ShiftModifier | Qt::ControlModifier))) {
@@ -496,6 +569,35 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
 
 void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
 {
+    if (m_locDrag != LocDrag::None) {
+        const QPointF framePt = widgetToFrame(event->position());
+        switch (m_locDrag) {
+            case LocDrag::Move: {
+                const QPointF c = framePt + m_locGrabOffset;
+                m_loc.posX = m_locFrame.width()  > 0 ? float(qBound(0.0, c.x() / m_locFrame.width(),  1.0)) : 0.5f;
+                m_loc.posY = m_locFrame.height() > 0 ? float(qBound(0.0, c.y() / m_locFrame.height(), 1.0)) : 0.5f;
+                break;
+            }
+            case LocDrag::Radius: {
+                const double d    = QLineF(locCentreFrame(), framePt).length();
+                const double base = qMin(m_locFrame.width(), m_locFrame.height());
+                if (base > 0) m_loc.radius = float(qBound(0.01, d / base, 1.0));
+                break;
+            }
+            case LocDrag::Falloff: {
+                const double d      = QLineF(locCentreFrame(), framePt).length();
+                const double outerR = locRadiusFramePx();
+                if (outerR > 1e-3) m_loc.falloff = float(qBound(0.0, 1.0 - d / outerR, 1.0));
+                break;
+            }
+            default: break;
+        }
+        update();
+        emit localizationChanged(m_loc);
+        event->accept();
+        return;
+    }
+
     if (m_groupDrag) {
         const QPointF framePt = widgetToFrame(event->position());
         const QPointF P = m_groupPivot;
@@ -629,12 +731,30 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
         event->accept();
         return;
     }
+
+    // Passive-mode hover: grow the loc dot a bit so it's easier to grab.
+    if (m_locVisible && !m_locSelected && !m_panMode) {
+        const double dist = QLineF(event->position(), frameToWidget(locCentreFrame())).length();
+        const bool hovered = dist <= kLocDotHit;
+        if (hovered != m_locHovered) {
+            m_locHovered = hovered;
+            setCursor(hovered ? Qt::PointingHandCursor : Qt::ArrowCursor);
+            update();
+        }
+    }
     QWidget::mouseMoveEvent(event);
 }
 
 void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
 {
     m_snapped = false;
+    if (m_locDrag != LocDrag::None && event->button() == Qt::LeftButton) {
+        m_locDrag = LocDrag::None;
+        emit localizationEditFinished();
+        event->accept();
+        return;
+    }
+
     if (m_groupDrag && event->button() == Qt::LeftButton) {
         m_groupDrag = false;
         m_groupMode = TfDrag::None;
@@ -687,6 +807,49 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
         return;
     }
     QWidget::mouseReleaseEvent(event);
+}
+
+void PreviewWidget::keyPressEvent(QKeyEvent* event)
+{
+    if (m_locVisible && m_locSelected && event->key() == Qt::Key_Backspace) {
+        m_locVisible  = false;
+        m_locSelected = false;
+        emit localizationDeleteRequested();
+        update();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void PreviewWidget::paintLocHandles(QPainter& p)
+{
+    const QPointF centre = frameToWidget(locCentreFrame());
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    // Active: radius/falloff rings are live and draggable. Passive: just the
+    // plain dot, click it to activate.
+    if (m_locSelected) {
+        const double outerR = locRadiusFramePx() * imageScale();
+        const double innerR = locInnerFramePx()  * imageScale();
+
+        QPen outerPen(QColor("#FD5A1F"));
+        outerPen.setWidthF(1.4);
+        p.setPen(outerPen);
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(centre, outerR, outerR);
+
+        QPen innerPen(QColor("#F0F0F0"));
+        innerPen.setStyle(Qt::DashLine);
+        innerPen.setWidthF(1.0);
+        p.setPen(innerPen);
+        p.drawEllipse(centre, innerR, innerR);
+    }
+
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor("#F0F0F0"));
+    const double dotR = (!m_locSelected && m_locHovered) ? 6.0 : 4.0;
+    p.drawEllipse(centre, dotR, dotR);
 }
 
 void PreviewWidget::paintHandles(QPainter& p)
@@ -779,6 +942,7 @@ void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
             }
             if (single) paintHandles(p);
             else if (groupHandlesVisible()) paintGroupHandles(p);
+            if (m_locVisible) paintLocHandles(p);
         }
 
         // Rubber-band box: dashed = crossing (drag left), solid = window (right).

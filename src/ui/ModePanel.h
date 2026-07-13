@@ -53,6 +53,11 @@ public:
 
     void setFromLayer(const Layer& layer);   // silent
 
+    // Halftone localize-diameter point: kept in sync with the Layer so
+    // halftoneSettings() round-trips it faithfully (edited on-canvas).
+    HalftoneLocPoint halftoneLoc() const;
+    void setHalftoneLoc(const HalftoneLocPoint& p);   // silent
+
     // Tint the label of every visible mode-page row whose ParamId is in the
     // set (has a keyframe track on the active layer).
     void setAnimatedParams(const QSet<ParamId>& ids);
@@ -68,6 +73,7 @@ signals:
     void modeSelected(RenderMode m);         // user clicked a tab
     void clearModeRequested();               // user clicked the "X" → back to Original
     void exportRequested();
+    void localizationToggleRequested();      // localize-diameter dot clicked
 
 private:
     void setMode(RenderMode m);   // silent: updates tabs + visible page

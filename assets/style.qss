@@ -458,6 +458,22 @@ QPushButton#iconBtn:hover {
     background-color: #3B3B3B;
 }
 
+/* Halftone "localize diameter" dot — floats in the right gutter next to the
+   Diameter row's value box. Fixed literal px (10, matching its C++
+   setFixedSize), not scaled with s(), like the slider handle. */
+QPushButton#locDot {
+    background-color: transparent;
+    border: 1px solid #5D5D5D;
+    border-radius: 5px;
+}
+QPushButton#locDot:hover {
+    border-color: #828282;
+}
+QPushButton#locDot:checked {
+    background-color: #FD5A1F;
+    border-color: #FD5A1F;
+}
+
 /* Parent-row chevron: same chrome as iconBtn but its own size (18×34, wider
    hit target than the glyph) — no fixed min/max-width, unlike iconBtn. */
 QPushButton#parentChevron {

@@ -11,6 +11,8 @@
 #include <QVector>
 #include "../core/Params.h"
 
+class QKeyEvent;
+
 /**
  * PreviewWidget
  *
@@ -53,6 +55,9 @@ public:
     void setCanvasLayers(const QVector<CanvasLayer>& layers, QSize frame);
     void setSelection(const QSet<int>& selected, int activeId);
 
+    // Halftone localize-diameter point overlay for the active layer.
+    void setHalftoneLoc(const HalftoneLocPoint& pt, QSize frame, bool visible);
+
 signals:
     void filesDropped(const QStringList& paths);
     void mediaDroppedAsLayer(int mediaId);   // a library thumbnail dropped on the canvas
@@ -61,6 +66,9 @@ signals:
     void transformEditFinished();   // a move/scale/rotate drag ended → do a full render
     void selectionChanged(const QSet<int>& ids, int activeId);   // canvas click/box select
     void zoomChanged();   // user zoomed; UI may re-render at the new resolution
+    void localizationChanged(const HalftoneLocPoint& pt);   // loc dot dragged
+    void localizationEditFinished();                        // drag ended → full render
+    void localizationDeleteRequested();                      // Backspace on selected loc dot
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -71,6 +79,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private:
     QImage  m_image;
@@ -143,4 +152,19 @@ private:
     // threshold locks onto the nearest frame edge or midline.
     QPointF   snapDeltaForBBox(const QRectF& bboxFrame) const;
     QRectF    layerBBoxAt(const QPointF& centreFrame, const LayerTransform& tf, QSize native) const;
+
+    // ── Halftone localize-diameter dot overlay ─────────────────────
+    enum class LocDrag { None, Move, Radius, Falloff };
+    HalftoneLocPoint m_loc;
+    QSize            m_locFrame;
+    bool             m_locVisible  = false;
+    bool             m_locSelected = false;   // can be deleted with Backspace
+    bool             m_locHovered  = false;   // passive-mode hover → dot grows
+    LocDrag          m_locDrag     = LocDrag::None;
+    QPointF          m_locGrabOffset;         // Move: centre - grab point (frame space)
+
+    QPointF locCentreFrame() const;
+    double  locRadiusFramePx() const;   // outer ring, frame px
+    double  locInnerFramePx() const;    // falloff ring, frame px
+    void    paintLocHandles(QPainter& p);
 };

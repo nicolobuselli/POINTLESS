@@ -21,6 +21,7 @@
 #include <QScreen>
 #include <QIcon>
 #include <QStyle>
+#include <QResizeEvent>
 
 // ============================================================
 //  Shared section helpers
@@ -220,6 +221,18 @@ public:
 
     std::function<void()> onBlendChanged;
 
+    // The on-canvas localization dot (next to Diameter) was clicked.
+    std::function<void()> onLocToggleClicked;
+
+    // Cheap sync of just the loc point (e.g. live during an on-canvas drag),
+    // without touching the rest of the sliders like setSettings() would.
+    void setLocPoint(const HalftoneLocPoint& p)
+    {
+        m_diameterLoc = p;
+        m_locDot->setChecked(p.enabled);
+    }
+    HalftoneLocPoint locPoint() const { return m_diameterLoc; }
+
     HalftonePage(QWidget* parent = nullptr)
         : QWidget(parent)
     {
@@ -280,6 +293,23 @@ public:
                 r->onValueChanged = [this](int) { fire(); };
                 sl->addWidget(r);
             }
+
+            // Localize-diameter dot: floats in the right gutter, vertically
+            // centred on the Diameter row's value box. Toggled on/off here;
+            // position/radius/falloff/scale are set by dragging it on-canvas.
+            m_locDot = new QPushButton(this);
+            m_locDot->setObjectName("locDot");
+            m_locDot->setCheckable(true);
+            m_locDot->setCursor(Qt::PointingHandCursor);
+            m_locDot->setToolTip("Localize diameter");
+            m_locDot->setFixedSize(10, 10);
+            connect(m_locDot, &QPushButton::clicked, this, [this]() {
+                if (onLocToggleClicked) onLocToggleClicked();
+            });
+            // This page's own resizeEvent fires unreliably (it can go through
+            // one transient layout pass with a stale/default size and never
+            // again); watch the row's actual geometry directly instead.
+            m_diameter->installEventFilter(this);
 
             // Fusion (blend mode of the active layer) — moved here.
             sl->addWidget(makeParamLabel("Fusion"));
@@ -363,6 +393,7 @@ public:
         s.jitter       = m_jitter->value() / 100.0f;
         s.opacity      = m_opacity->value() / 100.0f;
         s.cornerRadius = float(m_cornerRadius->value());
+        s.diameterLoc  = m_diameterLoc;   // no slider; kept in sync via setLocPoint()
         return s;
     }
 
@@ -401,11 +432,42 @@ public:
         m_jitter->setValue(qRound(s.jitter * 100));
         m_opacity->setValue(qRound(s.opacity * 100));
         m_cornerRadius->setValue(qRound(s.cornerRadius));
+        setLocPoint(s.diameterLoc);
         m_updating = false;
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* e) override
+    {
+        QWidget::resizeEvent(e);
+        positionLocDot();
+    }
+
+    bool eventFilter(QObject* obj, QEvent* ev) override
+    {
+        if (obj == m_diameter && (ev->type() == QEvent::Resize || ev->type() == QEvent::Move))
+            positionLocDot();
+        return QWidget::eventFilter(obj, ev);
     }
 
 private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
+
+    // Gutter (70 Figma px) is reserved on the right of every settings row;
+    // park the dot in its centre, vertically aligned with Diameter's value box.
+    void positionLocDot()
+    {
+        if (!m_locDot || !m_diameter) return;
+        // Anchor off the row's own right edge (not this->width()) so the dot
+        // stays centred on the gutter regardless of any width mismatch
+        // between the row's container and this page.
+        const QPoint rowRight = m_diameter->mapTo(this, QPoint(m_diameter->width(), m_diameter->height() / 2));
+        const int gutter = Ui::px(70);
+        const int x = rowRight.x() + (gutter - m_locDot->width()) / 2;
+        const int y = rowRight.y() - m_locDot->height() / 2;
+        m_locDot->setGeometry(x, y, m_locDot->width(), m_locDot->height());
+        m_locDot->raise();
+    }
 
     struct ShapeSlot {
         QWidget*         widget     = nullptr;
@@ -583,6 +645,8 @@ private:
     SliderRow*       m_rotation     = nullptr;
     SliderRow*       m_gamma        = nullptr;
     SliderRow*       m_diameter     = nullptr;
+    QPushButton*     m_locDot       = nullptr;
+    HalftoneLocPoint m_diameterLoc;
     SliderRow*       m_weight       = nullptr;
     SliderRow*       m_jitter       = nullptr;
     PopupPicker*     m_fusion       = nullptr;
@@ -1334,6 +1398,9 @@ ModePanel::ModePanel(QWidget* parent)
     m_halftonePage->onBlendChanged = [this]() {
         if (!m_updating) emit blendChanged(m_halftonePage->blend());
     };
+    m_halftonePage->onLocToggleClicked = [this]() {
+        if (!m_updating) emit localizationToggleRequested();
+    };
     m_ditherPage->onBlendChanged = [this]() {
         if (!m_updating) emit blendChanged(m_ditherPage->blend());
     };
@@ -1459,6 +1526,8 @@ void ModePanel::setBackground(QColor c, float opacity)
 }
 
 HalftoneSettings ModePanel::halftoneSettings() const { return m_halftonePage->settings(); }
+HalftoneLocPoint ModePanel::halftoneLoc() const { return m_halftonePage->locPoint(); }
+void ModePanel::setHalftoneLoc(const HalftoneLocPoint& p) { m_halftonePage->setLocPoint(p); }
 DitherSettings   ModePanel::ditherSettings()   const { return m_ditherPage->settings(); }
 AsciiSettings    ModePanel::asciiSettings()    const { return m_asciiPage->settings(); }
 
