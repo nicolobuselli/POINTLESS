@@ -36,6 +36,8 @@ set(SOURCES
     src/core/DitherRenderer.h
     src/core/AsciiRenderer.cpp
     src/core/AsciiRenderer.h
+    src/core/MosaicRenderer.cpp
+    src/core/MosaicRenderer.h
     src/core/BlendCompositor.cpp
     src/core/BlendCompositor.h
     src/core/PaletteStore.cpp

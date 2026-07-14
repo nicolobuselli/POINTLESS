@@ -13,6 +13,7 @@
 class HalftonePage;
 class DitherPage;
 class AsciiPage;
+class MosaicPage;
 class TonalControlsWidget;
 class FillSwatch;
 
@@ -37,6 +38,7 @@ public:
     HalftoneSettings halftoneSettings() const;
     DitherSettings   ditherSettings()   const;
     AsciiSettings    asciiSettings()    const;
+    MosaicSettings   mosaicSettings()   const;
 
     // Fill (tonal palette) — moved here from the left column.
     TonalSettings tonalSettings() const;
@@ -78,13 +80,12 @@ private:
     void setMode(RenderMode m);   // silent: updates tabs + visible page
 
     QWidget*     m_fillSection = nullptr;   // Fill section (per-mode tonal)
-    QPushButton* m_tabHalftone = nullptr;
-    QPushButton* m_tabDither   = nullptr;
-    QPushButton* m_tabAscii    = nullptr;
+    PopupPicker* m_modePick = nullptr;   // mode dropdown (replaced the tab row)
 
     HalftonePage* m_halftonePage = nullptr;
     DitherPage*   m_ditherPage   = nullptr;
     AsciiPage*    m_asciiPage    = nullptr;
+    MosaicPage*   m_mosaicPage   = nullptr;
 
     TonalControlsWidget* m_tonal       = nullptr; // Fill
     bool                 m_fillEnabled = true;    // Fill section open = fill present

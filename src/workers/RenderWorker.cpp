@@ -3,6 +3,7 @@
 #include "../core/HalftoneRenderer.h"
 #include "../core/DitherRenderer.h"
 #include "../core/AsciiRenderer.h"
+#include "../core/MosaicRenderer.h"
 #include "../core/BlendCompositor.h"
 
 #include <QPainter>
@@ -25,6 +26,9 @@ float symbolSupersampleFactor(const Layer& layer, const QSize& size)
     } else if (layer.kind == LayerKind::Ascii) {
         const int cell = qBound(4, layer.ascii.cellSize, 128);
         target = qBound(1.0f, 20.0f / float(cell), 1.6f);
+    } else if (layer.kind == LayerKind::Mosaic) {
+        const float cell = qBound(2.0f, qMin(layer.mosaic.cellW(), layer.mosaic.cellH()), 600.0f);
+        target = qBound(1.0f, 24.0f / cell, 1.6f);   // crisp tile text at small cells
     }
 
     const double srcPixels = double(size.width()) * double(size.height());
@@ -53,6 +57,7 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
         case LayerKind::Halftone: if (!layer.halftone.tonal.enabled) return; break;
         case LayerKind::Dither:   if (!layer.dither.tonal.enabled)   return; break;
         case LayerKind::Ascii:    if (!layer.ascii.tonal.enabled)    return; break;
+        case LayerKind::Mosaic:   if (!layer.mosaic.tonal.enabled)   return; break;
         case LayerKind::Original: break;
     }
 
@@ -104,6 +109,10 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
         }
         case LayerKind::Ascii: {
             AsciiRenderer::render(adjusted, painter, layer.ascii);
+            break;
+        }
+        case LayerKind::Mosaic: {
+            MosaicRenderer::render(adjusted, painter, layer.mosaic);
             break;
         }
     }
@@ -205,6 +214,7 @@ static void prerenderAtFrameRes(QImage& src, Layer& layer)
     layer.halftone.grid.spacing = qMax(2.0f, layer.halftone.grid.spacing * float(rs));
     layer.ascii.cellSize        = qMax(3,    int(layer.ascii.cellSize    * rs));
     layer.dither.pixelSize      = qMax(1,    qRound(layer.dither.pixelSize * rs));
+    layer.mosaic.spacing        = qMax(2.0f, layer.mosaic.spacing * float(rs));
     layer.transform.scalePct    = newScale;
 }
 
@@ -223,6 +233,7 @@ static void compensateSymbolScale(Layer& l)
     // drift by up to half a source px; make them float if it ever shows.
     l.ascii.cellSize   = qMax(1, qRound(l.ascii.cellSize / s));
     l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize / s));
+    l.mosaic.spacing   = float(l.mosaic.spacing / s);
 }
 
 static QImage placeOnFrame(const QImage& layerImg, const LayerTransform& tf, QSize frame)
@@ -373,6 +384,7 @@ static bool layerFillEnabled(const Layer& l)
         case LayerKind::Halftone: return l.halftone.tonal.enabled;
         case LayerKind::Dither:   return l.dither.tonal.enabled;
         case LayerKind::Ascii:    return l.ascii.tonal.enabled;
+        case LayerKind::Mosaic:   return l.mosaic.tonal.enabled;
         case LayerKind::Original: return true;
     }
     return true;
@@ -419,7 +431,8 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
         const bool vectorable = (layer.blend == BlendMode::Normal)
                              && (layer.kind == LayerKind::Halftone
                               || layer.kind == LayerKind::Dither
-                              || layer.kind == LayerKind::Ascii);
+                              || layer.kind == LayerKind::Ascii
+                              || layer.kind == LayerKind::Mosaic);
         if (!vectorable) {
             const QImage placed = placeOnFrame(renderLayer(src, layer), layer.transform, frame);
             p.save();
@@ -466,6 +479,7 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
                 break;
             }
             case LayerKind::Ascii:    AsciiRenderer::render(forRender, p, layer.ascii); break;
+            case LayerKind::Mosaic:   MosaicRenderer::render(forRender, p, layer.mosaic); break;
             case LayerKind::Dither:   DitherRenderer::paintMergedRects(forRender, layer.dither, p,
                                                                        ls.width(), ls.height()); break;
             default: break;
@@ -507,6 +521,12 @@ int RenderWorker::estimateSvgElements(const QImage& source, const SessionParams&
             case LayerKind::Dither: {   // worst case = un-merged cells
                 const int ps = qBound(1, layer.dither.pixelSize, 32);
                 total += (long long)(((long long)(w / ps + 1) * (h / ps + 1)) * s2);
+                break;
+            }
+            case LayerKind::Mosaic: {   // one rect (+ maybe text) per tile
+                const float cw = qMax(2.0f, layer.mosaic.cellW());
+                const float ch = qMax(2.0f, layer.mosaic.cellH());
+                total += (long long)(((long long)(w / cw + 1) * (h / ch + 1)) * s2);
                 break;
             }
             default: break;

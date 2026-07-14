@@ -13,7 +13,8 @@
 enum class RenderMode {
     Halftone = 0,
     Dither   = 1,
-    Ascii    = 2
+    Ascii    = 2,
+    Mosaic   = 3
 };
 
 // ============================================================
@@ -24,7 +25,8 @@ enum class LayerKind {
     Original = 0,
     Halftone = 1,
     Dither   = 2,
-    Ascii    = 3
+    Ascii    = 3,
+    Mosaic   = 4
 };
 
 // Classic Photoshop blend modes, in Photoshop menu order.
@@ -42,6 +44,7 @@ inline LayerKind layerKindForMode(RenderMode m)
     switch (m) {
         case RenderMode::Dither: return LayerKind::Dither;
         case RenderMode::Ascii:  return LayerKind::Ascii;
+        case RenderMode::Mosaic: return LayerKind::Mosaic;
         default:                 return LayerKind::Halftone;
     }
 }
@@ -51,6 +54,7 @@ inline RenderMode modeForLayerKind(LayerKind k)
     switch (k) {
         case LayerKind::Dither: return RenderMode::Dither;
         case LayerKind::Ascii:  return RenderMode::Ascii;
+        case LayerKind::Mosaic: return RenderMode::Mosaic;
         default:                return RenderMode::Halftone;
     }
 }
@@ -62,6 +66,7 @@ inline QString layerKindName(LayerKind k)
         case LayerKind::Halftone: return QStringLiteral("Halftone");
         case LayerKind::Dither:   return QStringLiteral("Dither");
         case LayerKind::Ascii:    return QStringLiteral("Ascii");
+        case LayerKind::Mosaic:   return QStringLiteral("Mosaic");
     }
     return {};
 }
@@ -544,6 +549,44 @@ inline bool operator==(const AsciiSettings& a, const AsciiSettings& b) {
 }
 
 // ============================================================
+//  Mosaic — rectangular tile grid. Each tile takes the tone whose
+//  level is nearest to its average luminosity (the shared tonal
+//  system), is filled with that tone's colour, and can carry that
+//  tone's text (one string per tone), scaled to fit the tile.
+//  cellW/cellH are FRAME pixels, like every other symbol size.
+// ============================================================
+
+struct MosaicSettings {
+    float   spacing     = 40.0f;   // 2..200 — base cell size (frame px), like halftone
+    float   widthPct    = 100.0f;  // 10..300 — cell width  = spacing × widthPct/100
+    float   heightPct   = 100.0f;  // 10..300 — cell height = spacing × heightPct/100
+    float   gapX        = 0.0f;    // 0..90 — % of the slot left empty horizontally
+    float   gapY        = 0.0f;    // 0..90 — % vertically
+    int     textPadding = 12;      // 0..45  — % of the tile's shorter side
+    QString fontFamily  = QStringLiteral("Funnel Display");
+    int     fontWeight  = 600;     // QFont::Weight (400/500/600/700)
+    float   opacity      = 1.0f;   // 0..1
+    float   cornerRadius = 0.0f;   // 0..100 — % of the tile's shorter half-side
+    std::vector<QString> texts;      // per-tone label, index-aligned with tonal.tones
+    std::vector<QColor>  textColors; // per-tone text colour; invalid = auto contrast
+
+    TonalSettings tonal { ToneMode::FixedTones, defaultTones(4) };
+
+    float cellW() const { return qBound(2.0f, spacing, 600.0f) * qBound(10.0f, widthPct, 300.0f)  / 100.0f; }
+    float cellH() const { return qBound(2.0f, spacing, 600.0f) * qBound(10.0f, heightPct, 300.0f) / 100.0f; }
+};
+
+inline bool operator==(const MosaicSettings& a, const MosaicSettings& b) {
+    return a.spacing == b.spacing && a.widthPct == b.widthPct
+        && a.heightPct == b.heightPct && a.gapX == b.gapX && a.gapY == b.gapY
+        && a.textPadding == b.textPadding
+        && a.fontFamily == b.fontFamily && a.fontWeight == b.fontWeight
+        && a.opacity == b.opacity && a.cornerRadius == b.cornerRadius
+        && a.texts == b.texts && a.textColors == b.textColors
+        && a.tonal == b.tonal;
+}
+
+// ============================================================
 //  Layer — one entry of the per-image layer stack
 //
 //  Each layer owns its full parameter set: its own image
@@ -595,6 +638,7 @@ struct Layer {
     HalftoneSettings halftone;      // only the struct matching `kind` is used
     DitherSettings   dither;
     AsciiSettings    ascii;
+    MosaicSettings   mosaic;
 };
 
 inline bool operator==(const Layer& a, const Layer& b) {
@@ -603,7 +647,7 @@ inline bool operator==(const Layer& a, const Layer& b) {
         && a.locked == b.locked && a.blend == b.blend
         && a.mediaId == b.mediaId && a.transform == b.transform
         && a.adjustments == b.adjustments && a.halftone == b.halftone
-        && a.dither == b.dither && a.ascii == b.ascii;
+        && a.dither == b.dither && a.ascii == b.ascii && a.mosaic == b.mosaic;
 }
 inline bool operator!=(const Layer& a, const Layer& b) { return !(a == b); }
 

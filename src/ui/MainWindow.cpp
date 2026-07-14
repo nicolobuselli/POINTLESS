@@ -882,6 +882,7 @@ SessionParams MainWindow::collectParams() const
             case LayerKind::Halftone: l.halftone = m_right->halftoneSettings(); l.halftone.tonal = tonal; break;
             case LayerKind::Dither:   l.dither   = m_right->ditherSettings();   l.dither.tonal   = tonal; break;
             case LayerKind::Ascii:    l.ascii    = m_right->asciiSettings();    l.ascii.tonal    = tonal; break;
+            case LayerKind::Mosaic:   l.mosaic   = m_right->mosaicSettings();   l.mosaic.tonal   = tonal; break;
             case LayerKind::Original: break;   // only adjustments apply
         }
     }

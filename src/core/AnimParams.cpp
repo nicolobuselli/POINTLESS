@@ -82,6 +82,7 @@ const TonalSettings* layerTonal(const Layer& l)
         case LayerKind::Halftone: return &l.halftone.tonal;
         case LayerKind::Dither:   return &l.dither.tonal;
         case LayerKind::Ascii:    return &l.ascii.tonal;
+        case LayerKind::Mosaic:   return &l.mosaic.tonal;
         default:                  return nullptr;
     }
 }
@@ -342,6 +343,9 @@ std::vector<ParamId> animatableParams(const Layer& layer)
         case LayerKind::Halftone: kindScope = ParamScope::Halftone; break;
         case LayerKind::Dither:   kindScope = ParamScope::Dither;   break;
         case LayerKind::Ascii:    kindScope = ParamScope::Ascii;    break;
+        // ponytail: no mosaic-specific ParamIds yet — transform/adjustments +
+        // tone thresholds still animate; add a Mosaic scope when cells need keys.
+        case LayerKind::Mosaic:   kindScope = ParamScope::AllLayers; break;
         case LayerKind::Original: kindScope = ParamScope::AllLayers; break;  // adjustments only
     }
 

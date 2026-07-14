@@ -17,6 +17,7 @@
 #include <QFontDatabase>
 #include <QSvgRenderer>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QScreen>
 #include <QIcon>
@@ -1396,6 +1397,326 @@ private:
 };
 
 // ============================================================
+//  MosaicPage — rectangular tile grid: spacing + W/H %, gaps,
+//  font, one text (+ colour) per tone; rows follow the Fill
+//  palette size.
+// ============================================================
+
+// Small colour box beside each tone-text field. Invalid colour = "auto"
+// (black/white by fill contrast), painted as a b/w diagonal split.
+class TextColorSwatch : public QPushButton
+{
+public:
+    std::function<void()> onChanged;
+
+    TextColorSwatch(QWidget* parent = nullptr) : QPushButton(parent)
+    {
+        setCursor(Qt::PointingHandCursor);
+        setFixedSize(Ui::px(48), Ui::px(48));
+        connect(this, &QPushButton::clicked, this, [this]() {
+            auto* dlg = new ColorPickerDialog(
+                m_color.isValid() ? m_color : QColor(Qt::white), 1.0f,
+                /*showOpacity*/ false, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            dlg->moveNextTo(this);
+            dlg->onColorChanged = [this](QColor c, float) {
+                m_color = c; update();
+                if (onChanged) onChanged();
+            };
+            dlg->show(); dlg->raise(); dlg->activateWindow();
+        });
+    }
+
+    QColor color() const { return m_color; }
+    void setColor(QColor c) { m_color = c; update(); }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const qreal rad = Ui::px(8);
+        p.setPen(QPen(underMouse() ? QColor(0x82, 0x82, 0x82)
+                                   : QColor(0x5D, 0x5D, 0x5D), 1));
+        p.setBrush(QColor(0x3B, 0x3B, 0x3B));
+        p.drawRoundedRect(r, rad, rad);
+
+        const QRectF inner = r.adjusted(Ui::px(8), Ui::px(8), -Ui::px(8), -Ui::px(8));
+        QPainterPath clip;
+        clip.addRoundedRect(inner, Ui::px(4), Ui::px(4));
+        p.setClipPath(clip);
+        p.setPen(Qt::NoPen);
+        if (m_color.isValid()) {
+            p.fillPath(clip, m_color);
+        } else {   // auto: black/white diagonal split
+            p.fillPath(clip, Qt::white);
+            QPainterPath tri;
+            tri.moveTo(inner.topRight());
+            tri.lineTo(inner.bottomRight());
+            tri.lineTo(inner.bottomLeft());
+            tri.closeSubpath();
+            p.fillPath(tri, Qt::black);
+        }
+    }
+
+private:
+    QColor m_color;   // invalid = auto
+};
+
+class MosaicPage : public QWidget
+{
+public:
+    std::function<void()> onChanged;
+    std::function<void()> onBlendChanged;
+
+    MosaicPage(QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
+        auto* vl = new QVBoxLayout(this);
+        vl->setContentsMargins(0, 0, 0, 0);
+        vl->setSpacing(0);
+
+        // ── Settings ────────────────────────────────────────
+        auto* settingsContent = new QWidget;
+        {
+            auto* sl = new QVBoxLayout(settingsContent);
+            sl->setContentsMargins(0, 0, 0, 0);
+            sl->setSpacing(8);
+
+            m_spacing = new SliderRow("Spacing", 2, 200, 40);
+            m_width   = new SliderRow("Width",  10, 300, 100);
+            m_width->setToolTip("Cell width as % of Spacing — proportions stay\n"
+                                "put when Spacing rescales the whole grid.");
+            m_height  = new SliderRow("Height", 10, 300, 100);
+            m_height->setToolTip("Cell height as % of Spacing.");
+            for (SliderRow* r : { m_spacing, m_width, m_height }) {
+                r->onValueChanged = [this](int) { fire(); };
+                sl->addWidget(r);
+            }
+
+            sl->addWidget(makeParamLabel("Font"));
+            auto* fontRow = new QHBoxLayout;
+            fontRow->setContentsMargins(0, 0, 0, 0);
+            fontRow->setSpacing(6);
+            m_font = new PopupPicker(1);
+            {
+                QStringList fams;
+                for (const QString& f : QFontDatabase::families())
+                    if (!f.startsWith('@'))
+                        fams << f;
+                fams.sort(Qt::CaseInsensitive);
+                QVector<PopupPickerEntry> entries;
+                for (const QString& f : fams)
+                    entries.push_back({ f, f, QString(), QString() });
+                m_font->setEntries(entries);
+                m_font->setValue("Funnel Display");
+            }
+            m_font->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            m_font->setMinimumWidth(Ui::px(60));
+            m_weight = new NoWheelComboBox;
+            m_weight->addItems({ "Regular", "Medium", "DemiBold", "Bold" });
+            m_weight->setCurrentIndex(2);
+            m_weight->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+            m_weight->setMinimumContentsLength(6);
+            m_weight->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            m_weight->setMinimumWidth(Ui::px(60));
+            fontRow->addWidget(m_font, 2);
+            fontRow->addWidget(m_weight, 1);
+            sl->addLayout(fontRow);
+
+            m_font->onSelected = [this](QVariant) { fire(); };
+            connect(m_weight, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                    this, [this](int) { fire(); });
+        }
+        auto* settingsSec = new PanelSection("Settings", /*collapsible*/ false, true);
+        settingsSec->body()->addWidget(settingsContent);
+        vl->addWidget(settingsSec);
+
+        // ── Parameters (padding, gaps, texts, fusion, opacity) ──
+        auto* paramsContent = new QWidget;
+        {
+            auto* pl = new QVBoxLayout(paramsContent);
+            pl->setContentsMargins(0, 0, 0, 0);
+            pl->setSpacing(8);
+
+            m_padding = new SliderRow("Text padding", 0, 45, 12);
+            m_padding->setToolTip("Empty border around the text, as % of the\n"
+                                  "tile's shorter side. Text scales to fit.");
+            m_gapX = new SliderRow("Gap X", 0, 90, 0);
+            m_gapX->setToolTip("Horizontal spacing between tiles, as % of the\n"
+                               "cell. The background shows through.");
+            m_gapY = new SliderRow("Gap Y", 0, 90, 0);
+            m_gapY->setToolTip("Vertical spacing between tiles, as % of the cell.");
+            for (SliderRow* r : { m_padding, m_gapX, m_gapY }) {
+                r->onValueChanged = [this](int) { fire(); };
+                pl->addWidget(r);
+            }
+
+            auto* lbl = makeParamLabel("Texts");
+            lbl->setToolTip("One text per Fill tone: every tile of that tone\n"
+                            "shows this text. Leave empty for plain fills.\n"
+                            "The box picks the text colour (default: auto).");
+            pl->addWidget(lbl);
+            auto* textsHost = new QWidget;
+            m_textsBox = new QVBoxLayout(textsHost);
+            m_textsBox->setContentsMargins(0, 0, 0, 0);
+            m_textsBox->setSpacing(6);
+            pl->addWidget(textsHost);
+            rebuildTextRows(1);
+
+            pl->addWidget(makeParamLabel("Fusion"));
+            m_fusion = new PopupPicker(1);
+            m_fusion->setEntries(blendPickerEntries());
+            m_fusion->setValue(int(BlendMode::Normal));
+            m_fusion->onSelected = [this](QVariant) {
+                if (!m_updating && onBlendChanged) onBlendChanged();
+            };
+            pl->addWidget(m_fusion);
+
+            // Opacity + Corner radius (two icon boxes side by side).
+            auto* labels = new QHBoxLayout;
+            labels->setContentsMargins(0, 0, 0, 0);
+            labels->setSpacing(Ui::px(12));
+            labels->addWidget(makeParamLabel("Opacity"), 1);
+            labels->addWidget(makeParamLabel("Corner radius"), 1);
+            pl->addLayout(labels);
+
+            auto* row = new QHBoxLayout;
+            row->setContentsMargins(0, 0, 0, 0);
+            row->setSpacing(Ui::px(12));
+            m_opacity      = new DragSpinBox(":/icons/opacity.svg",       0, 100, 100, "%");
+            m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0, 100,   0, "");
+            m_opacity->onValueChanged      = [this](int) { fire(); };
+            m_cornerRadius->onValueChanged = [this](int) { fire(); };
+            row->addWidget(m_opacity, 1);
+            row->addWidget(m_cornerRadius, 1);
+            pl->addLayout(row);
+        }
+        auto* paramsSec = new PanelSection("Parameters", /*collapsible*/ false, true);
+        paramsSec->body()->addWidget(paramsContent);
+        vl->addWidget(paramsSec);
+    }
+
+    // Keep one text row per Fill tone, preserving what's already typed.
+    void syncToneCount(int n)
+    {
+        n = qBound(1, n, 8);
+        if (n == m_textEdits.size()) return;
+        rebuildTextRows(n);
+    }
+
+    MosaicSettings settings() const
+    {
+        static const int kWeights[] = { 400, 500, 600, 700 };
+        MosaicSettings s;
+        s.spacing      = float(m_spacing->value());
+        s.widthPct     = float(m_width->value());
+        s.heightPct    = float(m_height->value());
+        s.gapX         = float(m_gapX->value());
+        s.gapY         = float(m_gapY->value());
+        s.textPadding  = m_padding->value();
+        s.fontFamily   = m_font->value().toString();
+        s.fontWeight   = kWeights[qBound(0, m_weight->currentIndex(), 3)];
+        s.opacity      = m_opacity->value() / 100.0f;
+        s.cornerRadius = float(m_cornerRadius->value());
+        s.texts.clear();
+        s.textColors.clear();
+        for (QLineEdit* e : m_textEdits) s.texts.push_back(e->text());
+        for (TextColorSwatch* c : m_textSwatches) s.textColors.push_back(c->color());
+        return s;
+    }
+
+    void setSettings(const MosaicSettings& s)
+    {
+        m_updating = true;
+        m_spacing->setValue(qRound(s.spacing));
+        m_width->setValue(qRound(s.widthPct));
+        m_height->setValue(qRound(s.heightPct));
+        m_gapX->setValue(qRound(s.gapX));
+        m_gapY->setValue(qRound(s.gapY));
+        m_padding->setValue(s.textPadding);
+        m_opacity->setValue(qRound(s.opacity * 100));
+        m_cornerRadius->setValue(qRound(s.cornerRadius));
+        m_font->setValue(s.fontFamily);
+        m_weight->blockSignals(true);
+        int wi = 2;
+        if      (s.fontWeight <= 400) wi = 0;
+        else if (s.fontWeight <= 500) wi = 1;
+        else if (s.fontWeight <= 600) wi = 2;
+        else                          wi = 3;
+        m_weight->setCurrentIndex(wi);
+        m_weight->blockSignals(false);
+
+        rebuildTextRows(qBound(1, int(s.tonal.tones.size()), 8), &s.texts, &s.textColors);
+        m_updating = false;
+    }
+
+    QHash<QWidget*, ParamId> paramWidgets() const { return {}; }
+
+    BlendMode blend() const { return BlendMode(m_fusion->value().toInt()); }
+    void setBlend(BlendMode m) { m_fusion->setValue(int(m)); }
+
+private:
+    void fire() { if (!m_updating && onChanged) onChanged(); }
+
+    void rebuildTextRows(int n, const std::vector<QString>* texts = nullptr,
+                         const std::vector<QColor>* colors = nullptr)
+    {
+        QStringList keepText;
+        QVector<QColor> keepColor;
+        for (QLineEdit* e : m_textEdits) keepText << e->text();
+        for (TextColorSwatch* c : m_textSwatches) keepColor << c->color();
+        qDeleteAll(m_textRows);
+        m_textRows.clear();
+        m_textEdits.clear();
+        m_textSwatches.clear();
+
+        for (int i = 0; i < n; ++i) {
+            auto* rowW = new QWidget;
+            auto* rl = new QHBoxLayout(rowW);
+            rl->setContentsMargins(0, 0, 0, 0);
+            rl->setSpacing(Ui::px(12));
+
+            auto* e = new QLineEdit;
+            e->setPlaceholderText(QString("Tone %1 text…").arg(i + 1));
+            if (texts && i < int(texts->size()))  e->setText((*texts)[size_t(i)]);
+            else if (!texts && i < keepText.size()) e->setText(keepText[i]);
+            connect(e, &QLineEdit::textChanged, this, [this](const QString&) { fire(); });
+
+            auto* c = new TextColorSwatch;
+            if (colors && i < int(colors->size()))    c->setColor((*colors)[size_t(i)]);
+            else if (!colors && i < keepColor.size()) c->setColor(keepColor[i]);
+            c->onChanged = [this]() { fire(); };
+
+            rl->addWidget(e, 1);
+            rl->addWidget(c);
+            m_textsBox->addWidget(rowW);
+            m_textRows.push_back(rowW);
+            m_textEdits.push_back(e);
+            m_textSwatches.push_back(c);
+        }
+    }
+
+    SliderRow*       m_spacing  = nullptr;
+    SliderRow*       m_width    = nullptr;
+    SliderRow*       m_height   = nullptr;
+    SliderRow*       m_padding  = nullptr;
+    SliderRow*       m_gapX     = nullptr;
+    SliderRow*       m_gapY     = nullptr;
+    PopupPicker*     m_font     = nullptr;
+    NoWheelComboBox* m_weight   = nullptr;
+    QVBoxLayout*     m_textsBox = nullptr;
+    QVector<QWidget*>         m_textRows;
+    QVector<QLineEdit*>       m_textEdits;
+    QVector<TextColorSwatch*> m_textSwatches;
+    PopupPicker*     m_fusion       = nullptr;
+    DragSpinBox*     m_opacity      = nullptr;
+    DragSpinBox*     m_cornerRadius = nullptr;
+    bool m_updating = false;
+};
+
+// ============================================================
 //  ModePanel
 // ============================================================
 
@@ -1409,28 +1730,28 @@ ModePanel::ModePanel(QWidget* parent)
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    // ── Tabs (rectangle active style) ────────────────────────
+    // ── Mode picker (dropdown, scales to any number of modes) ─
     {
-        auto* tabRow = new QWidget;
-        auto* tl = new QHBoxLayout(tabRow);
-        // Right gutter 24→14 so the "X" lines up with the section header icons.
-        tl->setContentsMargins(Ui::px(24), Ui::px(16), Ui::px(14), Ui::px(12));
-        tl->setSpacing(Ui::px(4));
+        auto* modeRow = new QWidget;
+        auto* tl = new QHBoxLayout(modeRow);
+        // Left 40 = the controls gutter; right 14 so the "X" lines up with
+        // the section header icons.
+        tl->setContentsMargins(Ui::px(40), Ui::px(16), Ui::px(14), Ui::px(12));
+        tl->setSpacing(Ui::px(12));
 
-        auto makeTab = [&](const QString& text) {
-            auto* b = new QPushButton(text);
-            b->setObjectName("rectTab");
-            b->setCheckable(true);
-            b->setAutoExclusive(true);
-            b->setCursor(Qt::PointingHandCursor);
-            tl->addWidget(b);
-            return b;
+        m_modePick = new PopupPicker(1);
+        m_modePick->setEntries({
+            { int(RenderMode::Halftone), "Halftone", QString(), QString() },
+            { int(RenderMode::Dither),   "Dither",   QString(), QString() },
+            { int(RenderMode::Ascii),    "Ascii",    QString(), QString() },
+            { int(RenderMode::Mosaic),   "Mosaic",   QString(), QString() },
+        });
+        m_modePick->setValue(int(RenderMode::Halftone));
+        m_modePick->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_modePick->onSelected = [this](QVariant v) {
+            if (!m_updating) emit modeSelected(RenderMode(v.toInt()));
         };
-        m_tabHalftone = makeTab("Halftone");
-        m_tabDither   = makeTab("Dither");
-        m_tabAscii    = makeTab("Ascii");
-        m_tabHalftone->setChecked(true);
-        tl->addStretch(1);
+        tl->addWidget(m_modePick, 1);
 
         // "X" in the +/- gutter: clears the mode → layer goes back to Original
         // (raw image), a second way to deselect besides the row context menu.
@@ -1444,11 +1765,7 @@ ModePanel::ModePanel(QWidget* parent)
         connect(clearBtn, &QPushButton::clicked, this, &ModePanel::clearModeRequested);
         tl->addWidget(clearBtn);
 
-        connect(m_tabHalftone, &QPushButton::clicked, this, [this]() { emit modeSelected(RenderMode::Halftone); });
-        connect(m_tabDither,   &QPushButton::clicked, this, [this]() { emit modeSelected(RenderMode::Dither); });
-        connect(m_tabAscii,    &QPushButton::clicked, this, [this]() { emit modeSelected(RenderMode::Ascii); });
-
-        outer->addWidget(tabRow);
+        outer->addWidget(modeRow);
     }
 
     // ── Scrollable section stack ─────────────────────────────
@@ -1469,12 +1786,15 @@ ModePanel::ModePanel(QWidget* parent)
     m_halftonePage = new HalftonePage;
     m_ditherPage   = new DitherPage;
     m_asciiPage    = new AsciiPage;
+    m_mosaicPage   = new MosaicPage;
     m_ditherPage->setVisible(false);
     m_asciiPage->setVisible(false);
+    m_mosaicPage->setVisible(false);
 
     m_halftonePage->onChanged = [this]() { if (!m_updating) emit paramsChanged(); };
     m_ditherPage->onChanged   = [this]() { if (!m_updating) emit paramsChanged(); };
     m_asciiPage->onChanged    = [this]() { if (!m_updating) emit paramsChanged(); };
+    m_mosaicPage->onChanged   = [this]() { if (!m_updating) emit paramsChanged(); };
     m_halftonePage->onBlendChanged = [this]() {
         if (!m_updating) emit blendChanged(m_halftonePage->blend());
     };
@@ -1490,10 +1810,14 @@ ModePanel::ModePanel(QWidget* parent)
     m_asciiPage->onBlendChanged = [this]() {
         if (!m_updating) emit blendChanged(m_asciiPage->blend());
     };
+    m_mosaicPage->onBlendChanged = [this]() {
+        if (!m_updating) emit blendChanged(m_mosaicPage->blend());
+    };
 
     cl->addWidget(m_halftonePage);
     cl->addWidget(m_ditherPage);
     cl->addWidget(m_asciiPage);
+    cl->addWidget(m_mosaicPage);
 
     // ── Fill (shared palette) ────────────────────────────────
     auto* fill = new PanelSection("Fill", /*collapsible*/ true, true);
@@ -1505,7 +1829,12 @@ ModePanel::ModePanel(QWidget* parent)
     fill->body()->setContentsMargins(Ui::px(40), Ui::px(2), Ui::px(14), Ui::px(14));
     m_tonal = new TonalControlsWidget(
         TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
-    m_tonal->onChanged = [this]() { if (!m_updating) emit tonalChanged(); };
+    m_tonal->onChanged = [this]() {
+        if (m_updating) return;
+        // Mosaic's per-tone text rows track the Fill palette size live.
+        m_mosaicPage->syncToneCount(int(m_tonal->settings().tones.size()));
+        emit tonalChanged();
+    };
     fill->body()->addWidget(m_tonal);
     // The "−" removes the fill (collapsed = no fill); "+" restores it.
     m_setFillOpen = [fill](bool open) { fill->setOpen(open); };
@@ -1620,6 +1949,7 @@ void ModePanel::setLocPoint(LocParam p, const LocPoint& pt)
 }
 DitherSettings   ModePanel::ditherSettings()   const { return m_ditherPage->settings(); }
 AsciiSettings    ModePanel::asciiSettings()    const { return m_asciiPage->settings(); }
+MosaicSettings   ModePanel::mosaicSettings()   const { return m_mosaicPage->settings(); }
 
 QString ModePanel::outputFormat()   const { return m_format->currentText(); }
 
@@ -1629,9 +1959,8 @@ void ModePanel::setMode(RenderMode m)
     m_halftonePage->setVisible(m == RenderMode::Halftone);
     m_ditherPage->setVisible(m == RenderMode::Dither);
     m_asciiPage->setVisible(m == RenderMode::Ascii);
-    m_tabHalftone->setChecked(m == RenderMode::Halftone);
-    m_tabDither->setChecked(m == RenderMode::Dither);
-    m_tabAscii->setChecked(m == RenderMode::Ascii);
+    m_mosaicPage->setVisible(m == RenderMode::Mosaic);
+    m_modePick->setValue(int(m));
 }
 
 void ModePanel::setFromLayer(const Layer& layer)
@@ -1640,9 +1969,11 @@ void ModePanel::setFromLayer(const Layer& layer)
     m_halftonePage->setSettings(layer.halftone);
     m_ditherPage->setSettings(layer.dither);
     m_asciiPage->setSettings(layer.ascii);
+    m_mosaicPage->setSettings(layer.mosaic);
     m_halftonePage->setBlend(layer.blend);
     m_ditherPage->setBlend(layer.blend);
     m_asciiPage->setBlend(layer.blend);
+    m_mosaicPage->setBlend(layer.blend);
 
     // Fill (tonal) mirrors the active layer's mode tonal.
     TonalSettings tonal;
@@ -1651,6 +1982,7 @@ void ModePanel::setFromLayer(const Layer& layer)
         case LayerKind::Halftone: tonal = layer.halftone.tonal; break;
         case LayerKind::Dither:   tonal = layer.dither.tonal;   break;
         case LayerKind::Ascii:    tonal = layer.ascii.tonal;    break;
+        case LayerKind::Mosaic:   tonal = layer.mosaic.tonal;   break;
         case LayerKind::Original: haveTonal = false; break;
     }
     if (haveTonal) {
@@ -1665,16 +1997,14 @@ void ModePanel::setFromLayer(const Layer& layer)
     const bool hasMode = (layer.kind != LayerKind::Original);
     if (hasMode) setMode(modeForLayerKind(layer.kind));
     else {
-        // autoExclusive refuses to uncheck the last checked tab, so drop it
-        // momentarily to clear the highlight, then restore exclusivity.
-        for (auto* t : { m_tabHalftone, m_tabDither, m_tabAscii }) {
-            t->setAutoExclusive(false);
-            t->setChecked(false);
-            t->setAutoExclusive(true);
-        }
+        // No mode: the picker shows a neutral label (no entry matches -1,
+        // so the text is set by hand) and every page hides.
+        m_modePick->setValue(-1);
+        m_modePick->setText("Select mode…");
         m_halftonePage->setVisible(false);
         m_ditherPage->setVisible(false);
         m_asciiPage->setVisible(false);
+        m_mosaicPage->setVisible(false);
     }
     m_fillSection->setVisible(hasMode);
 
@@ -1697,6 +2027,7 @@ QHash<QWidget*, ParamId> ModePanel::paramWidgets() const
         case RenderMode::Halftone: return m_halftonePage->paramWidgets();
         case RenderMode::Dither:   return m_ditherPage->paramWidgets();
         case RenderMode::Ascii:    return m_asciiPage->paramWidgets();
+        case RenderMode::Mosaic:   return m_mosaicPage->paramWidgets();
     }
     return {};
 }
