@@ -158,6 +158,62 @@ inline void quantizePixel(
 }
 
 // ============================================================
+//  Quantisation context — the tone set / palette / L bundle every
+//  algorithm hoists before its pixel loop. "Color levels" can be
+//  localized, and the expanded tone set depends on the level count,
+//  so with a levels loc point active there is one precomputed
+//  context per level (2..16) and each pixel picks its own by
+//  position; without it this collapses to the single base context.
+// ============================================================
+
+struct QuantCtx {
+    std::vector<ToneEntry>               tones;
+    std::vector<ColorMath::PaletteEntry> palette;
+    int   nTones    = 0;
+    int   L         = 2;
+    float inkLumLin = 0.0f;
+
+    const std::vector<ColorMath::PaletteEntry>* pal() const {
+        return palette.empty() ? nullptr : &palette;
+    }
+};
+
+struct QuantTable {
+    LocField loc;
+    int      baseL = 2;
+    std::vector<QuantCtx> byLevel;   // [0] = base; with loc on: levels 2..16
+
+    QuantTable(const DitherSettings& s, int w, int h)
+        : loc(locField(s.loc, LocParam::DiLevels, float(w), float(h)))
+        , baseL(qBound(2, s.levels, 16))
+    {
+        const bool paletteMode = (s.tonal.mode == ToneMode::Palette);
+        const bool imageColors = (s.tonal.mode == ToneMode::ImageColors);
+        const auto sorted      = sortedTones(s.tonal.tones);
+        auto make = [&](int L) {
+            QuantCtx c;
+            c.tones  = expandTones(sorted, L);
+            c.nTones = int(c.tones.size());
+            c.L      = L;
+            if (paletteMode) c.palette = ColorMath::buildPalette(c.tones);
+            if (!imageColors && !paletteMode && c.nTones == 1)
+                c.inkLumLin = ColorMath::linearLuminance(c.tones[0].color.rgb());
+            return c;
+        };
+        if (loc.on)
+            for (int L = 2; L <= 16; ++L) byLevel.push_back(make(L));
+        else
+            byLevel.push_back(make(baseL));
+    }
+
+    const QuantCtx& at(int x, int y) const {
+        if (!loc.on) return byLevel[0];
+        const int L = qBound(2, int(std::lround(baseL * loc.mul(float(x), float(y)))), 16);
+        return byLevel[size_t(L - 2)];
+    }
+};
+
+// ============================================================
 //  Ordered threshold matrices
 // ============================================================
 
@@ -498,6 +554,22 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
     else if (s.algorithm == DitherAlgorithm::Riemersma)    renderRiemersma (work, out, s);
     else                                                renderDiffusion    (work, out, s);
 
+    // Localization spotlight mask: with any loc point enabled the effect only
+    // exists inside the union of the circles — alpha fades to 0 outside.
+    const LocMask lm = locMask(s.loc, float(out.width()), float(out.height()));
+    if (lm.on) {
+        for (int y = 0; y < out.height(); ++y) {
+            QRgb* line = reinterpret_cast<QRgb*>(out.scanLine(y));
+            for (int x = 0; x < out.width(); ++x) {
+                const QRgb px = line[x];
+                if (qAlpha(px) == 0) continue;
+                const float m = lm.mask(float(x), float(y));
+                line[x] = qRgba(qRed(px), qGreen(px), qBlue(px),
+                                qRound(qAlpha(px) * m));
+            }
+        }
+    }
+
     if (ps > 1) {
         if (s.cornerRadius > 0.0f) {
             const int ow = out.width();
@@ -712,19 +784,8 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
 
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
-    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
-    const auto  tones       = expandTones(sortedTones(s.tonal.tones), s.levels);
-    const int   nTones      = int(tones.size());
-    const int   L           = qBound(2, s.levels, 16);
-
-    const std::vector<ColorMath::PaletteEntry> palette =
-        paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
-    const std::vector<ColorMath::PaletteEntry>* pal =
-        (paletteMode && !palette.empty()) ? &palette : nullptr;
-
-    float inkLumLin = 0.0f;
-    if (!imageColors && !paletteMode && nTones == 1)
-        inkLumLin = ColorMath::linearLuminance(tones[0].color.rgb());
+    const QuantTable qt(s, w, h);
+    const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
     std::vector<float> fr, fg, fb;
     linearBuffers(work, fr, fg, fb);
@@ -736,16 +797,18 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
             const int col = rev ? w - 1 - ci : ci;
             const size_t i = size_t(row) * w + col;
 
+            const QuantCtx& q = qt.at(col, row);
             float cr, cg, cb; QRgb outPx;
             quantizePixel(fr[i], fg[i], fb[i],
-                          imageColors, tones, nTones, L, inkLumLin, pal,
+                          imageColors, q.tones, q.nTones, q.L, q.inkLumLin, q.pal(),
                           cr, cg, cb, outPx);
 
             reinterpret_cast<QRgb*>(out.scanLine(row))[col] = outPx;
 
-            const float er = (fr[i] - cr) * strength;
-            const float eg = (fg[i] - cg) * strength;
-            const float eb = (fb[i] - cb) * strength;
+            const float str = qBound(0.0f, strength * locStr.mul(col, row), 1.0f);
+            const float er = (fr[i] - cr) * str;
+            const float eg = (fg[i] - cg) * str;
+            const float eb = (fb[i] - cb) * str;
             if (er == 0.0f && eg == 0.0f && eb == 0.0f) continue;
 
             for (int t = 0; t < nTaps; ++t) {
@@ -777,19 +840,8 @@ void DitherRenderer::renderVarErrDiff(const QImage& work, QImage& out,
 
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
-    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
-    const auto  tones       = expandTones(sortedTones(s.tonal.tones), s.levels);
-    const int   nTones      = int(tones.size());
-    const int   L           = qBound(2, s.levels, 16);
-
-    const std::vector<ColorMath::PaletteEntry> palette =
-        paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
-    const std::vector<ColorMath::PaletteEntry>* pal =
-        (paletteMode && !palette.empty()) ? &palette : nullptr;
-
-    float inkLumLin = 0.0f;
-    if (!imageColors && !paletteMode && nTones == 1)
-        inkLumLin = ColorMath::linearLuminance(tones[0].color.rgb());
+    const QuantTable qt(s, w, h);
+    const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
     std::vector<float> fr, fg, fb;
     linearBuffers(work, fr, fg, fb);
@@ -805,14 +857,16 @@ void DitherRenderer::renderVarErrDiff(const QImage& work, QImage& out,
             const int col = rev ? w - 1 - ci : ci;
             const size_t i = size_t(row) * w + col;
 
+            const QuantCtx& q = qt.at(col, row);
             float cr, cg, cb; QRgb outPx;
-            quantizePixel(fr[i], fg[i], fb[i], imageColors, tones, nTones, L, inkLumLin, pal,
-                          cr, cg, cb, outPx);
+            quantizePixel(fr[i], fg[i], fb[i], imageColors, q.tones, q.nTones, q.L,
+                          q.inkLumLin, q.pal(), cr, cg, cb, outPx);
             reinterpret_cast<QRgb*>(out.scanLine(row))[col] = outPx;
 
-            const float er = (fr[i] - cr) * strength;
-            const float eg = (fg[i] - cg) * strength;
-            const float eb = (fb[i] - cb) * strength;
+            const float str = qBound(0.0f, strength * locStr.mul(col, row), 1.0f);
+            const float er = (fr[i] - cr) * str;
+            const float eg = (fg[i] - cg) * str;
+            const float eb = (fb[i] - cb) * str;
             if (er == 0.0f && eg == 0.0f && eb == 0.0f) continue;
 
             const float luma = ColorMath::perceptualLumaFromLinear(fr[i], fg[i], fb[i]);
@@ -865,19 +919,8 @@ void DitherRenderer::renderRiemersma(const QImage& work, QImage& out,
 
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
-    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
-    const auto  tones       = expandTones(sortedTones(s.tonal.tones), s.levels);
-    const int   nTones      = int(tones.size());
-    const int   L           = qBound(2, s.levels, 16);
-
-    const std::vector<ColorMath::PaletteEntry> palette =
-        paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
-    const std::vector<ColorMath::PaletteEntry>* pal =
-        (paletteMode && !palette.empty()) ? &palette : nullptr;
-
-    float inkLumLin = 0.0f;
-    if (!imageColors && !paletteMode && nTones == 1)
-        inkLumLin = ColorMath::linearLuminance(tones[0].color.rgb());
+    const QuantTable qt(s, w, h);
+    const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
     std::vector<float> fr, fg, fb;
     linearBuffers(work, fr, fg, fb);
@@ -900,16 +943,19 @@ void DitherRenderer::renderRiemersma(const QImage& work, QImage& out,
         for (int k = 0; k < errLen; ++k) {
             ar += qr[k] * weights[k]; ag += qg[k] * weights[k]; ab += qb[k] * weights[k];
         }
+        const QuantCtx& q = qt.at(x, y);
         float cr, cg, cb; QRgb outPx;
         quantizePixel(fr[i] + float(ar / maxW), fg[i] + float(ag / maxW), fb[i] + float(ab / maxW),
-                      imageColors, tones, nTones, L, inkLumLin, pal, cr, cg, cb, outPx);
+                      imageColors, q.tones, q.nTones, q.L, q.inkLumLin, q.pal(),
+                      cr, cg, cb, outPx);
         reinterpret_cast<QRgb*>(out.scanLine(y))[x] = outPx;
 
+        const float str = qBound(0.0f, strength * locStr.mul(float(x), float(y)), 1.0f);
         // Drop oldest, push this pixel's residual (input − chosen) as newest.
         for (int k = 0; k < errLen - 1; ++k) { qr[k] = qr[k + 1]; qg[k] = qg[k + 1]; qb[k] = qb[k + 1]; }
-        qr[errLen - 1] = (fr[i] - cr) * strength;
-        qg[errLen - 1] = (fg[i] - cg) * strength;
-        qb[errLen - 1] = (fb[i] - cb) * strength;
+        qr[errLen - 1] = (fr[i] - cr) * str;
+        qg[errLen - 1] = (fg[i] - cg) * str;
+        qb[errLen - 1] = (fb[i] - cb) * str;
     }
 }
 
@@ -926,15 +972,8 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
 
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
-    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
-    const auto  tones       = expandTones(sortedTones(s.tonal.tones), s.levels);
-    const int   nTones      = int(tones.size());
-    const int   L           = qBound(2, s.levels, 16);
-
-    const std::vector<ColorMath::PaletteEntry> palette =
-        paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
-    const std::vector<ColorMath::PaletteEntry>* pal =
-        (paletteMode && !palette.empty()) ? &palette : nullptr;
+    const QuantTable qt(s, w, h);
+    const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
     // --- Prepare the threshold lookup for this algorithm --------
     // Returns a threshold in [0,1] for pixel (x,y).
@@ -963,14 +1002,30 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
     } else if (s.algorithm == DitherAlgorithm::LineHatch) {
         // Parallel line screen: threshold = distance from the nearest line
         // centre (0 at the centre), so lines thicken with darkness.
-        const float a   = qDegreesToRadians(s.lineAngle);
-        const float ca  = std::cos(a), sa = std::sin(a);
-        const float inv = 1.0f / float(qBound(2, s.lineSpacing, 64));
-        threshold = [ca, sa, inv](int x, int y) -> float {
-            const float u = (x * ca + y * sa) * inv;
-            const float f = u - std::floor(u);
-            return std::fabs(f - 0.5f) * 2.0f;
-        };
+        const LocField locAng = locField(s.loc, LocParam::DiLineAngle,   float(w), float(h));
+        const LocField locSpc = locField(s.loc, LocParam::DiLineSpacing, float(w), float(h));
+        if (locAng.on || locSpc.on) {
+            // Localized angle/spacing: the screen bends/thickens through the
+            // influence circle (the varying angle makes the lines curve).
+            const float baseA   = s.lineAngle;
+            const float baseSpc = float(qBound(2, s.lineSpacing, 64));
+            threshold = [=](int x, int y) -> float {
+                const float a   = qDegreesToRadians(baseA * locAng.mul(float(x), float(y)));
+                const float spc = qMax(1.0f, baseSpc * locSpc.mul(float(x), float(y)));
+                const float u = (x * std::cos(a) + y * std::sin(a)) / spc;
+                const float f = u - std::floor(u);
+                return std::fabs(f - 0.5f) * 2.0f;
+            };
+        } else {
+            const float a   = qDegreesToRadians(s.lineAngle);
+            const float ca  = std::cos(a), sa = std::sin(a);
+            const float inv = 1.0f / float(qBound(2, s.lineSpacing, 64));
+            threshold = [ca, sa, inv](int x, int y) -> float {
+                const float u = (x * ca + y * sa) * inv;
+                const float f = u - std::floor(u);
+                return std::fabs(f - 0.5f) * 2.0f;
+            };
+        }
 
     } else if (s.algorithm == DitherAlgorithm::CustomPattern) {
         const PatternMask pm = patternMask(s.patternPath);
@@ -1013,13 +1068,20 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
             const float g  = ColorMath::srgbToLinear(qGreen(p)) * alpha + (1.0f - alpha);
             const float bl = ColorMath::srgbToLinear(qBlue(p))  * alpha + (1.0f - alpha);
 
+            const QuantCtx& q = qt.at(x, y);
+            const auto* pal   = q.pal();
+            const auto& tones = q.tones;
+            const int   nTones = q.nTones;
+            const int   L      = q.L;
+            const float str = qBound(0.0f, strength * locStr.mul(float(x), float(y)), 1.0f);
+
             // Compress threshold toward 0.5 as strength decreases.
-            const float t = 0.5f + (threshold(x, y) - 0.5f) * strength;
+            const float t = 0.5f + (threshold(x, y) - 0.5f) * str;
 
             if (pal) {
                 // Ordered dithering to a palette: bias the linear value by the
                 // matrix, then snap to the nearest colour.
-                const float bias = (threshold(x, y) - 0.5f) * strength * 0.5f;
+                const float bias = (threshold(x, y) - 0.5f) * str * 0.5f;
                 const float rr = qBound(0.0f, r  + bias, 1.0f);
                 const float gg = qBound(0.0f, g  + bias, 1.0f);
                 const float bb = qBound(0.0f, bl + bias, 1.0f);
@@ -1092,19 +1154,8 @@ void DitherRenderer::renderDotDiffusion(const QImage& work, QImage& out,
 
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
-    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
-    const auto  tones       = expandTones(sortedTones(s.tonal.tones), s.levels);
-    const int   nTones      = int(tones.size());
-    const int   L           = qBound(2, s.levels, 16);
-
-    const std::vector<ColorMath::PaletteEntry> palette =
-        paletteMode ? ColorMath::buildPalette(tones) : std::vector<ColorMath::PaletteEntry>{};
-    const std::vector<ColorMath::PaletteEntry>* pal =
-        (paletteMode && !palette.empty()) ? &palette : nullptr;
-
-    float inkLumLin = 0.0f;
-    if (!imageColors && !paletteMode && nTones == 1)
-        inkLumLin = ColorMath::linearLuminance(tones[0].color.rgb());
+    const QuantTable qt(s, w, h);
+    const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
     std::vector<float> fr, fg, fb;
     linearBuffers(work, fr, fg, fb);
@@ -1117,16 +1168,18 @@ void DitherRenderer::renderDotDiffusion(const QImage& work, QImage& out,
             const int x = idx % w;
             const int y = idx / w;
 
+            const QuantCtx& q = qt.at(x, y);
             float cr, cg, cb; QRgb outPx;
             quantizePixel(fr[idx], fg[idx], fb[idx],
-                          imageColors, tones, nTones, L, inkLumLin, pal,
+                          imageColors, q.tones, q.nTones, q.L, q.inkLumLin, q.pal(),
                           cr, cg, cb, outPx);
 
             reinterpret_cast<QRgb*>(out.scanLine(y))[x] = outPx;
 
-            const float er = (fr[idx] - cr) * strength;
-            const float eg = (fg[idx] - cg) * strength;
-            const float eb = (fb[idx] - cb) * strength;
+            const float str = qBound(0.0f, strength * locStr.mul(float(x), float(y)), 1.0f);
+            const float er = (fr[idx] - cr) * str;
+            const float eg = (fg[idx] - cg) * str;
+            const float eb = (fb[idx] - cb) * str;
             if (er == 0.0f && eg == 0.0f && eb == 0.0f) continue;
 
             // Count future neighbours (class > cls) before distributing.
@@ -1170,6 +1223,7 @@ void DitherRenderer::renderThreshold(const QImage& work, QImage& out,
     const float thr         = qBound(0, s.threshold, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
     const auto  tones       = sortedTones(s.tonal.tones);   // hard cut: no expansion
+    const LocField locThr   = locField(s.loc, LocParam::DiThreshold, float(w), float(h));
 
     // Ink = darkest tone (lowest level); paper = transparent (background shows).
     const QColor inkColor = tones.empty() ? QColor(Qt::black) : tones.front().color;
@@ -1187,8 +1241,10 @@ void DitherRenderer::renderThreshold(const QImage& work, QImage& out,
             const float g = ColorMath::srgbToLinear(qGreen(p)) * a + (1.0f - a);
             const float b = ColorMath::srgbToLinear(qBlue(p))  * a + (1.0f - a);
             const float lum = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+            const float t   = locThr.on
+                ? qBound(0.0f, thr * locThr.mul(float(x), float(y)), 1.0f) : thr;
 
-            if (lum < thr)
+            if (lum < t)
                 dst[x] = imageColors ? qRgba(0, 0, 0, 255) : inkPx;
             else
                 dst[x] = imageColors ? qRgba(255, 255, 255, 255) : qRgba(0, 0, 0, 0);

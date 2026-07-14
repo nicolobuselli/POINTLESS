@@ -56,6 +56,7 @@ public:
 signals:
     // Child (layer) signals
     void visibilityToggled(int layerId, bool visible);
+    void lockToggled(int layerId, bool locked);   // padlock: canvas ignores the layer
     void layerSelected(int layerId);
     void layerRangeRequested(int layerId);   // shift-click: select anchor→here
     void layerToggleRequested(int layerId);  // ctrl-click: toggle in/out of selection

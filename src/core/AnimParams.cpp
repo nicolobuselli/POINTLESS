@@ -2,11 +2,14 @@
 
 #include <QtGlobal>
 #include <array>
+#include <string>
+#include <vector>
 
 namespace {
 
-// Indexed by int(ParamId); order MUST match the enum.
-const std::array<ParamDesc, int(ParamId::Count)> kDescs = {{
+// Indexed by int(ParamId); order MUST match the enum. The localization
+// quartets (ids >= LocFirst) are generated in paramDesc(), not listed here.
+const std::array<ParamDesc, int(ParamId::LocFirst)> kDescs = {{
     // label,             lo,    hi,   isInt, scope
     { "Brightness",      -100,   100,  true,  ParamScope::AllLayers },
     { "Contrast",        -100,   100,  true,  ParamScope::AllLayers },
@@ -42,10 +45,6 @@ const std::array<ParamDesc, int(ParamId::Count)> kDescs = {{
     { "Jitter",             0,     1,  false, ParamScope::Halftone },
     { "Opacity",            0,     1,  false, ParamScope::Halftone },
     { "Corner radius",      0,   100,  false, ParamScope::Halftone },
-    { "Loc X",              0,     1,  false, ParamScope::Halftone },
-    { "Loc Y",              0,     1,  false, ParamScope::Halftone },
-    { "Loc rotation",    -180,   180,  false, ParamScope::Halftone },
-    { "Loc scale",        0.1,    10,  false, ParamScope::Halftone },
 
     { "Pixel size",         1,    16,  true,  ParamScope::Dither },
     { "Strength",           0,   100,  true,  ParamScope::Dither },
@@ -99,15 +98,85 @@ int toneLevelIndex(ParamId id)
     return -1;
 }
 
+// Display name of each LocParam; order MUST match the LocParam enum.
+const char* kLocLabels[int(LocParam::Count)] = {
+    "Diameter", "Gamma", "Weight", "Jitter",
+    "Strength", "Threshold", "Levels", "Line angle", "Line spacing",
+    "Gamma", "Edges", "Hatching", "Stipple", "Contour",
+};
+
+ParamScope locScope(LocParam p)
+{
+    switch (locParamKind(p)) {
+        case LayerKind::Dither: return ParamScope::Dither;
+        case LayerKind::Ascii:  return ParamScope::Ascii;
+        default:                return ParamScope::Halftone;
+    }
+}
+
+// The map holding LocParam p's point on this layer.
+const LocMap& locMapFor(const Layer& l, LocParam p)
+{
+    switch (locParamKind(p)) {
+        case LayerKind::Dither: return l.dither.loc;
+        case LayerKind::Ascii:  return l.ascii.loc;
+        default:                return l.halftone.loc;
+    }
+}
+LocMap& locMapFor(Layer& l, LocParam p)
+{
+    return const_cast<LocMap&>(locMapFor(const_cast<const Layer&>(l), p));
+}
+
 } // namespace
+
+const char* locParamLabel(LocParam p)
+{
+    return kLocLabels[int(p)];
+}
 
 const ParamDesc& paramDesc(ParamId id)
 {
-    return kDescs[size_t(id)];
+    const int li = locIndexOf(id);
+    if (li < 0) return kDescs[size_t(id)];
+
+    // Loc quartets are uniform; generate their descriptors once. Labels need
+    // their own storage since ParamDesc only holds a const char*.
+    static const std::vector<std::string> labels = [] {
+        static const char* comp[4] = { " loc X", " loc Y", " loc rotation", " loc scale" };
+        std::vector<std::string> v;
+        for (int p = 0; p < int(LocParam::Count); ++p)
+            for (int c = 0; c < 4; ++c)
+                v.push_back(std::string(kLocLabels[p]) + comp[c]);
+        return v;
+    }();
+    static const std::vector<ParamDesc> descs = [] {
+        // Ranges mirror LocPoint's fields (posX/posY 0..1, rotation ±180,
+        // scale 0.1..10).
+        static const double lo[4] = { 0, 0, -180, 0.1 };
+        static const double hi[4] = { 1, 1,  180, 10  };
+        std::vector<ParamDesc> v;
+        for (int p = 0; p < int(LocParam::Count); ++p)
+            for (int c = 0; c < 4; ++c)
+                v.push_back({ labels[size_t(p * 4 + c)].c_str(),
+                              lo[c], hi[c], false, locScope(LocParam(p)) });
+        return v;
+    }();
+    return descs[size_t(li)];
 }
 
 double getParam(const Layer& l, ParamId id)
 {
+    if (const int li = locIndexOf(id); li >= 0) {
+        const LocParam p  = LocParam(li / 4);
+        const LocPoint pt = locPointOr(locMapFor(l, p), p);
+        switch (li & 3) {
+            case 0:  return pt.posX;
+            case 1:  return pt.posY;
+            case 2:  return pt.rotation;
+            default: return pt.scale;
+        }
+    }
     if (const int ti = toneLevelIndex(id); ti >= 0) {
         const TonalSettings* t = layerTonal(l);
         return (t && ti < int(t->tones.size())) ? double(t->tones[size_t(ti)].level) : 0.0;
@@ -147,10 +216,6 @@ double getParam(const Layer& l, ParamId id)
         case ParamId::HtJitter:            return l.halftone.jitter;
         case ParamId::HtOpacity:           return l.halftone.opacity;
         case ParamId::HtCornerRadius:      return l.halftone.cornerRadius;
-        case ParamId::HtLocX:             return l.halftone.diameterLoc.posX;
-        case ParamId::HtLocY:              return l.halftone.diameterLoc.posY;
-        case ParamId::HtLocRotation:       return l.halftone.diameterLoc.rotation;
-        case ParamId::HtLocScale:          return l.halftone.diameterLoc.scale;
 
         case ParamId::DiPixelSize:    return l.dither.pixelSize;
         case ParamId::DiStrength:     return l.dither.strength;
@@ -179,6 +244,17 @@ void setParam(Layer& l, ParamId id, double v)
     const int   iv = qRound(v);
     const float fv = float(v);
 
+    if (const int li = locIndexOf(id); li >= 0) {
+        const LocParam p  = LocParam(li / 4);
+        LocPoint&      pt = locMapFor(l, p)[p];
+        switch (li & 3) {
+            case 0:  pt.posX     = fv; break;
+            case 1:  pt.posY     = fv; break;
+            case 2:  pt.rotation = fv; break;
+            default: pt.scale    = fv; break;
+        }
+        return;
+    }
     if (const int ti = toneLevelIndex(id); ti >= 0) {
         TonalSettings* t = layerTonal(l);
         if (t && ti < int(t->tones.size())) t->tones[size_t(ti)].level = iv;
@@ -220,10 +296,6 @@ void setParam(Layer& l, ParamId id, double v)
         case ParamId::HtJitter:            l.halftone.jitter             = fv; break;
         case ParamId::HtOpacity:           l.halftone.opacity            = fv; break;
         case ParamId::HtCornerRadius:      l.halftone.cornerRadius       = fv; break;
-        case ParamId::HtLocX:              l.halftone.diameterLoc.posX     = fv; break;
-        case ParamId::HtLocY:              l.halftone.diameterLoc.posY     = fv; break;
-        case ParamId::HtLocRotation:       l.halftone.diameterLoc.rotation = fv; break;
-        case ParamId::HtLocScale:          l.halftone.diameterLoc.scale    = fv; break;
 
         case ParamId::DiPixelSize:    l.dither.pixelSize    = iv; break;
         case ParamId::DiStrength:     l.dither.strength     = iv; break;
@@ -277,6 +349,11 @@ std::vector<ParamId> animatableParams(const Layer& layer)
     for (int i = 0; i < int(ParamId::Count); ++i) {
         const ParamId id = ParamId(i);
         if (id == ParamId::HtInputDpi) continue;   // no UI control; ModePanel hardcodes it to 300
+        // Loc quartets only make sense while their point exists and is on.
+        if (const int li = locIndexOf(id); li >= 0) {
+            const LocParam p = LocParam(li / 4);
+            if (!locPointOr(locMapFor(layer, p), p).enabled) continue;
+        }
         const ParamScope s = paramDesc(id).scope;
         if (s == ParamScope::AllLayers || s == kindScope)
             out.push_back(id);

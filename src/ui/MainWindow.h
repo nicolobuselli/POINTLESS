@@ -61,8 +61,8 @@ private slots:
     void onLayerBlendChanged(int layerId, BlendMode mode);
     void onLayerTransformChanged(const LayerTransform& t);
     void onGroupTransformChanged(const QHash<int, LayerTransform>& byId);
-    void onLocalizationChanged(const HalftoneLocPoint& pt);
-    void onLocalizationToggleRequested();
+    void onLocalizationChanged(LocParam p, const LocPoint& pt);
+    void onLocalizationToggleRequested(LocParam p);
     void onCanvasSelectionChanged(const QSet<int>& ids, int activeId);
     void onAddLayerRequested();
     void onLayerReordered(int layerId, int insertIndex);
@@ -143,7 +143,7 @@ private:
     bool buildPlayCache();                // pre-render all frames for smooth playback
     void autoKeyChanged(const SessionParams& before, const SessionParams& after);
     void autoKeyTransform(int layerId, const LayerTransform& before, const LayerTransform& after);
-    void autoKeyLocalization(int layerId, const HalftoneLocPoint& before, const HalftoneLocPoint& after);
+    void autoKeyLocalization(int layerId, LocParam p, const LocPoint& before, const LocPoint& after);
     void refreshAnimationIndicators();   // push "has a keyframe track" state to the panels
     bool insertKeyframeUnderCursor();    // "I" key: keyframe whatever control is under the mouse
     void exportSequence(const QString& baseName);

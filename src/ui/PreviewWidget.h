@@ -50,13 +50,19 @@ public:
                             QSize frame, bool transformable);
 
     // One placeable layer's geometry, used for click/box selection and outlines.
-    struct CanvasLayer { int id; LayerTransform tf; QSize native; };
+    // locked layers are invisible to canvas picking (click, box select, drag).
+    struct CanvasLayer { int id; LayerTransform tf; QSize native; bool locked = false; };
     // All visible layers, top-most first (matches the layer stack order).
     void setCanvasLayers(const QVector<CanvasLayer>& layers, QSize frame);
     void setSelection(const QSet<int>& selected, int activeId);
 
-    // Halftone localize-diameter point overlay for the active layer.
-    void setHalftoneLoc(const HalftoneLocPoint& pt, QSize frame, bool visible);
+    // Localization-point overlay for the active layer: every enabled point of
+    // the layer's mode, each dot tagged with the parameter it localizes.
+    struct LocEntry { LocParam param; LocPoint pt; };
+    void setLocPoints(const QVector<LocEntry>& pts, QSize frame);
+    // Global overlay toggle ('H'): hides the dots without disabling the points.
+    void setLocOverlayVisible(bool on);
+    bool locOverlayVisible() const { return m_locOverlayOn; }
 
 signals:
     void filesDropped(const QStringList& paths);
@@ -66,9 +72,9 @@ signals:
     void transformEditFinished();   // a move/scale/rotate drag ended → do a full render
     void selectionChanged(const QSet<int>& ids, int activeId);   // canvas click/box select
     void zoomChanged();   // user zoomed; UI may re-render at the new resolution
-    void localizationChanged(const HalftoneLocPoint& pt);   // loc dot dragged
-    void localizationEditFinished();                        // drag ended → full render
-    void localizationDeleteRequested();                      // Backspace on selected loc dot
+    void localizationChanged(LocParam p, const LocPoint& pt);   // loc dot dragged
+    void localizationEditFinished();                            // drag ended → full render
+    void localizationDeleteRequested(LocParam p);               // Backspace on selected loc dot
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -153,18 +159,20 @@ private:
     QPointF   snapDeltaForBBox(const QRectF& bboxFrame) const;
     QRectF    layerBBoxAt(const QPointF& centreFrame, const LayerTransform& tf, QSize native) const;
 
-    // ── Halftone localize-diameter dot overlay ─────────────────────
+    // ── Localization dots overlay ──────────────────────────────────
     enum class LocDrag { None, Move, Radius, Falloff };
-    HalftoneLocPoint m_loc;
-    QSize            m_locFrame;
-    bool             m_locVisible  = false;
-    bool             m_locSelected = false;   // can be deleted with Backspace
-    bool             m_locHovered  = false;   // passive-mode hover → dot grows
-    LocDrag          m_locDrag     = LocDrag::None;
-    QPointF          m_locGrabOffset;         // Move: centre - grab point (frame space)
+    QVector<LocEntry> m_locPts;
+    QSize             m_locFrame;
+    bool              m_locOverlayOn = true;   // 'H' toggle (MainWindow-owned)
+    int               m_locActive = -1;   // index into m_locPts, -1 = none selected
+    int               m_locHover  = -1;   // hovered passive dot, -1 = none
+    LocDrag           m_locDrag   = LocDrag::None;
+    QPointF           m_locGrabOffset;    // Move: centre - grab point (frame space)
 
-    QPointF locCentreFrame() const;
-    double  locRadiusFramePx() const;   // outer ring, frame px
-    double  locInnerFramePx() const;    // falloff ring, frame px
+    bool    locShown() const { return m_locOverlayOn && !m_locPts.isEmpty(); }
+    int     locDotHit(QPointF widgetPos) const;   // topmost dot index under point, -1
+    QPointF locCentreFrame(const LocPoint& pt) const;
+    double  locRadiusFramePx(const LocPoint& pt) const;   // outer ring, frame px
+    double  locInnerFramePx(const LocPoint& pt) const;    // falloff ring, frame px
     void    paintLocHandles(QPainter& p);
 };

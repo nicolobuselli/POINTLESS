@@ -122,32 +122,25 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
     const float baseR    = (sp * 0.5f) * qMax(0.01f, params.grid.diameter);
     const float invGamma = 1.0f / qMax(0.01f, params.gamma);
     const int   cellPx   = qMax(1, qRound(sp));
+
+    // Per-parameter localization: each enabled point turns a uniform slider
+    // value into a spatial field (×scale inside its circle, base outside),
+    // and ANY enabled point also masks the layer — dots only exist inside
+    // the union of the circles, exactly like the original localize-diameter.
+    const LocField locDia = locField(params.loc, LocParam::HtDiameter, imgW, imgH);
+    const LocField locGam = locField(params.loc, LocParam::HtGamma,    imgW, imgH);
+    const LocField locWgt = locField(params.loc, LocParam::HtWeight,   imgW, imgH);
+    const LocField locJit = locField(params.loc, LocParam::HtJitter,   imgW, imgH);
+    const LocMask  lmask  = locMask(params.loc, imgW, imgH);
+
     // Jitter orbits each symbol around an off-centroid pivot, so dots can drift
     // up to ~spacing away; widen the per-band cull by that reach to avoid seams.
-    const float jitterReach = params.jitter * sp * 2.0f;
-
-    // Localized diameter override: a spotlight. Inside the falloff (dashed)
-    // radius the dot-size multiplier is loc.scale (1.0 = the Diameter slider's
-    // normal value); it fades to 0 — dots vanish — at the outer ring, and
-    // stays 0 beyond it. Position/radius are normalized to the image size.
-    const HalftoneLocPoint& loc = params.diameterLoc;
-    const float locCx  = loc.posX * imgW;
-    const float locCy  = loc.posY * imgH;
-    const float locOut = loc.radius * qMin(imgW, imgH);
-    const float locIn  = locOut * (1.0f - qBound(0.0f, loc.falloff, 1.0f));
-    auto locDiameterMul = [&](float x, float y) -> float {
-        if (!loc.enabled) return 1.0f;
-        const float d = std::hypot(x - locCx, y - locCy);
-        float t;   // 1 inside the falloff radius, fading to 0 at/beyond the outer ring
-        if (d <= locIn) t = 1.0f;
-        else if (d >= locOut || locOut <= locIn) t = 0.0f;
-        else { const float u = (locOut - d) / (locOut - locIn); t = u * u * (3.0f - 2.0f * u); }
-        return loc.scale * t;
-    };
+    const float jitterMax   = params.jitter * (locJit.on ? qMax(1.0f, locJit.scale) : 1.0f);
+    const float jitterReach = jitterMax * sp * 2.0f;
 
     // A localized scale > 1 can grow a dot past baseR: widen the band cull by
     // the largest possible multiplier so those dots aren't clipped at a seam.
-    const float maxR = baseR * (loc.enabled ? qMax(1.0f, loc.scale) : 1.0f);
+    const float maxR = baseR * (locDia.on ? qMax(1.0f, locDia.scale) : 1.0f);
 
     std::unique_ptr<QSvgRenderer> svgCache;
     QString cachedSvgPath;
@@ -161,11 +154,14 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
         const float lumLin   = sampleLuminosity(inputRGB, cx, cy, cw, ch);
         const float lumPerc  = ColorMath::linearToSrgb8(lumLin) / 255.0f;
         const float darkness = 1.0f - lumLin;
-        const float cov      = std::pow(darkness, invGamma);
-        const float locR     = baseR * locDiameterMul(s.x, s.y);
+        const float invG     = locGam.on
+            ? 1.0f / qMax(0.01f, params.gamma * locGam.mul(s.x, s.y)) : invGamma;
+        const float cov      = std::pow(darkness, invG);
+        const float locR     = baseR * locDia.mul(s.x, s.y) * lmask.mask(s.x, s.y);
         if (locR * std::sqrt(cov) < 0.5f) continue;     // cull empty cells by true coverage
         // weight lifts every visible symbol toward full size; at 1.0 all are equal.
-        const float covW     = cov + params.weight * (1.0f - cov);
+        const float weight   = qBound(0.0f, params.weight * locWgt.mul(s.x, s.y), 1.0f);
+        const float covW     = cov + weight * (1.0f - cov);
         const float r        = locR * std::sqrt(covW);  // dot area ∝ ink coverage
 
         HalftoneShape shape   = shapesVec.empty() ? HalftoneShape::Circle : shapesVec[0].shape;
@@ -198,12 +194,13 @@ void HalftoneRenderer::paintDots(QPainter& painter, const TileJob& job)
         // wildly at high ones.
         float   rotationDeg = 0.0f;
         QPointF pivot(0.0f, 0.0f);
-        if (params.jitter > 0.0f) {
+        const float jit = qBound(0.0f, params.jitter * locJit.mul(s.x, s.y), 1.0f);
+        if (jit > 0.0f) {
             std::mt19937 rng(cellSeed(qRound(s.x), qRound(s.y)));
             std::uniform_real_distribution<float> uni(0.0f, 1.0f);
-            rotationDeg = (uni(rng) * 2.0f - 1.0f) * 180.0f * params.jitter;
-            const float ang = uni(rng) * 6.28318531f;                 // random direction
-            const float mag = uni(rng) * params.jitter * sp * 1.0f;   // distance ∝ jitter
+            rotationDeg = (uni(rng) * 2.0f - 1.0f) * 180.0f * jit;
+            const float ang = uni(rng) * 6.28318531f;         // random direction
+            const float mag = uni(rng) * jit * sp * 1.0f;     // distance ∝ jitter
             pivot = QPointF(std::cos(ang) * mag, std::sin(ang) * mag);
         }
 

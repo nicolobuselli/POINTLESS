@@ -202,6 +202,8 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
 
     const ToneCtx tc = ToneCtx::make(params.tonal);
     const float invGamma = 1.0f / qMax(0.01f, params.gamma);
+    const LocField locGam = locField(params.loc, LocParam::AsGamma, imgW, imgH);
+    const LocMask  lmask  = locMask(params.loc, imgW, imgH);
 
     // Braille bit index per (row, col) of the 2×4 dot grid.
     static const int kDotBit[4][2] = { {0, 3}, {1, 4}, {2, 5}, {6, 7} };
@@ -226,6 +228,10 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
             const int cx = col * cellW;
             const int cw = qMin(cellW, imgW - cx);
 
+            // Spotlight mask: glyphs only exist inside the loc circles.
+            const float lm = lmask.mask(cx + cw * 0.5f, cy + ch * 0.5f);
+            if (lm <= 0.02f) continue;
+
             int bits = 0;
             for (int dr = 0; dr < 4; ++dr) {
                 const int y0 = cy + dr * ch / 4;
@@ -236,7 +242,9 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
                     if (x1 <= x0 || y1 <= y0) continue;
                     const float lum = cellLuminosity(rgb, x0, y0, x1 - x0, y1 - y0);
                     float darkness  = 1.0f - lum;
-                    darkness = std::pow(qBound(0.0f, darkness, 1.0f), invGamma);
+                    const float invG = locGam.on
+                        ? 1.0f / qMax(0.01f, params.gamma * locGam.mul(x0, y0)) : invGamma;
+                    darkness = std::pow(qBound(0.0f, darkness, 1.0f), invG);
                     if (darkness > kDotThr[dr][dc]) bits |= 1 << kDotBit[dr][dc];
                 }
             }
@@ -246,7 +254,8 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
 
             const float lumLin  = cellLuminosity(rgb, cx, cy, cw, ch);
             const float lumPerc = ColorMath::linearToSrgb8(lumLin) / 255.0f;
-            const QColor pen    = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
+            QColor pen          = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
+            if (lm < 1.0f) pen.setAlphaF(pen.alphaF() * lm);   // fade band
             drawCell(output, QRectF(cx, cy, cellW, cellH), glyph, pen);
         }
     }
@@ -290,6 +299,19 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
     const ToneCtx tc = ToneCtx::make(params.tonal);
     const float invGamma = 1.0f / qMax(0.01f, params.gamma);
 
+    // Per-parameter localization fields, sampled at each cell's centre.
+    // Gamma blends back to the slider's base value outside its circle; the
+    // effect amounts (edges/hatching/stipple/contour) are spotlights — they
+    // fade to zero at the ring, so the effect lives inside the circle.
+    const LocField locGam = locField(params.loc, LocParam::AsGamma,    imgW, imgH);
+    const LocField locEdg = locField(params.loc, LocParam::AsEdges,    imgW, imgH);
+    const LocField locHat = locField(params.loc, LocParam::AsHatching, imgW, imgH);
+    const LocField locStp = locField(params.loc, LocParam::AsStipple,  imgW, imgH);
+    const LocField locCnt = locField(params.loc, LocParam::AsContour,  imgW, imgH);
+    const LocMask  lmask  = locMask(params.loc, imgW, imgH);
+    auto cellCX = [&](int col) { return (col + 0.5f) * cellW; };
+    auto cellCY = [&](int row) { return (row + 0.5f) * cellH; };
+
     const std::vector<float>& coverage = glyphCoverage(font, charset, cellW, cellH);
 
     // Ascending-by-coverage index order, for Ordered dither's bracket search
@@ -321,7 +343,10 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
     // magnitude clears the threshold is drawn as an oriented contour glyph
     // (- / | \) instead of a coverage glyph, tracing the image's outlines.
     const bool  edgesOn = params.edges > 0;
-    const float edgeThr = 1.0f - 0.94f * qBound(0, params.edges, 100) / 100.0f;
+    auto edgeThrAt = [&](int col, int row) {
+        const float v = qBound(0.0f, params.edges * locEdg.mul(cellCX(col), cellCY(row)), 100.0f);
+        return v <= 0.5f ? 2.0f : 1.0f - 0.94f * v / 100.0f;   // 2.0 = unreachable → off
+    };
     static const QChar kEdgeGlyphs[4] = {
         QLatin1Char('-'), QLatin1Char('/'), QLatin1Char('|'), QLatin1Char('\\')
     };
@@ -349,23 +374,30 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
     // Hatching — directional strokes shade the shadows (darkness above a
     // threshold that falls as intensity rises), like copper-engraving
     // cross-hatch; highlights stay untouched by the ramp above them.
-    const bool  hatchOn    = params.hatching > 0;
-    const float hatchThr   = 1.0f - qBound(0, params.hatching, 100) / 100.0f;
-    const float hatchCross = qMin(1.0f, hatchThr + 0.3f);   // darkest shadows → solid crosshatch
+    const bool hatchOn = params.hatching > 0;
+    auto hatchThrAt = [&](int col, int row) {   // darkest shadows → solid crosshatch above thr+0.3
+        const float v = qBound(0.0f, params.hatching * locHat.mul(cellCX(col), cellCY(row)), 100.0f);
+        return v <= 0.5f ? 2.0f : 1.0f - v / 100.0f;          // 2.0 = unreachable → off
+    };
 
     // Contour — isoline mask: a cell only draws (whatever glyph the rest of
     // the pipeline picked) when its tonal band differs from a neighbour's,
     // leaving flat regions blank (topographic-map look). Band count scales
     // with intensity so higher values trace more (finer) isolines.
     const bool contourOn = params.contour > 0;
-    const int  bands     = qBound(2, 2 + qRound(qBound(0, params.contour, 100) / 100.0f * 30.0f), 32);
-    auto bandAt = [&](int col, int row) {
+    auto contourValAt = [&](int col, int row) {
+        return qBound(0.0f, params.contour * locCnt.mul(cellCX(col), cellCY(row)), 100.0f);
+    };
+    auto bandAt = [&](int col, int row, int bands) {
         return int(qBound(0.0f, lumAt(col, row), 0.999f) * bands);
     };
 
     // Stipple — deterministic per-cell darkness jitter; breaks up clean ramp
     // bands into an organic, hand-stippled scatter.
-    const float stippleAmt = qBound(0, params.stipple, 100) / 100.0f * 0.5f;
+    auto stippleAt = [&](int col, int row) {
+        return qBound(0.0f, params.stipple * locStp.mul(cellCX(col), cellCY(row)), 100.0f)
+             / 100.0f * 0.5f;
+    };
 
     output.save();
     output.setClipRect(0, 0, imgW, imgH);
@@ -380,17 +412,30 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
             const int cx = col * cellW;
             const int cw = qMin(cellW, imgW - cx);
 
+            // Spotlight mask: glyphs only exist inside the loc circles.
+            const float lm = lmask.mask(cellCX(col), cellCY(row));
+            if (lm <= 0.02f) continue;
+
             if (contourOn) {
-                const int b = bandAt(col, row);
-                const bool boundary = b != bandAt(col - 1, row) || b != bandAt(col + 1, row)
-                                    || b != bandAt(col, row - 1) || b != bandAt(col, row + 1);
-                if (!boundary) continue;
+                // Band count follows the (possibly localized) contour value.
+                const float cv = contourValAt(col, row);
+                if (cv > 0.5f) {
+                    const int bands = qBound(2, 2 + qRound(cv / 100.0f * 30.0f), 32);
+                    const int b = bandAt(col, row, bands);
+                    const bool boundary = b != bandAt(col - 1, row, bands) || b != bandAt(col + 1, row, bands)
+                                        || b != bandAt(col, row - 1, bands) || b != bandAt(col, row + 1, bands);
+                    if (!boundary) continue;
+                }
             }
 
             const float lumLin  = lumLinGrid [size_t(row) * cols + col];
             const float lumPerc = lumPercGrid[size_t(row) * cols + col];
             float darkness      = 1.0f - lumLin;
-            darkness            = std::pow(qBound(0.0f, darkness, 1.0f), invGamma);
+            const float invG    = locGam.on
+                ? 1.0f / qMax(0.01f, params.gamma * locGam.mul(cellCX(col), cellCY(row)))
+                : invGamma;
+            darkness            = std::pow(qBound(0.0f, darkness, 1.0f), invG);
+            const float stippleAmt = stippleAt(col, row);
             if (stippleAmt > 0.0f)
                 darkness = qBound(0.0f, darkness + (cellNoise(col, row) - 0.5f) * stippleAmt, 1.0f);
 
@@ -400,14 +445,15 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
                 float gx, gy;
                 sobel(col, row, gx, gy);
                 const float mag = std::sqrt(gx * gx + gy * gy) / 4.0f;
-                if (mag > edgeThr) {
+                if (mag > edgeThrAt(col, row)) {
                     c = edgeDirGlyph(gx, gy);
                     isEdge = true;
                 }
             }
 
+            const float hatchThr = hatchOn ? hatchThrAt(col, row) : 2.0f;
             if (!isEdge && hatchOn && darkness > hatchThr) {
-                if (darkness > hatchCross) {
+                if (darkness > qMin(1.0f, hatchThr + 0.3f)) {
                     c = QLatin1Char('#');
                 } else {
                     float gx, gy;
@@ -451,7 +497,8 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
 
             if (c == QChar(' ')) continue;
 
-            const QColor pen = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
+            QColor pen = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
+            if (lm < 1.0f) pen.setAlphaF(pen.alphaF() * lm);   // fade band
             drawCell(output, QRectF(cx, cy, cellW, cellH), c, pen);
         }
     }

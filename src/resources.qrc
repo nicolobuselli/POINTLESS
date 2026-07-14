@@ -30,5 +30,7 @@
         <file alias="icons/rotate90.svg">../assets/icons/rotate90.svg</file>
         <file alias="icons/mirror_x.svg">../assets/icons/mirror_x.svg</file>
         <file alias="icons/mirror_y.svg">../assets/icons/mirror_y.svg</file>
+        <file alias="icons/lock.svg">../assets/icons/lock.svg</file>
+        <file alias="icons/lock_open.svg">../assets/icons/lock_open.svg</file>
 </qresource>
 </RCC>

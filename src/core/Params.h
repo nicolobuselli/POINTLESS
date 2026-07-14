@@ -2,6 +2,8 @@
 
 #include <QColor>
 #include <QString>
+#include <cmath>
+#include <map>
 #include <vector>
 
 // ============================================================
@@ -281,25 +283,113 @@ inline bool operator==(const GridSettings& a, const GridSettings& b) {
         && a.followGridRotation == b.followGridRotation;
 }
 
-// A single localized override of the halftone diameter: a circular area (drawn
-// and dragged on-canvas) where dot size is multiplied by `scale` instead of
-// staying uniform. Position/rotation/scale mirror LayerTransform so they slot
-// into the same keyframe system; radius/falloff are static, set only by
+// A single localized override of one numeric parameter: a circular area (drawn
+// and dragged on-canvas) where the parameter is multiplied by `scale` instead
+// of staying uniform. Position/rotation/scale mirror LayerTransform so they
+// slot into the same keyframe system; radius/falloff are static, set only by
 // dragging the on-canvas rings (not animatable, for now).
-struct HalftoneLocPoint {
+struct LocPoint {
     bool  enabled  = false;
     float posX     = 0.5f;   // 0..1, normalized frame space
     float posY     = 0.5f;   // 0..1, normalized frame space
     float rotation = 0.0f;   // -180..180 — reserved, no visual effect on a circular falloff
-    float scale    = 1.0f;   // 0.1..10 — diameter multiplier applied inside the influence area
+    float scale    = 1.0f;   // 0.1..10 — parameter multiplier applied inside the influence area
     float radius   = 0.15f;  // 0..1 — influence radius, fraction of the frame's shorter side
     float falloff  = 0.3f;   // 0..1 — fraction of radius that is a soft transition
 };
 
-inline bool operator==(const HalftoneLocPoint& a, const HalftoneLocPoint& b) {
+inline bool operator==(const LocPoint& a, const LocPoint& b) {
     return a.enabled == b.enabled && a.posX == b.posX && a.posY == b.posY
         && a.rotation == b.rotation && a.scale == b.scale
         && a.radius == b.radius && a.falloff == b.falloff;
+}
+
+// Every localizable parameter (one on-canvas point max per parameter). Order
+// is grouped by layer kind — locParamKind() relies on the grouping, and the
+// animation system appends one ParamId quartet per entry in this exact order.
+enum class LocParam {
+    HtDiameter, HtGamma, HtWeight, HtJitter,
+    DiStrength, DiThreshold, DiLevels, DiLineAngle, DiLineSpacing,
+    AsGamma, AsEdges, AsHatching, AsStipple, AsContour,
+    Count
+};
+
+using LocMap = std::map<LocParam, LocPoint>;
+
+inline LocPoint locPointOr(const LocMap& m, LocParam p)
+{
+    const auto it = m.find(p);
+    return it == m.end() ? LocPoint{} : it->second;
+}
+
+inline LayerKind locParamKind(LocParam p)
+{
+    if (p <= LocParam::HtJitter)      return LayerKind::Halftone;
+    if (p <= LocParam::DiLineSpacing) return LayerKind::Dither;
+    return LayerKind::Ascii;
+}
+
+// Multiplier field for one localized parameter, precomputed in the pixel
+// space of the image being rendered. mul() is what renderers sample: ×scale
+// inside the falloff radius, smoothstep across the transition band, ×1 (the
+// slider's base value) at/beyond the ring. The "nothing outside the circle"
+// behaviour comes from LocMask below, not from the per-parameter multiplier.
+struct LocField {
+    bool  on = false;
+    float cx = 0, cy = 0, rIn = 0, rOut = 0, scale = 1;
+
+    float t(float x, float y) const {
+        const float d = std::hypot(x - cx, y - cy);
+        if (d <= rIn) return 1.0f;
+        if (d >= rOut || rOut <= rIn) return 0.0f;
+        const float u = (rOut - d) / (rOut - rIn);
+        return u * u * (3.0f - 2.0f * u);
+    }
+    float mul(float x, float y) const {
+        return on ? 1.0f + (scale - 1.0f) * t(x, y) : 1.0f;
+    }
+};
+
+inline LocField locField(const LocMap& m, LocParam p, float imgW, float imgH)
+{
+    LocField f;
+    const LocPoint pt = locPointOr(m, p);
+    if (!pt.enabled) return f;
+    f.on    = true;
+    f.cx    = pt.posX * imgW;
+    f.cy    = pt.posY * imgH;
+    f.rOut  = pt.radius * std::min(imgW, imgH);
+    f.rIn   = f.rOut * (1.0f - std::min(std::max(pt.falloff, 0.0f), 1.0f));
+    f.scale = pt.scale;
+    return f;
+}
+
+// Spotlight mask: with any localization point enabled, the layer's effect
+// only exists inside the union of the enabled circles (exactly the original
+// localize-diameter behaviour — dots vanish outside — generalized to every
+// parameter). 1 inside, smoothstep across each falloff band, 0 outside all.
+struct LocMask {
+    bool on = false;
+    std::vector<LocField> pts;
+
+    float mask(float x, float y) const {
+        if (!on) return 1.0f;
+        float best = 0.0f;
+        for (const LocField& f : pts)
+            best = std::max(best, f.t(x, y));
+        return best;
+    }
+};
+
+inline LocMask locMask(const LocMap& m, float imgW, float imgH)
+{
+    LocMask out;
+    for (const auto& [p, pt] : m) {
+        if (!pt.enabled) continue;
+        out.pts.push_back(locField(m, p, imgW, imgH));
+    }
+    out.on = !out.pts.empty();
+    return out;
 }
 
 struct HalftoneSettings {
@@ -313,7 +403,7 @@ struct HalftoneSettings {
     float jitter       = 0.0f;
     float opacity      = 1.0f;
     float cornerRadius = 0.0f;
-    HalftoneLocPoint diameterLoc;
+    LocMap loc;   // per-parameter localization points (Ht* keys)
 
     TonalSettings tonal { ToneMode::FixedTones, defaultAccentTones(1) };
 };
@@ -323,7 +413,7 @@ inline bool operator==(const HalftoneSettings& a, const HalftoneSettings& b) {
         && a.multiThreshold == b.multiThreshold && a.grid == b.grid
         && a.gamma == b.gamma && a.weight == b.weight
         && a.jitter == b.jitter && a.opacity == b.opacity
-        && a.cornerRadius == b.cornerRadius && a.diameterLoc == b.diameterLoc
+        && a.cornerRadius == b.cornerRadius && a.loc == b.loc
         && a.tonal == b.tonal;
 }
 
@@ -371,6 +461,7 @@ struct DitherSettings {
     float           lineAngle    = 45.0f; // 0..180 deg — LineHatch direction
     int             lineSpacing  = 6;     // 2..32 cells — LineHatch line period
     QString         patternPath;          // CustomPattern threshold image
+    LocMap          loc;                  // per-parameter localization points (Di* keys)
 
     TonalSettings tonal { ToneMode::FixedTones, defaultAccentTones(1) };
 };
@@ -382,7 +473,7 @@ inline bool operator==(const DitherSettings& a, const DitherSettings& b) {
         && a.opacity == b.opacity && a.cornerRadius == b.cornerRadius
         && a.levels == b.levels && a.serpentine == b.serpentine
         && a.lineAngle == b.lineAngle && a.lineSpacing == b.lineSpacing
-        && a.patternPath == b.patternPath
+        && a.patternPath == b.patternPath && a.loc == b.loc
         && a.tonal == b.tonal;
 }
 
@@ -425,6 +516,7 @@ struct AsciiSettings {
     bool    orderedDither = false;    // Bayer-threshold glyph pick instead of nearest-coverage
     int     contour       = 0;        // 0..100 — isoline-only mask (topographic look); 0 = off
     int     hatching      = 0;        // 0..100 — directional engraving strokes shading shadows; 0 = off
+    LocMap  loc;                      // per-parameter localization points (As* keys)
 
     TonalSettings tonal { ToneMode::FixedTones,
                           { ToneEntry{ QColor(0xC0, 0xC0, 0xC0), 0 } } };
@@ -447,6 +539,7 @@ inline bool operator==(const AsciiSettings& a, const AsciiSettings& b) {
         && a.edges == b.edges && a.stipple == b.stipple
         && a.orderedDither == b.orderedDither
         && a.contour == b.contour && a.hatching == b.hatching
+        && a.loc == b.loc
         && a.tonal == b.tonal;
 }
 
@@ -492,6 +585,7 @@ struct Layer {
     QString   name;
     bool      visible = true;
     bool      pinned  = false;   // turned on by hand → survives mode switches
+    bool      locked  = false;   // canvas clicks/drags ignore it; panels still edit it
     BlendMode blend   = BlendMode::Normal;
 
     int            mediaId   = -1;   // which media this layer draws (-1 = document base)
@@ -505,7 +599,8 @@ struct Layer {
 
 inline bool operator==(const Layer& a, const Layer& b) {
     return a.id == b.id && a.kind == b.kind && a.name == b.name
-        && a.visible == b.visible && a.pinned == b.pinned && a.blend == b.blend
+        && a.visible == b.visible && a.pinned == b.pinned
+        && a.locked == b.locked && a.blend == b.blend
         && a.mediaId == b.mediaId && a.transform == b.transform
         && a.adjustments == b.adjustments && a.halftone == b.halftone
         && a.dither == b.dither && a.ascii == b.ascii;

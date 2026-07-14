@@ -110,6 +110,7 @@ public:
     std::function<void()>            onShiftSelected;   // range-select to anchor
     std::function<void()>            onCtrlSelected;    // toggle this row in/out
     std::function<void(bool)>       onEyeToggled;
+    std::function<void(bool)>       onLockToggled;
     std::function<void(const QString&)> onRenamed;
     std::function<void()>            onDeleteRequested;
     std::function<void()>            onRemoveEditsRequested;
@@ -198,6 +199,22 @@ public:
             setLayerVisible(!m_visible);
             if (onEyeToggled) onEyeToggled(m_visible);
         });
+
+        // Padlock inside the pill, on its right: appears on row hover (or
+        // always when locked). The pill is WA_TransparentForMouseEvents —
+        // that swallows its children's clicks too — so the lock is parented
+        // to the row and overlaid on the pill in resizeEvent.
+        m_lock = new QPushButton(this);
+        m_lock->setObjectName("eyeBtn");   // same transparent icon chrome
+        m_lock->setFixedSize(Ui::px(30), Ui::px(30));
+        m_lock->setCursor(Qt::PointingHandCursor);
+        m_lock->setIconSize(QSize(Ui::px(18), Ui::px(18)));
+        m_lock->setToolTip("Lock layer (canvas clicks ignore it; panels still edit it)");
+        m_lock->hide();
+        connect(m_lock, &QPushButton::clicked, this, [this]() {
+            setLocked(!m_locked);
+            if (onLockToggled) onLockToggled(m_locked);
+        });
     }
 
     int layerId() const { return m_id; }
@@ -211,6 +228,13 @@ public:
         m_eye->setIcon(QIcon(on ? ":/icons/eye_open.svg" : ":/icons/eye_closed.svg"));
     }
 
+    void setLocked(bool on)
+    {
+        m_locked = on;
+        m_lock->setIcon(QIcon(on ? ":/icons/lock.svg" : ":/icons/lock_open.svg"));
+        m_lock->setVisible(on || m_hovered);
+    }
+
     void setSelected(bool sel)
     {
         if (m_pill->property("selected").toBool() == sel) return;
@@ -220,6 +244,30 @@ public:
     }
 
 protected:
+    void enterEvent(QEnterEvent* e) override
+    {
+        m_hovered = true;
+        m_lock->setVisible(true);
+        QFrame::enterEvent(e);
+    }
+
+    void leaveEvent(QEvent* e) override
+    {
+        m_hovered = false;
+        m_lock->setVisible(m_locked);   // stays up while locked
+        QFrame::leaveEvent(e);
+    }
+
+    void resizeEvent(QResizeEvent* e) override
+    {
+        QFrame::resizeEvent(e);
+        // Overlay the lock on the pill's right edge (pill = row minus the
+        // 70px eye gutter), vertically centred.
+        const int x = width() - Ui::px(70) - Ui::px(12) - m_lock->width();
+        m_lock->move(qMax(0, x), (height() - m_lock->height()) / 2);
+        m_lock->raise();
+    }
+
     void mousePressEvent(QMouseEvent* e) override
     {
         if (e->button() == Qt::LeftButton && !m_editingName) {
@@ -312,6 +360,8 @@ private:
 
     int          m_id;
     bool         m_visible = true;
+    bool         m_locked  = false;
+    bool         m_hovered = false;
     bool         m_editingName = false;
     bool         m_deletable = true;
     bool         m_hasEdits  = false;
@@ -320,6 +370,7 @@ private:
     QLabel*      m_name    = nullptr;
     QLineEdit*   m_nameEdit = nullptr;
     QPushButton* m_eye     = nullptr;
+    QPushButton* m_lock    = nullptr;
     QPoint       m_pressPos;
 };
 
@@ -1050,6 +1101,7 @@ void LayersPanel::buildTree()
         row->setName(layer.name);
         row->setThumb(thumbFor(layer));
         row->setLayerVisible(layer.visible);
+        row->setLocked(layer.locked);
         row->setSelected(layer.id == m_activeId || m_selSet.contains(layer.id));
         row->setIndent(tree::indent());
         row->setHasEdits(layer.kind != LayerKind::Original);
@@ -1058,6 +1110,7 @@ void LayersPanel::buildTree()
         row->onShiftSelected   = [this, id]()                { emit layerRangeRequested(id); };
         row->onCtrlSelected    = [this, id]()                { emit layerToggleRequested(id); };
         row->onEyeToggled      = [this, id](bool on)         { emit visibilityToggled(id, on); };
+        row->onLockToggled     = [this, id](bool on)         { emit lockToggled(id, on); };
         row->onRenamed         = [this, id](const QString& n){ emit layerRenamed(id, n); };
         row->onDeleteRequested = [this, id]()                { emit deleteRequested(id); };
         row->onRemoveEditsRequested = [this, id]()           { emit removeEditsRequested(id); };
@@ -1108,6 +1161,7 @@ void LayersPanel::updateRowsInPlace()
         row->setName(layer.name);
         row->setThumb(thumbFor(layer));
         row->setLayerVisible(layer.visible);
+        row->setLocked(layer.locked);
         row->setSelected(layer.id == m_activeId || m_selSet.contains(layer.id));
         // Mode switches don't change treeSignature() (same layer ids/structure),
         // so this in-place path runs on every mode change too — must refresh

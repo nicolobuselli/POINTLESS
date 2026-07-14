@@ -1,5 +1,6 @@
 #include "PreviewWidget.h"
 #include "Widgets.h"
+#include "../core/AnimParams.h"   // locParamLabel
 
 #include <QPainter>
 #include <QPaintEvent>
@@ -61,28 +62,52 @@ PreviewWidget::PreviewWidget(QWidget* parent)
     setMouseTracking(true);            // hover-grow the passive loc dot without a button held
 }
 
-void PreviewWidget::setHalftoneLoc(const HalftoneLocPoint& pt, QSize frame, bool visible)
+void PreviewWidget::setLocPoints(const QVector<LocEntry>& pts, QSize frame)
 {
-    m_loc        = pt;
-    m_locFrame   = frame;
-    m_locVisible = visible;
-    if (!visible) { m_locSelected = false; m_locHovered = false; }
+    // Keep the active/hovered selection stable across rebuilds (this is also
+    // called mid-drag, echoing back the point we just emitted).
+    const LocParam activeParam = (m_locActive >= 0 && m_locActive < m_locPts.size())
+        ? m_locPts[m_locActive].param : LocParam::Count;
+    m_locPts   = pts;
+    m_locFrame = frame;
+    m_locActive = -1;
+    m_locHover  = -1;
+    for (int i = 0; i < m_locPts.size(); ++i)
+        if (m_locPts[i].param == activeParam) { m_locActive = i; break; }
+    if (m_locActive < 0 && m_locDrag != LocDrag::None) m_locDrag = LocDrag::None;
     update();
 }
 
-QPointF PreviewWidget::locCentreFrame() const
+void PreviewWidget::setLocOverlayVisible(bool on)
 {
-    return QPointF(m_loc.posX * m_locFrame.width(), m_loc.posY * m_locFrame.height());
+    m_locOverlayOn = on;
+    if (!on) { m_locActive = -1; m_locHover = -1; m_locDrag = LocDrag::None; }
+    update();
 }
 
-double PreviewWidget::locRadiusFramePx() const
+// Topmost (last-drawn) dot whose centre is within the hit radius, -1 if none.
+int PreviewWidget::locDotHit(QPointF widgetPos) const
 {
-    return double(m_loc.radius) * qMin(m_locFrame.width(), m_locFrame.height());
+    for (int i = m_locPts.size() - 1; i >= 0; --i) {
+        const QPointF centre = frameToWidget(locCentreFrame(m_locPts[i].pt));
+        if (QLineF(widgetPos, centre).length() <= kLocDotHit) return i;
+    }
+    return -1;
 }
 
-double PreviewWidget::locInnerFramePx() const
+QPointF PreviewWidget::locCentreFrame(const LocPoint& pt) const
 {
-    return locRadiusFramePx() * (1.0 - qBound(0.0f, m_loc.falloff, 1.0f));
+    return QPointF(pt.posX * m_locFrame.width(), pt.posY * m_locFrame.height());
+}
+
+double PreviewWidget::locRadiusFramePx(const LocPoint& pt) const
+{
+    return double(pt.radius) * qMin(m_locFrame.width(), m_locFrame.height());
+}
+
+double PreviewWidget::locInnerFramePx(const LocPoint& pt) const
+{
+    return locRadiusFramePx(pt) * (1.0 - qBound(0.0f, pt.falloff, 1.0f));
 }
 
 void PreviewWidget::setImage(const QImage& img)
@@ -309,7 +334,8 @@ int PreviewWidget::hitTest(QPointF widgetPos) const
 {
     // m_canvasLayers is top-first → first match is the top-most layer.
     for (const CanvasLayer& cl : m_canvasLayers)
-        if (quadWidget(cl.tf, cl.native).containsPoint(widgetPos, Qt::OddEvenFill))
+        if (!cl.locked
+            && quadWidget(cl.tf, cl.native).containsPoint(widgetPos, Qt::OddEvenFill))
             return cl.id;
     return -1;
 }
@@ -342,6 +368,28 @@ void PreviewWidget::resizeEvent(QResizeEvent* event)
 
 void PreviewWidget::wheelEvent(QWheelEvent* event)
 {
+    // Plain wheel over the active localization point's circle adjusts its
+    // intensity (the ×scale multiplier) — the only knob the point has.
+    if (!(event->modifiers() & Qt::ControlModifier)
+        && locShown() && m_locActive >= 0 && m_locActive < m_locPts.size()) {
+        LocPoint& lp = m_locPts[m_locActive].pt;
+        const QPointF centre = frameToWidget(locCentreFrame(lp));
+        const double dist    = QLineF(event->position(), centre).length();
+        const double outerR  = locRadiusFramePx(lp) * imageScale();
+        if (dist <= outerR + kLocRingHit) {
+            const int delta = event->angleDelta().y();
+            if (delta != 0) {
+                const float step = (delta > 0) ? 1.1f : 1.0f / 1.1f;
+                lp.scale = qBound(0.1f, lp.scale * step, 10.0f);
+                update();
+                emit localizationChanged(m_locPts[m_locActive].param, lp);
+                emit localizationEditFinished();
+            }
+            event->accept();
+            return;
+        }
+    }
+
     if (!(event->modifiers() & Qt::ControlModifier)) {
         event->ignore();
         return;
@@ -384,48 +432,53 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
         const QPointF pos = event->position();
         const Qt::KeyboardModifiers mods = event->modifiers();
 
-        // -1. Halftone localize-diameter dot, if the active layer shows one.
-        //     Takes priority over everything else on the canvas.
-        if (m_locVisible) {
-            const QPointF centre = frameToWidget(locCentreFrame());
-            const double dist    = QLineF(pos, centre).length();
+        // -1. Localization dots of the active layer, if any are shown.
+        //     Take priority over everything else on the canvas.
+        if (locShown()) {
+            const int hitDot = locDotHit(pos);   // passive dot under the cursor
 
-            if (!m_locSelected) {
-                // Passive: only the plain centre dot is clickable. A hit both
-                // activates it (shows the radius/falloff rings) and starts
-                // moving it in the same gesture.
-                if (dist <= kLocDotHit) {
-                    m_locSelected   = true;
-                    m_locDrag       = LocDrag::Move;
-                    m_locGrabOffset = locCentreFrame() - widgetToFrame(pos);
-                    setFocus(Qt::MouseFocusReason);
-                    update(); event->accept(); return;
-                }
-                // Miss → stays passive, fall through to normal canvas handling.
-            } else {
-                // Active: rings are live.
-                const double outerR = locRadiusFramePx() * imageScale();
-                const double innerR = locInnerFramePx()  * imageScale();
+            if (m_locActive >= 0) {
+                // Active point: its rings are live.
+                const LocPoint& lp   = m_locPts[m_locActive].pt;
+                const QPointF centre = frameToWidget(locCentreFrame(lp));
+                const double dist    = QLineF(pos, centre).length();
+                const double outerR  = locRadiusFramePx(lp) * imageScale();
+                const double innerR  = locInnerFramePx(lp)  * imageScale();
 
-                if (std::abs(dist - outerR) <= kLocRingHit) {
-                    m_locDrag = LocDrag::Radius;
-                    setFocus(Qt::MouseFocusReason);
-                    update(); event->accept(); return;
-                }
-                if (std::abs(dist - innerR) <= kLocRingHit) {
-                    m_locDrag = LocDrag::Falloff;
+                // Nearest ring wins: at small radii (or falloff ≈ 0) the two
+                // rings sit inside each other's hit tolerance, and testing
+                // outer-first made the falloff ring ungrabbable. Ties (rings
+                // coincident) break by side: inside → falloff, outside → radius.
+                const double dOut = std::abs(dist - outerR);
+                const double dIn  = std::abs(dist - innerR);
+                if (dOut <= kLocRingHit || dIn <= kLocRingHit) {
+                    const bool falloffWins = dIn < dOut || (dIn == dOut && dist < outerR);
+                    m_locDrag = falloffWins ? LocDrag::Falloff : LocDrag::Radius;
                     setFocus(Qt::MouseFocusReason);
                     update(); event->accept(); return;
                 }
                 if (dist <= qMax(kLocDotHit, outerR)) {
                     m_locDrag = LocDrag::Move;
-                    m_locGrabOffset = locCentreFrame() - widgetToFrame(pos);
+                    m_locGrabOffset = locCentreFrame(lp) - widgetToFrame(pos);
                     setFocus(Qt::MouseFocusReason);
                     update(); event->accept(); return;
                 }
-                m_locSelected = false;   // clicked outside → back to passive, fall through
+                m_locActive = -1;   // clicked outside its circle → deselect
                 update();
+                // …and fall through to the passive dots below.
             }
+
+            if (hitDot >= 0) {
+                // Passive dot: a hit both activates it (shows the rings) and
+                // starts moving it in the same gesture.
+                m_locActive     = hitDot;
+                m_locHover      = -1;
+                m_locDrag       = LocDrag::Move;
+                m_locGrabOffset = locCentreFrame(m_locPts[hitDot].pt) - widgetToFrame(pos);
+                setFocus(Qt::MouseFocusReason);
+                update(); event->accept(); return;
+            }
+            // Miss → fall through to normal canvas handling.
         }
 
         // 0. Group gizmo for a multi-layer selection. Plain drags only — Shift/Ctrl
@@ -569,31 +622,32 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
 
 void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
 {
-    if (m_locDrag != LocDrag::None) {
+    if (m_locDrag != LocDrag::None && m_locActive >= 0 && m_locActive < m_locPts.size()) {
         const QPointF framePt = widgetToFrame(event->position());
+        LocPoint& lp = m_locPts[m_locActive].pt;
         switch (m_locDrag) {
             case LocDrag::Move: {
                 const QPointF c = framePt + m_locGrabOffset;
-                m_loc.posX = m_locFrame.width()  > 0 ? float(qBound(0.0, c.x() / m_locFrame.width(),  1.0)) : 0.5f;
-                m_loc.posY = m_locFrame.height() > 0 ? float(qBound(0.0, c.y() / m_locFrame.height(), 1.0)) : 0.5f;
+                lp.posX = m_locFrame.width()  > 0 ? float(qBound(0.0, c.x() / m_locFrame.width(),  1.0)) : 0.5f;
+                lp.posY = m_locFrame.height() > 0 ? float(qBound(0.0, c.y() / m_locFrame.height(), 1.0)) : 0.5f;
                 break;
             }
             case LocDrag::Radius: {
-                const double d    = QLineF(locCentreFrame(), framePt).length();
+                const double d    = QLineF(locCentreFrame(lp), framePt).length();
                 const double base = qMin(m_locFrame.width(), m_locFrame.height());
-                if (base > 0) m_loc.radius = float(qBound(0.01, d / base, 1.0));
+                if (base > 0) lp.radius = float(qBound(0.01, d / base, 1.0));
                 break;
             }
             case LocDrag::Falloff: {
-                const double d      = QLineF(locCentreFrame(), framePt).length();
-                const double outerR = locRadiusFramePx();
-                if (outerR > 1e-3) m_loc.falloff = float(qBound(0.0, 1.0 - d / outerR, 1.0));
+                const double d      = QLineF(locCentreFrame(lp), framePt).length();
+                const double outerR = locRadiusFramePx(lp);
+                if (outerR > 1e-3) lp.falloff = float(qBound(0.0, 1.0 - d / outerR, 1.0));
                 break;
             }
             default: break;
         }
         update();
-        emit localizationChanged(m_loc);
+        emit localizationChanged(m_locPts[m_locActive].param, lp);
         event->accept();
         return;
     }
@@ -732,15 +786,18 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
-    // Passive-mode hover: grow the loc dot a bit so it's easier to grab.
-    if (m_locVisible && !m_locSelected && !m_panMode) {
-        const double dist = QLineF(event->position(), frameToWidget(locCentreFrame())).length();
-        const bool hovered = dist <= kLocDotHit;
-        if (hovered != m_locHovered) {
-            m_locHovered = hovered;
-            setCursor(hovered ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    // Passive-dot hover: grow the dot a bit (and name it) so it's easy to grab.
+    if (locShown() && !m_panMode) {
+        int hover = locDotHit(event->position());
+        if (hover == m_locActive) hover = -1;   // the active dot already shows its rings
+        if (hover != m_locHover) {
+            m_locHover = hover;
+            setCursor(hover >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
             update();
         }
+    } else if (m_locHover != -1) {
+        m_locHover = -1;
+        update();
     }
     QWidget::mouseMoveEvent(event);
 }
@@ -786,6 +843,7 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
             QPainterPath rectPath; rectPath.addRect(QRectF(r));
             QSet<int> sel = m_boxAdditive ? m_selection : QSet<int>{};
             for (const CanvasLayer& cl : m_canvasLayers) {
+                if (cl.locked) continue;
                 QPainterPath pp; pp.addPolygon(quadWidget(cl.tf, cl.native)); pp.closeSubpath();
                 const bool inside = crossing ? rectPath.intersects(pp) : rectPath.contains(pp);
                 if (inside) sel.insert(cl.id);
@@ -811,10 +869,12 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
 
 void PreviewWidget::keyPressEvent(QKeyEvent* event)
 {
-    if (m_locVisible && m_locSelected && event->key() == Qt::Key_Backspace) {
-        m_locVisible  = false;
-        m_locSelected = false;
-        emit localizationDeleteRequested();
+    if (locShown() && m_locActive >= 0 && event->key() == Qt::Key_Backspace) {
+        const LocParam p = m_locPts[m_locActive].param;
+        m_locPts.removeAt(m_locActive);
+        m_locActive = -1;
+        m_locHover  = -1;
+        emit localizationDeleteRequested(p);
         update();
         event->accept();
         return;
@@ -824,32 +884,57 @@ void PreviewWidget::keyPressEvent(QKeyEvent* event)
 
 void PreviewWidget::paintLocHandles(QPainter& p)
 {
-    const QPointF centre = frameToWidget(locCentreFrame());
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    // Active: radius/falloff rings are live and draggable. Passive: just the
-    // plain dot, click it to activate.
-    if (m_locSelected) {
-        const double outerR = locRadiusFramePx() * imageScale();
-        const double innerR = locInnerFramePx()  * imageScale();
+    QFont labelFont = p.font();
+    labelFont.setPixelSize(11);
+    p.setFont(labelFont);
 
-        QPen outerPen(QColor("#FD5A1F"));
-        outerPen.setWidthF(1.4);
-        p.setPen(outerPen);
-        p.setBrush(Qt::NoBrush);
-        p.drawEllipse(centre, outerR, outerR);
+    for (int i = 0; i < m_locPts.size(); ++i) {
+        const LocPoint& lp   = m_locPts[i].pt;
+        const QPointF centre = frameToWidget(locCentreFrame(lp));
+        const bool active    = (i == m_locActive);
+        const bool hovered   = (i == m_locHover);
 
-        QPen innerPen(QColor("#F0F0F0"));
-        innerPen.setStyle(Qt::DashLine);
-        innerPen.setWidthF(1.0);
-        p.setPen(innerPen);
-        p.drawEllipse(centre, innerR, innerR);
+        // Active: radius/falloff rings are live and draggable. Passive: just
+        // the plain dot, click it to activate.
+        if (active) {
+            const double outerR = locRadiusFramePx(lp) * imageScale();
+            const double innerR = locInnerFramePx(lp)  * imageScale();
+
+            QPen outerPen(QColor("#FD5A1F"));
+            outerPen.setWidthF(1.4);
+            p.setPen(outerPen);
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(centre, outerR, outerR);
+
+            QPen innerPen(QColor("#F0F0F0"));
+            innerPen.setStyle(Qt::DashLine);
+            innerPen.setWidthF(1.0);
+            p.setPen(innerPen);
+            p.drawEllipse(centre, innerR, innerR);
+        }
+
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor("#F0F0F0"));
+        const double dotR = (!active && hovered) ? 6.0 : 4.0;
+        p.drawEllipse(centre, dotR, dotR);
+
+        // Name tag on the active/hovered dot, so overlapping points from
+        // different parameters stay tellable apart. The active one also shows
+        // its intensity (scroll over the circle to change it).
+        if (active || hovered) {
+            QString label = QString::fromUtf8(locParamLabel(m_locPts[i].param));
+            // Intensity shown only once it differs from neutral (scroll to change).
+            if (active && std::abs(lp.scale - 1.0f) > 0.01f)
+                label += QString::fromUtf8(" ×%1").arg(double(lp.scale), 0, 'g', 3);
+            const QPointF at(centre.x() + 10.0, centre.y() - 8.0);
+            p.setPen(QColor(0, 0, 0, 160));                   // soft halo
+            p.drawText(at + QPointF(1, 1), label);
+            p.setPen(active ? QColor("#FD5A1F") : QColor("#F0F0F0"));
+            p.drawText(at, label);
+        }
     }
-
-    p.setPen(Qt::NoPen);
-    p.setBrush(QColor("#F0F0F0"));
-    const double dotR = (!m_locSelected && m_locHovered) ? 6.0 : 4.0;
-    p.drawEllipse(centre, dotR, dotR);
 }
 
 void PreviewWidget::paintHandles(QPainter& p)
@@ -942,7 +1027,7 @@ void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
             }
             if (single) paintHandles(p);
             else if (groupHandlesVisible()) paintGroupHandles(p);
-            if (m_locVisible) paintLocHandles(p);
+            if (locShown()) paintLocHandles(p);
         }
 
         // Rubber-band box: dashed = crossing (drag left), solid = window (right).

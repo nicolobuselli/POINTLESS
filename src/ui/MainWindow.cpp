@@ -348,9 +348,9 @@ MainWindow::MainWindow(QWidget* parent)
         syncTimeline();   // dopesheet catches up once the gesture ends
         m_undoTimer.start();
     });
-    connect(m_preview, &PreviewWidget::localizationChanged, this, [this](const HalftoneLocPoint& pt) {
+    connect(m_preview, &PreviewWidget::localizationChanged, this, [this](LocParam p, const LocPoint& pt) {
         m_locDragging = true;
-        onLocalizationChanged(pt);
+        onLocalizationChanged(p, pt);
     });
     connect(m_preview, &PreviewWidget::localizationEditFinished, this, [this]() {
         m_locDragging = false;
@@ -359,11 +359,14 @@ MainWindow::MainWindow(QWidget* parent)
         syncTimeline();
         m_undoTimer.start();
     });
-    connect(m_preview, &PreviewWidget::localizationDeleteRequested, this, [this]() {
+    connect(m_preview, &PreviewWidget::localizationDeleteRequested, this, [this](LocParam p) {
         Layer* l = activeLayer();
-        if (!l || l->kind != LayerKind::Halftone) return;
-        l->halftone.diameterLoc.enabled = false;
-        m_right->setHalftoneLoc(l->halftone.diameterLoc);
+        if (!l || l->kind != locParamKind(p)) return;
+        LocMap& m = (l->kind == LayerKind::Halftone) ? l->halftone.loc
+                  : (l->kind == LayerKind::Dither)   ? l->dither.loc
+                                                     : l->ascii.loc;
+        m[p].enabled = false;
+        m_right->setLocPoint(p, m[p]);
         pushPreviewTransform();
         scheduleRender();
         m_previewTimer.start();
@@ -417,6 +420,19 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     connect(m_layersPanel, &LayersPanel::visibilityToggled, this, &MainWindow::onLayerVisibilityToggled);
+    connect(m_layersPanel, &LayersPanel::lockToggled, this, [this](int layerId, bool locked) {
+        if (m_current < 0) return;
+        auto& layers = m_images[m_current].state.layers;
+        const int idx = findLayerById(layers, layerId);
+        if (idx < 0) return;
+        layers[idx].locked = locked;
+        // Drop it from any canvas selection so its gizmo/outline vanishes too.
+        if (locked && m_selection.remove(layerId))
+            m_preview->setSelection(m_selection, m_images[m_current].state.activeLayerId);
+        syncLayersPanel();
+        pushPreviewTransform();   // handles/hit-testing pick up the lock
+        m_undoTimer.start();      // no render: locking changes no pixels
+    });
     connect(m_layersPanel, &LayersPanel::layerSelected,     this, &MainWindow::onLayerSelected);
     connect(m_layersPanel, &LayersPanel::layerRangeRequested, this, &MainWindow::onLayerRangeRequested);
     connect(m_layersPanel, &LayersPanel::layerToggleRequested, this, &MainWindow::onLayerToggleRequested);
@@ -641,6 +657,14 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
                     event->accept();
                     return true;
                 }
+            }
+            // "H" hides/shows the on-canvas localization dots (points stay
+            // enabled; this only declutters the canvas).
+            if (keyEvent->key() == Qt::Key_H && keyEvent->modifiers() == Qt::NoModifier
+                && !keyEvent->isAutoRepeat()) {
+                m_preview->setLocOverlayVisible(!m_preview->locOverlayVisible());
+                event->accept();
+                return true;
             }
         } else if (event->type() == QEvent::KeyRelease) {
             auto* keyEvent = static_cast<QKeyEvent*>(event);
@@ -1006,7 +1030,7 @@ void MainWindow::autoKeyTransform(int layerId, const LayerTransform& before, con
 // Radius/falloff are static (not in ParamId, never keyed) — only the
 // Transform-like fields (position/rotation/scale) are animatable, matching
 // the on-canvas layer transform.
-void MainWindow::autoKeyLocalization(int layerId, const HalftoneLocPoint& before, const HalftoneLocPoint& after)
+void MainWindow::autoKeyLocalization(int layerId, LocParam p, const LocPoint& before, const LocPoint& after)
 {
     if (m_current < 0) return;
     Animation& anim = m_images[m_current].anim;
@@ -1016,10 +1040,10 @@ void MainWindow::autoKeyLocalization(int layerId, const HalftoneLocPoint& before
         if (changed && (m_autoKey || findTrack(anim, layerId, id)))
             upsertKey(anim, layerId, id, frame, value);
     };
-    key(ParamId::HtLocX,        before.posX     != after.posX,     after.posX);
-    key(ParamId::HtLocY,        before.posY     != after.posY,     after.posY);
-    key(ParamId::HtLocRotation, before.rotation != after.rotation, after.rotation);
-    key(ParamId::HtLocScale,    before.scale    != after.scale,    after.scale);
+    key(locParamId(p, 0), before.posX     != after.posX,     after.posX);
+    key(locParamId(p, 1), before.posY     != after.posY,     after.posY);
+    key(locParamId(p, 2), before.rotation != after.rotation, after.rotation);
+    key(locParamId(p, 3), before.scale    != after.scale,    after.scale);
 }
 
 void MainWindow::setPlayhead(int frame)
@@ -1408,20 +1432,32 @@ void MainWindow::onLayerTransformChanged(const LayerTransform& t)
     m_undoTimer.start();
 }
 
+// The LocMap holding LocParam p's point on layer l (settings struct by kind).
+static LocMap& layerLocMap(Layer& l, LocParam p)
+{
+    switch (locParamKind(p)) {
+        case LayerKind::Dither: return l.dither.loc;
+        case LayerKind::Ascii:  return l.ascii.loc;
+        default:                return l.halftone.loc;
+    }
+}
+
 // Loc-dot edits bypass collectParams() for the same drag-performance reasons
 // as onLayerTransformChanged, but must also keep ModePanel's cached copy in
-// sync (halftoneSettings() round-trips diameterLoc, unlike l.transform).
-void MainWindow::onLocalizationChanged(const HalftoneLocPoint& pt)
+// sync (the settings() getters round-trip the loc maps, unlike l.transform).
+void MainWindow::onLocalizationChanged(LocParam p, const LocPoint& pt)
 {
     if (m_current < 0) return;
     Layer* l = activeLayer();
-    if (!l || l->kind != LayerKind::Halftone || l->halftone.diameterLoc == pt) return;
+    if (!l || l->kind != locParamKind(p)) return;
+    LocMap& m = layerLocMap(*l, p);
+    if (locPointOr(m, p) == pt) return;
 
-    const HalftoneLocPoint old = l->halftone.diameterLoc;
-    l->halftone.diameterLoc = pt;
-    autoKeyLocalization(l->id, old, pt);
+    const LocPoint old = locPointOr(m, p);
+    m[p] = pt;
+    autoKeyLocalization(l->id, p, old, pt);
     m_playCacheValid = false;
-    m_right->setHalftoneLoc(pt);   // keep the panel's round-trip copy current
+    m_right->setLocPoint(p, pt);   // keep the panel's round-trip copy current
     pushPreviewTransform();
 
     const bool preview = m_locDragging;
@@ -1433,14 +1469,18 @@ void MainWindow::onLocalizationChanged(const HalftoneLocPoint& pt)
     m_undoTimer.start();
 }
 
-void MainWindow::onLocalizationToggleRequested()
+void MainWindow::onLocalizationToggleRequested(LocParam p)
 {
     if (m_current < 0) return;
     Layer* l = activeLayer();
-    if (!l || l->kind != LayerKind::Halftone) return;
+    if (!l || l->kind != locParamKind(p)) return;
 
-    l->halftone.diameterLoc.enabled = !l->halftone.diameterLoc.enabled;
-    m_right->setHalftoneLoc(l->halftone.diameterLoc);
+    LocPoint& pt = layerLocMap(*l, p)[p];
+    pt.enabled = !pt.enabled;
+    // Re-enabling a hidden overlay would otherwise look like a dead click.
+    if (pt.enabled && !m_preview->locOverlayVisible())
+        m_preview->setLocOverlayVisible(true);
+    m_right->setLocPoint(p, pt);
     pushPreviewTransform();
     scheduleRender();
     m_previewTimer.start();
@@ -1502,7 +1542,7 @@ void MainWindow::pushPreviewTransform()
         m_preview->setCanvasLayers({}, {});
         m_preview->setSelection({}, -1);
         m_preview->setActiveTransform({}, {}, {}, false);
-        m_preview->setHalftoneLoc({}, {}, false);
+        m_preview->setLocPoints({}, {});
         return;
     }
     auto& st = m_images[m_current].state;
@@ -1514,7 +1554,7 @@ void MainWindow::pushPreviewTransform()
         if (!l.visible) continue;
         const QSize native = layerNativeSize(l);
         if (native.isEmpty()) continue;
-        items.push_back({ l.id, l.transform, native });
+        items.push_back({ l.id, l.transform, native, l.locked });
     }
     m_preview->setCanvasLayers(items, frame);
 
@@ -1530,10 +1570,24 @@ void MainWindow::pushPreviewTransform()
     const Layer* l = activeLayer();
     const QSize native = activeLayerNativeSize();
     m_preview->setActiveTransform(l ? l->transform : LayerTransform{},
-                                  native, frame, l != nullptr && !native.isEmpty());
+                                  native, frame,
+                                  l != nullptr && !native.isEmpty() && !l->locked);
 
-    const bool locVisible = l && l->kind == LayerKind::Halftone && l->halftone.diameterLoc.enabled;
-    m_preview->setHalftoneLoc(l ? l->halftone.diameterLoc : HalftoneLocPoint{}, frame, locVisible);
+    // Every enabled localization point of the active layer's mode.
+    QVector<PreviewWidget::LocEntry> locPts;
+    if (l) {
+        const LocMap* m = nullptr;
+        switch (l->kind) {
+            case LayerKind::Halftone: m = &l->halftone.loc; break;
+            case LayerKind::Dither:   m = &l->dither.loc;   break;
+            case LayerKind::Ascii:    m = &l->ascii.loc;    break;
+            default: break;
+        }
+        if (m)
+            for (const auto& [p, pt] : *m)
+                if (pt.enabled) locPts.push_back({ p, pt });
+    }
+    m_preview->setLocPoints(locPts, frame);
 }
 
 void MainWindow::onCanvasSelectionChanged(const QSet<int>& ids, int activeId)

@@ -208,6 +208,79 @@ private:
     QHBoxLayout* m_titleLayout = nullptr;
 };
 
+// ============================================================
+//  LocDots — the per-parameter localization dots that float in a
+//  page's 70px right gutter, one per localizable slider row.
+//  Owns creation, positioning (via event filters on the anchor
+//  rows — a page's own resizeEvent is unreliable, see CLAUDE.md)
+//  and checked-state sync with the page's LocMap.
+// ============================================================
+
+class LocDots : public QObject
+{
+public:
+    std::function<void(LocParam)> onToggle;
+
+    explicit LocDots(QWidget* page) : QObject(page), m_page(page)
+    {
+        page->installEventFilter(this);
+    }
+
+    void add(QWidget* row, LocParam p)
+    {
+        auto* dot = new QPushButton(m_page);
+        dot->setObjectName("locDot");
+        dot->setCheckable(true);
+        dot->setCursor(Qt::PointingHandCursor);
+        dot->setToolTip(QString("Localize %1 — drag the point on canvas; scroll inside its "
+                                "circle to set the intensity (H hides the overlay)")
+                            .arg(QString::fromUtf8(locParamLabel(p)).toLower()));
+        dot->setFixedSize(10, 10);
+        connect(dot, &QPushButton::clicked, this, [this, p]() { if (onToggle) onToggle(p); });
+        row->installEventFilter(this);
+        m_dots.push_back({ row, dot, p });
+    }
+
+    void sync(const LocMap& m)
+    {
+        for (const Dot& d : m_dots)
+            d.dot->setChecked(locPointOr(m, d.param).enabled);
+    }
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* ev) override
+    {
+        switch (ev->type()) {
+            case QEvent::Resize: case QEvent::Move:
+            case QEvent::Show:   case QEvent::Hide:
+                position();
+                break;
+            default: break;
+        }
+        return QObject::eventFilter(obj, ev);
+    }
+
+private:
+    struct Dot { QWidget* row; QPushButton* dot; LocParam param; };
+
+    void position()
+    {
+        const int gutter = Ui::px(70);
+        for (const Dot& d : m_dots) {
+            d.dot->setVisible(d.row->isVisibleTo(m_page));
+            const QPoint rowRight =
+                d.row->mapTo(m_page, QPoint(d.row->width(), d.row->height() / 2));
+            d.dot->setGeometry(rowRight.x() + (gutter - d.dot->width()) / 2,
+                               rowRight.y() - d.dot->height() / 2,
+                               d.dot->width(), d.dot->height());
+            d.dot->raise();
+        }
+    }
+
+    QWidget*      m_page;
+    QVector<Dot>  m_dots;
+};
+
 } // namespace
 
 // ============================================================
@@ -221,17 +294,16 @@ public:
 
     std::function<void()> onBlendChanged;
 
-    // The on-canvas localization dot (next to Diameter) was clicked.
-    std::function<void()> onLocToggleClicked;
+    // A gutter localization dot was clicked (toggle that parameter's point).
+    std::function<void(LocParam)> onLocToggle;
 
-    // Cheap sync of just the loc point (e.g. live during an on-canvas drag),
+    // Cheap sync of just one loc point (e.g. live during an on-canvas drag),
     // without touching the rest of the sliders like setSettings() would.
-    void setLocPoint(const HalftoneLocPoint& p)
+    void setLocPoint(LocParam p, const LocPoint& pt)
     {
-        m_diameterLoc = p;
-        m_locDot->setChecked(p.enabled);
+        m_loc[p] = pt;
+        m_locDots->sync(m_loc);
     }
-    HalftoneLocPoint locPoint() const { return m_diameterLoc; }
 
     HalftonePage(QWidget* parent = nullptr)
         : QWidget(parent)
@@ -258,8 +330,8 @@ public:
         vl->addWidget(m_shapeSection);
         addShapeSlot(HalftoneShape::Square, QString(), true);
 
-        // ── Settings ────────────────────────────────────────
-        auto* settings = new PanelSection("Settings", /*collapsible*/ false, true);
+        // ── Parameters ──────────────────────────────────────
+        auto* settings = new PanelSection("Parameters", /*collapsible*/ false, true);
         {
             auto* sl = settings->body();
 
@@ -294,22 +366,15 @@ public:
                 sl->addWidget(r);
             }
 
-            // Localize-diameter dot: floats in the right gutter, vertically
-            // centred on the Diameter row's value box. Toggled on/off here;
-            // position/radius/falloff/scale are set by dragging it on-canvas.
-            m_locDot = new QPushButton(this);
-            m_locDot->setObjectName("locDot");
-            m_locDot->setCheckable(true);
-            m_locDot->setCursor(Qt::PointingHandCursor);
-            m_locDot->setToolTip("Localize diameter");
-            m_locDot->setFixedSize(10, 10);
-            connect(m_locDot, &QPushButton::clicked, this, [this]() {
-                if (onLocToggleClicked) onLocToggleClicked();
-            });
-            // This page's own resizeEvent fires unreliably (it can go through
-            // one transient layout pass with a stale/default size and never
-            // again); watch the row's actual geometry directly instead.
-            m_diameter->installEventFilter(this);
+            // Localization dots: one per localizable slider, floating in the
+            // right gutter, vertically centred on the row. Toggled on/off
+            // here; position/radius/falloff/scale are set on-canvas.
+            m_locDots = new LocDots(this);
+            m_locDots->onToggle = [this](LocParam p) { if (onLocToggle) onLocToggle(p); };
+            m_locDots->add(m_diameter, LocParam::HtDiameter);
+            m_locDots->add(m_gamma,    LocParam::HtGamma);
+            m_locDots->add(m_weight,   LocParam::HtWeight);
+            m_locDots->add(m_jitter,   LocParam::HtJitter);
 
             // Fusion (blend mode of the active layer) — moved here.
             sl->addWidget(makeParamLabel("Fusion"));
@@ -393,7 +458,7 @@ public:
         s.jitter       = m_jitter->value() / 100.0f;
         s.opacity      = m_opacity->value() / 100.0f;
         s.cornerRadius = float(m_cornerRadius->value());
-        s.diameterLoc  = m_diameterLoc;   // no slider; kept in sync via setLocPoint()
+        s.loc          = m_loc;   // no sliders; kept in sync via setLocPoint()
         return s;
     }
 
@@ -432,42 +497,13 @@ public:
         m_jitter->setValue(qRound(s.jitter * 100));
         m_opacity->setValue(qRound(s.opacity * 100));
         m_cornerRadius->setValue(qRound(s.cornerRadius));
-        setLocPoint(s.diameterLoc);
+        m_loc = s.loc;
+        m_locDots->sync(m_loc);
         m_updating = false;
-    }
-
-protected:
-    void resizeEvent(QResizeEvent* e) override
-    {
-        QWidget::resizeEvent(e);
-        positionLocDot();
-    }
-
-    bool eventFilter(QObject* obj, QEvent* ev) override
-    {
-        if (obj == m_diameter && (ev->type() == QEvent::Resize || ev->type() == QEvent::Move))
-            positionLocDot();
-        return QWidget::eventFilter(obj, ev);
     }
 
 private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
-
-    // Gutter (70 Figma px) is reserved on the right of every settings row;
-    // park the dot in its centre, vertically aligned with Diameter's value box.
-    void positionLocDot()
-    {
-        if (!m_locDot || !m_diameter) return;
-        // Anchor off the row's own right edge (not this->width()) so the dot
-        // stays centred on the gutter regardless of any width mismatch
-        // between the row's container and this page.
-        const QPoint rowRight = m_diameter->mapTo(this, QPoint(m_diameter->width(), m_diameter->height() / 2));
-        const int gutter = Ui::px(70);
-        const int x = rowRight.x() + (gutter - m_locDot->width()) / 2;
-        const int y = rowRight.y() - m_locDot->height() / 2;
-        m_locDot->setGeometry(x, y, m_locDot->width(), m_locDot->height());
-        m_locDot->raise();
-    }
 
     struct ShapeSlot {
         QWidget*         widget     = nullptr;
@@ -645,8 +681,8 @@ private:
     SliderRow*       m_rotation     = nullptr;
     SliderRow*       m_gamma        = nullptr;
     SliderRow*       m_diameter     = nullptr;
-    QPushButton*     m_locDot       = nullptr;
-    HalftoneLocPoint m_diameterLoc;
+    LocDots*         m_locDots      = nullptr;
+    LocMap           m_loc;
     SliderRow*       m_weight       = nullptr;
     SliderRow*       m_jitter       = nullptr;
     PopupPicker*     m_fusion       = nullptr;
@@ -733,6 +769,13 @@ class DitherPage : public QWidget
 public:
     std::function<void()> onChanged;
     std::function<void()> onBlendChanged;
+    std::function<void(LocParam)> onLocToggle;
+
+    void setLocPoint(LocParam p, const LocPoint& pt)
+    {
+        m_loc[p] = pt;
+        m_locDots->sync(m_loc);
+    }
 
     DitherPage(QWidget* parent = nullptr)
         : QWidget(parent)
@@ -891,6 +934,16 @@ public:
             }
             m_threshold->setVisible(false);   // shown only for the Threshold algorithm
 
+            // Localization dots in the gutter (Pixel size excluded: it is the
+            // structural downscale factor, it cannot vary per pixel).
+            m_locDots = new LocDots(this);
+            m_locDots->onToggle = [this](LocParam p) { if (onLocToggle) onLocToggle(p); };
+            m_locDots->add(m_strength,    LocParam::DiStrength);
+            m_locDots->add(m_threshold,   LocParam::DiThreshold);
+            m_locDots->add(m_levels,      LocParam::DiLevels);
+            m_locDots->add(m_lineAngle,   LocParam::DiLineAngle);
+            m_locDots->add(m_lineSpacing, LocParam::DiLineSpacing);
+
             pl->addWidget(makeParamLabel("Fusion"));
             m_fusion = new PopupPicker(1);
             m_fusion->setEntries(blendPickerEntries());
@@ -954,6 +1007,7 @@ public:
         s.lineAngle    = float(m_lineAngle->value());
         s.lineSpacing  = m_lineSpacing->value();
         s.patternPath  = m_patternPath;
+        s.loc          = m_loc;   // no sliders; kept in sync via setLocPoint()
         return s;
     }
 
@@ -990,6 +1044,8 @@ public:
             m_patternPath = s.patternPath;
             updatePatternRow();
         }
+        m_loc = s.loc;
+        m_locDots->sync(m_loc);
         m_updating = false;
     }
 
@@ -1076,6 +1132,8 @@ private:
     SliderRow*       m_strength   = nullptr;
     SliderRow*       m_threshold  = nullptr;
     SliderRow*       m_levels     = nullptr;
+    LocDots*         m_locDots    = nullptr;
+    LocMap           m_loc;
     PopupPicker*     m_fusion       = nullptr;
     DragSpinBox*     m_opacity      = nullptr;
     DragSpinBox*     m_cornerRadius = nullptr;
@@ -1091,6 +1149,13 @@ class AsciiPage : public QWidget
 public:
     std::function<void()> onChanged;
     std::function<void()> onBlendChanged;
+    std::function<void(LocParam)> onLocToggle;
+
+    void setLocPoint(LocParam p, const LocPoint& pt)
+    {
+        m_loc[p] = pt;
+        m_locDots->sync(m_loc);
+    }
 
     AsciiPage(QWidget* parent = nullptr)
         : QWidget(parent)
@@ -1196,6 +1261,16 @@ public:
                 pl->addWidget(r);
             }
 
+            // Localization dots in the gutter (Cell size excluded: it is the
+            // structural glyph-grid pitch, it cannot vary per cell).
+            m_locDots = new LocDots(this);
+            m_locDots->onToggle = [this](LocParam p) { if (onLocToggle) onLocToggle(p); };
+            m_locDots->add(m_gamma,    LocParam::AsGamma);
+            m_locDots->add(m_edges,    LocParam::AsEdges);
+            m_locDots->add(m_hatching, LocParam::AsHatching);
+            m_locDots->add(m_stipple,  LocParam::AsStipple);
+            m_locDots->add(m_contour,  LocParam::AsContour);
+
             m_orderedDither = new QPushButton("Ordered dither");
             m_orderedDither->setCheckable(true);
             m_orderedDither->setCursor(Qt::PointingHandCursor);
@@ -1262,6 +1337,7 @@ public:
         s.stipple        = m_stipple->value();
         s.contour        = m_contour->value();
         s.orderedDither  = m_orderedDither->isChecked();
+        s.loc            = m_loc;   // no sliders; kept in sync via setLocPoint()
         return s;
     }
 
@@ -1291,6 +1367,8 @@ public:
         else                          wi = 3;
         m_weight->setCurrentIndex(wi);
         m_weight->blockSignals(false);
+        m_loc = s.loc;
+        m_locDots->sync(m_loc);
         m_updating = false;
     }
 
@@ -1300,6 +1378,8 @@ public:
 private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
+    LocDots*         m_locDots    = nullptr;
+    LocMap           m_loc;
     PopupPicker*     m_charset    = nullptr;
     QLineEdit*       m_customEdit = nullptr;
     PopupPicker*     m_font       = nullptr;
@@ -1398,9 +1478,12 @@ ModePanel::ModePanel(QWidget* parent)
     m_halftonePage->onBlendChanged = [this]() {
         if (!m_updating) emit blendChanged(m_halftonePage->blend());
     };
-    m_halftonePage->onLocToggleClicked = [this]() {
-        if (!m_updating) emit localizationToggleRequested();
+    auto locToggle = [this](LocParam p) {
+        if (!m_updating) emit localizationToggleRequested(p);
     };
+    m_halftonePage->onLocToggle = locToggle;
+    m_ditherPage->onLocToggle   = locToggle;
+    m_asciiPage->onLocToggle    = locToggle;
     m_ditherPage->onBlendChanged = [this]() {
         if (!m_updating) emit blendChanged(m_ditherPage->blend());
     };
@@ -1526,8 +1609,15 @@ void ModePanel::setBackground(QColor c, float opacity)
 }
 
 HalftoneSettings ModePanel::halftoneSettings() const { return m_halftonePage->settings(); }
-HalftoneLocPoint ModePanel::halftoneLoc() const { return m_halftonePage->locPoint(); }
-void ModePanel::setHalftoneLoc(const HalftoneLocPoint& p) { m_halftonePage->setLocPoint(p); }
+void ModePanel::setLocPoint(LocParam p, const LocPoint& pt)
+{
+    switch (locParamKind(p)) {
+        case LayerKind::Halftone: m_halftonePage->setLocPoint(p, pt); break;
+        case LayerKind::Dither:   m_ditherPage->setLocPoint(p, pt);   break;
+        case LayerKind::Ascii:    m_asciiPage->setLocPoint(p, pt);    break;
+        default: break;
+    }
+}
 DitherSettings   ModePanel::ditherSettings()   const { return m_ditherPage->settings(); }
 AsciiSettings    ModePanel::asciiSettings()    const { return m_asciiPage->settings(); }
 

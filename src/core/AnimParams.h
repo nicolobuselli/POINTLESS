@@ -32,7 +32,6 @@ enum class ParamId {
     HtGridSpacing, HtGridPointSpacing, HtGridRotation, HtGridDiameter,
     HtGridStretchFactor, HtGridStretchAngle, HtInputDpi, HtMultiThreshold,
     HtGamma, HtWeight, HtJitter, HtOpacity, HtCornerRadius,
-    HtLocX, HtLocY, HtLocRotation, HtLocScale,
     // Dither
     DiPixelSize, DiStrength, DiOpacity, DiCornerRadius, DiThreshold,
     DiLevels, DiLineAngle, DiLineSpacing,
@@ -45,12 +44,31 @@ enum class ParamId {
     // Document
     BackgroundOpacity,
 
-    Count
+    // Localization quartets — one (posX, posY, rotation, scale) block per
+    // LocParam, in LocParam order. Addressed via locParamId(), no named
+    // enumerators. Keep this block LAST (append-only enum, see CLAUDE.md).
+    LocFirst,
+    Count = LocFirst + int(LocParam::Count) * 4
 };
 
 inline ParamId toneLevelParam(int index) {
     return ParamId(int(ParamId::ToneLevel1) + index);
 }
+
+// ParamId of one component (0=posX, 1=posY, 2=rotation, 3=scale) of a
+// localization point.
+inline ParamId locParamId(LocParam p, int comp) {
+    return ParamId(int(ParamId::LocFirst) + int(p) * 4 + comp);
+}
+// 0-based index into the loc block (LocParam ordinal * 4 + component), or -1
+// if id is not a localization parameter.
+inline int locIndexOf(ParamId id) {
+    const int i = int(id) - int(ParamId::LocFirst);
+    return (i >= 0 && i < int(LocParam::Count) * 4) ? i : -1;
+}
+
+// Short display name of a localizable parameter ("Diameter", "Edges", …).
+const char* locParamLabel(LocParam p);
 
 struct ParamDesc {
     const char* label;

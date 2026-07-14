@@ -333,7 +333,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         // (a single splitter handle separates them from Layers).
         pp->addWidget(transformPane);
         pp->addWidget(bandLine());            // line above the title
-        pp->addWidget(titleBand("Parameters"));
+        pp->addWidget(titleBand("Adjustments"));
         m_adjust = new AdjustmentsPanel;
         connect(m_adjust, &AdjustmentsPanel::adjustmentsChanged,
                 this, &ControlsPanel::adjustmentsChanged);
