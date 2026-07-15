@@ -909,7 +909,7 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         auto* header = new QHBoxLayout(m_headerWidget);
         header->setContentsMargins(0, 0, 0, 0);
         header->setSpacing(6);
-        header->addWidget(makeSectionTitle("Layers"), 1);
+        header->addWidget(makeSectionTitle("Layers"), 1, Qt::AlignVCenter);
 
         auto* addBtn = makeIconButton(":/icons/plus.svg");
         addBtn->setToolTip("Add layer (duplicates the selected one)");

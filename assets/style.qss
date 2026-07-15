@@ -74,24 +74,18 @@ QScrollArea > QWidget > QWidget {
     selection-background-color: #568AD9;
 }
 
-/* ── Parameter labels (Funnel Display Medium 18 · #B2B2B2) ────── */
+/* ── Parameter labels (Funnel Display Medium 16 · #B2B2B2) ────── */
 #paramLabel {
-    color: #B2B2B2;
-    font-size: s(18)px;
-    font-weight: 500;
-    background: transparent;
-}
-
-/* Labels above a horizontal-slider parameter (a touch smaller). */
-#sliderLabel {
     color: #B2B2B2;
     font-size: s(16)px;
     font-weight: 500;
     background: transparent;
 }
 
-/* ── Separator ───────────────────────────────────────────────── */
-#separator {
+/* ── Hairlines ───────────────────────────────────────────────────
+   ONE rule for every horizontal divider in the app: 1 logical px,
+   #3B3B3B. C++ sides must use setFixedHeight(1) (never Ui::px(1)). */
+#separator, #bandLine {
     background-color: #3B3B3B;
     min-height: 1px;
     max-height: 1px;
@@ -108,24 +102,12 @@ QScrollArea > QWidget > QWidget {
     background-color: #272727;
 }
 
-/* Section-title band dividers (left column) */
-#bandLine {
-    background-color: #3B3B3B;
-    min-height: 1px;
-    max-height: 1px;
-}
-
 /* Embedded layers list */
 #layersEmbedded,
 #layersScroll,
 #layersScroll > QWidget > QWidget,
 #layerRowsArea {
     background-color: #272727;
-}
-
-#exportBox {
-    background-color: #272727;
-    border-top: 1px solid #3B3B3B;
 }
 
 /* ── Rectangle tabs (Timeline/Library, Halftone/Dither/Ascii) ──── */
@@ -159,12 +141,12 @@ QPushButton#rectTab:checked {
 #tlRangeBox {
     background-color: #3B3B3B;
     border: 1px solid #5D5D5D;
-    border-radius: s(10)px;
+    border-radius: s(8)px;
 }
 #tlRangeBox:hover { border-color: #828282; }
 #tlRangeLbl {
     color: #8E8E8E;
-    font-size: s(15)px;
+    font-size: s(17)px;
     font-weight: 500;
     background: transparent;
 }
@@ -172,7 +154,7 @@ QSpinBox#tlInnerSpin {
     background: transparent;
     border: none;
     color: #A6A6A6;
-    font-size: s(16)px;
+    font-size: s(17)px;
     font-weight: 500;
     padding: 0;
 }
@@ -180,11 +162,11 @@ QSpinBox#tlInnerSpin {
 QPushButton#autoKeyBtn {
     background-color: #3B3B3B;
     border: 1px solid #5D5D5D;
-    border-radius: s(10)px;
+    border-radius: s(8)px;
     color: #B2B2B2;
-    font-size: s(16)px;
+    font-size: s(17)px;
     font-weight: 500;
-    padding: s(8)px s(16)px;
+    padding: 0 s(16)px;
 }
 QPushButton#autoKeyBtn:hover { border-color: #828282; }
 QPushButton#autoKeyBtn:checked {
@@ -196,7 +178,7 @@ QPushButton#autoKeyBtn:checked {
 #transportBox {
     background-color: #3B3B3B;
     border: 1px solid #5D5D5D;
-    border-radius: s(14)px;
+    border-radius: s(8)px;
 }
 #tlSep { background-color: #5D5D5D; }
 
@@ -211,9 +193,9 @@ QPushButton#tlBtn:checked  { background-color: #4A4A4A; }
 QSpinBox#tlSpin {
     background-color: #3B3B3B;
     border: 1px solid #5D5D5D;
-    border-radius: s(10)px;
+    border-radius: s(8)px;
     color: #A6A6A6;
-    font-size: s(16)px;
+    font-size: s(17)px;
     font-weight: 500;
     padding: 0 s(12)px;
 }
@@ -248,39 +230,17 @@ QPushButton#tabBtn[tabPos="last"]:checked {
     border-top-right-radius: 0;
 }
 
-/* ── Filmstrip ───────────────────────────────────────────────── */
+/* ── Filmstrip ───────────────────────────────────────────────────
+   No border-top: the bandLine under the Timeline/Library tabs already
+   draws that divider — a border here doubled it to a 2px line. */
 #filmstrip {
     background-color: #272727;
-    border-top: 1px solid #3B3B3B;
 }
 
 #filmstripScroll,
 #filmstripScroll > QWidget > QWidget,
 #filmstripRow {
     background-color: #272727;
-}
-
-/* ── Upload / action buttons ─────────────────────────────────── */
-QPushButton#uploadBtn {
-    background-color: #3B3B3B;
-    color: #E3E3E3;
-    border: 1px solid #5D5D5D;
-    border-radius: 6px;
-    padding: 0 14px;
-    min-height: 36px;
-    font-size: 10pt;
-    text-align: left;
-}
-QPushButton#uploadBtn:hover {
-    background-color: #484848;
-    border-color: #828282;
-}
-QPushButton#uploadBtn:pressed {
-    background-color: #2E2E2E;
-}
-/* When showing a custom-shape preview (icon only), centre it. */
-QPushButton#uploadBtn[preview="true"] {
-    text-align: center;
 }
 
 /* ── Export button ───────────────────────────────────────────── */
@@ -302,10 +262,10 @@ QPushButton#exportBtn:pressed {
     background-color: #2E2E2E;
 }
 
-/* ── Reset adjustments button (box text: Funnel Display Medium 16) ── */
+/* ── Reset adjustments button — same label grey as Invert/Ordered dither ── */
 QPushButton#resetBtn {
     background-color: #3B3B3B;
-    color: #E3E3E3;
+    color: #B2B2B2;
     border: 1px solid #5D5D5D;
     border-radius: s(8)px;
     padding: 0 s(14)px;
@@ -335,15 +295,17 @@ QProgressBar#animProgressBar::chunk {
     border-radius: s(8)px;
 }
 
-/* ── Accent button (Confirm / Generate / destructive confirm) ──── */
+/* ── Accent button (Confirm / Generate / destructive confirm) ────
+   Same box metrics as every other box (height s(48), radius s(8),
+   text s(17)); only the colours differ. */
 QPushButton#accentBtn {
     background-color: #FD5A1F;
     color: #FFFFFF;
     border: none;
-    border-radius: 6px;
-    padding: 0 14px;
-    min-height: 40px;
-    font-size: 10pt;
+    border-radius: s(8)px;
+    padding: 0 s(14)px;
+    min-height: s(48)px;
+    font-size: s(17)px;
     font-weight: 600;
 }
 QPushButton#accentBtn:hover {
@@ -357,7 +319,7 @@ QPushButton#accentBtn:pressed {
 QPushButton#paletteHeader {
     background-color: #3B3B3B;
     border: 1px solid #5D5D5D;
-    border-radius: 6px;
+    border-radius: s(8)px;   /* same radius as every other main-column box */
     text-align: left;
 }
 QPushButton#paletteHeader:hover {

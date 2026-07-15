@@ -316,6 +316,13 @@ QLabel*      makeSectionTitle(const QString& text);
 QFrame*      makeSeparatorLine();
 QPushButton* makeIconButton(const QString& iconRes);
 
+// Control name + its control, stacked with the standard tight gap
+// (Ui::kGapLabelToCtrl). Add the result to a body layout whose spacing is
+// Ui::kGapRows — that is THE way every labelled control is laid out, so the
+// label→control and control→next-label gaps stay identical app-wide.
+QWidget*     makeLabeledGroup(const QString& label, QWidget* control);
+QWidget*     makeLabeledGroup(const QString& label, QLayout* control);
+
 // Make a scroll area's vertical scrollbar auto-hide: it fades in only while
 // the user is actually scrolling (and only exists when content overflows),
 // then fades back out shortly after.

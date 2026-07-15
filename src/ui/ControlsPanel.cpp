@@ -2,7 +2,7 @@
 #include "AdjustmentsPanel.h"
 #include "LayersPanel.h"
 #include "Widgets.h"
-#include "UiScale.h"
+#include "Theme.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -30,13 +30,18 @@ QFrame* bandLine()
 }
 
 // A fixed section-title band: title text in a row with vertical padding.
+// Fixed height = padding + the 26px header-button column (same as the right
+// panel's PanelSection title rows) so every section title sits at the same
+// distance from its band line, button or not.
 QWidget* titleBand(const QString& text)
 {
     auto* w = new QWidget;
+    w->setFixedHeight(Ui::px(Ui::kTitleBandPadV * 2 + 26));
     auto* l = new QHBoxLayout(w);
-    l->setContentsMargins(Ui::px(40), Ui::px(12), Ui::px(40), Ui::px(12));
+    l->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(Ui::kTitleBandPadV),
+                          Ui::px(Ui::kColLeft), Ui::px(Ui::kTitleBandPadV));
     l->setSpacing(0);
-    l->addWidget(makeSectionTitle(text), 1);
+    l->addWidget(makeSectionTitle(text), 1, Qt::AlignVCenter);
     return w;
 }
 
@@ -96,7 +101,8 @@ ControlsPanel::ControlsPanel(QWidget* parent)
     auto* split = new QSplitter(Qt::Vertical);
     split->setObjectName("leftSplit");
     split->setChildrenCollapsible(false);
-    split->setHandleWidth(Ui::px(1));   // 1px, coherent with the bandLine dividers
+    split->setHandleWidth(1);   // 1 logical px, same hairline as every bandLine
+                                // (Ui::px(1) rounds to 2 on wide screens)
 
     // ── Layers pane (header + scrollable embedded list) ──────────
     auto* layersPane = new QWidget;
@@ -115,7 +121,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             auto* hl = new QHBoxLayout(hdr);
             hl->setContentsMargins(Ui::px(40), Ui::px(12), 0, Ui::px(12));
             hl->setSpacing(0);
-            hl->addWidget(makeSectionTitle("Layers"), 1);
+            hl->addWidget(makeSectionTitle("Layers"), 1, Qt::AlignVCenter);
             // "+" centred in a 70px gutter so it lines up with the layer eyes.
             auto* gut = new QWidget;
             gut->setFixedWidth(Ui::px(70));
@@ -142,13 +148,14 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         // Frame dimensions (W × H of the canvas) live at the bottom of Layers.
         auto* frameBox = new QWidget;
         auto* fb = new QVBoxLayout(frameBox);
-        fb->setContentsMargins(Ui::px(40), Ui::px(10), Ui::px(70), Ui::px(12));
-        fb->setSpacing(Ui::px(8));
+        fb->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(10),
+                               Ui::px(Ui::kColRight), Ui::px(12));
+        fb->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
         fb->addWidget(makeParamLabel("Frame dimensions"));
         {
             auto* row = new QHBoxLayout;
             row->setContentsMargins(0, 0, 0, 0);
-            row->setSpacing(Ui::px(12));
+            row->setSpacing(Ui::px(Ui::kGapTwinBoxes));
             m_frameW = new DragSpinBox("", 16, 8192, 1080);
             m_frameH = new DragSpinBox("", 16, 8192, 1080);
             m_frameW->setTextLabel("W");
@@ -177,22 +184,23 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         auto* box = new QWidget;
         auto* bl = new QVBoxLayout(box);
         // Match the Parameters rows exactly: 40px left, 70px right gutter, so
-        // every functional row in the column has the same width.
-        bl->setContentsMargins(Ui::px(40), Ui::px(12), Ui::px(70), Ui::px(16));
-        bl->setSpacing(Ui::px(8));
+        // every functional row in the column has the same width; standard
+        // title→first-control gap and row rhythm (Theme.h).
+        bl->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(Ui::kGapTitleToFirst),
+                               Ui::px(Ui::kColRight), Ui::px(16));
+        bl->setSpacing(Ui::px(Ui::kGapRows));
 
         auto emitTf = [this](int) { if (!m_updating) emitTransform(); };
 
         // ── Position (X / Y px from frame centre) ──
-        // label+row stacked tight (px2) — same label→control gap as Scale.
         {
             auto* grp = new QVBoxLayout;
             grp->setContentsMargins(0, 0, 0, 0);
-            grp->setSpacing(Ui::px(2));
-            { auto* l = makeParamLabel("Position"); l->setObjectName("sliderLabel"); grp->addWidget(l); }
+            grp->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
+            { auto* l = makeParamLabel("Position"); grp->addWidget(l); }
             auto* posRow = new QHBoxLayout;
             posRow->setContentsMargins(0, 0, 0, 0);
-            posRow->setSpacing(Ui::px(12));
+            posRow->setSpacing(Ui::px(Ui::kGapTwinBoxes));
             m_tfX = new DragSpinBox("", -8192, 8192, 0);
             m_tfY = new DragSpinBox("", -8192, 8192, 0);
             m_tfX->setTextLabel("X");
@@ -206,15 +214,14 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         }
 
         // ── Rotation (angle box + a box of quick-transform buttons) ──
-        // label+row stacked tight (px2) — same label→control gap as Scale.
         auto* rotGrp = new QVBoxLayout;
         rotGrp->setContentsMargins(0, 0, 0, 0);
-        rotGrp->setSpacing(Ui::px(2));
-        { auto* l = makeParamLabel("Rotation"); l->setObjectName("sliderLabel"); rotGrp->addWidget(l); }
+        rotGrp->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
+        { auto* l = makeParamLabel("Rotation"); rotGrp->addWidget(l); }
         {
             auto* rotRow = new QHBoxLayout;
             rotRow->setContentsMargins(0, 0, 0, 0);
-            rotRow->setSpacing(Ui::px(12));
+            rotRow->setSpacing(Ui::px(Ui::kGapTwinBoxes));
 
             m_tfRot = new DragSpinBox(":/icons/rotation.svg", -180, 180, 0, QStringLiteral("°"));
             m_tfRot->onValueChanged = emitTf;
@@ -224,7 +231,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             // evenly across the box so it fills the row's right half.
             auto* quick = new QFrame;
             quick->setObjectName("dragSpinBox");
-            quick->setFixedHeight(Ui::px(48));
+            quick->setFixedHeight(Ui::px(Ui::kBoxH));
             auto* ql = new QHBoxLayout(quick);
             ql->setContentsMargins(Ui::px(8), 0, Ui::px(8), 0);
             ql->setSpacing(0);
@@ -264,17 +271,17 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         }
 
         // ── Scale (log slider 0.1×..10×, centred at 1×, + free-form box) ──
-        // Mirror SliderRow: label+slider stacked tight on the left, box (58×46)
+        // Mirror SliderRow: label+slider stacked tight on the left, value cell
         // centred over the whole block on the right — so it matches Parameters.
         {
             auto* scRow = new QHBoxLayout;
             scRow->setContentsMargins(0, 0, 0, 0);
-            scRow->setSpacing(Ui::px(12));
+            scRow->setSpacing(Ui::px(Ui::kGapTwinBoxes));
 
             auto* leftCol = new QVBoxLayout;
             leftCol->setContentsMargins(0, 0, 0, 0);
-            leftCol->setSpacing(Ui::px(2));
-            { auto* l = makeParamLabel("Scale"); l->setObjectName("sliderLabel"); leftCol->addWidget(l); }
+            leftCol->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
+            { auto* l = makeParamLabel("Scale"); leftCol->addWidget(l); }
 
             m_tfScaleSlider = new NoWheelSlider(Qt::Horizontal);
             m_tfScaleSlider->setRange(0, kScaleSliderMax);
@@ -285,13 +292,13 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             m_tfScaleEdit = new QLineEdit("1");
             m_tfScaleEdit->setObjectName("dragSpinBox");   // box bg/border/hover
             m_tfScaleEdit->setAlignment(Qt::AlignCenter);
-            m_tfScaleEdit->setFixedSize(Ui::px(58), Ui::px(46));   // == Parameters cell
+            m_tfScaleEdit->setFixedSize(Ui::px(Ui::kCellW), Ui::px(Ui::kBoxH));   // == Parameters cell
             // Match the DragSpinBox value text and pin the height so the generic
             // QLineEdit rule (different colour/size + min-height) can't reshape it.
             m_tfScaleEdit->setStyleSheet(QString(
-                "color:#A6A6A6; font-size:%1px; font-weight:500; padding:0;"
-                " min-height:%2px; max-height:%2px;")
-                .arg(Ui::px(19)).arg(Ui::px(46)));
+                "color:%1; font-size:%2px; font-weight:500; padding:0;"
+                " min-height:%3px; max-height:%3px;")
+                .arg(Ui::kColValue).arg(Ui::px(Ui::kBoxFontPx)).arg(Ui::px(Ui::kBoxH)));
             auto* val = new QDoubleValidator(0.001, 1000.0, 3, m_tfScaleEdit);
             val->setNotation(QDoubleValidator::StandardNotation);
             m_tfScaleEdit->setValidator(val);

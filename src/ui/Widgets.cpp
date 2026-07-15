@@ -1,5 +1,5 @@
 #include "Widgets.h"
-#include "UiScale.h"
+#include "Theme.h"
 
 #include <QApplication>
 #include <QHBoxLayout>
@@ -49,7 +49,7 @@ DragSpinBox::DragSpinBox(const QString& iconRes, int minVal, int maxVal, int def
     setObjectName("dragSpinBox");
     setFrameShape(QFrame::NoFrame);
     setCursor(Qt::SizeHorCursor);
-    setFixedHeight(Ui::px(48));
+    setFixedHeight(Ui::px(Ui::kBoxH));
     setFocusPolicy(Qt::StrongFocus);   // reachable via Tab (left→right, top→bottom)
 
     auto* lay = new QHBoxLayout(this);
@@ -76,8 +76,8 @@ DragSpinBox::DragSpinBox(const QString& iconRes, int minVal, int maxVal, int def
     m_valueEdit->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     m_valueEdit->setAlignment(Qt::AlignVCenter | (hasIcon ? Qt::AlignRight : Qt::AlignHCenter));
     m_valueEdit->setStyleSheet(QString(
-        "background:transparent; color:#A6A6A6; font-size:%1px; font-weight:500; border:none; padding:0; min-height:0;")
-        .arg(Ui::px(19)));
+        "background:transparent; color:%1; font-size:%2px; font-weight:500; border:none; padding:0; min-height:0;")
+        .arg(Ui::kColValue).arg(Ui::px(Ui::kBoxFontPx)));
     m_valueEdit->installEventFilter(this);
     connect(m_valueEdit, &QLineEdit::editingFinished, this, [this]() { commitEdit(); });
     lay->addWidget(m_valueEdit, 1);
@@ -121,8 +121,8 @@ void DragSpinBox::setTextLabel(const QString& text)
         static_cast<QHBoxLayout*>(layout())->insertWidget(0, m_iconLbl);
     }
     m_iconLbl->setText(text);
-    m_iconLbl->setStyleSheet(QString("color:#EEEEEE; font-size:%1px; font-weight:700; background:transparent;")
-                             .arg(Ui::px(19)));
+    m_iconLbl->setStyleSheet(QString("color:%1; font-size:%2px; font-weight:700; background:transparent;")
+                             .arg(Ui::kColTitle).arg(Ui::px(Ui::kBoxFontPx)));
     // Value sits just after the letter, left-aligned.
     m_valueEdit->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
 }
@@ -213,14 +213,13 @@ SliderRow::SliderRow(const QString& label, int minVal, int maxVal, int defVal,
     // vertically over the whole (title + slider) block.
     auto* outer = new QHBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
-    outer->setSpacing(Ui::px(12));
+    outer->setSpacing(Ui::px(Ui::kGapTwinBoxes));
 
     auto* leftCol = new QVBoxLayout;
     leftCol->setContentsMargins(0, 0, 0, 0);
-    leftCol->setSpacing(Ui::px(2));
+    leftCol->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
     if (!label.isEmpty()) {
         auto* lbl = makeParamLabel(label);
-        lbl->setObjectName("sliderLabel");   // a touch smaller than section labels
         leftCol->addWidget(lbl);
     }
 
@@ -231,7 +230,7 @@ SliderRow::SliderRow(const QString& label, int minVal, int maxVal, int defVal,
     leftCol->addWidget(m_slider);
 
     m_box = new DragSpinBox(QString(), minVal, maxVal, defVal);
-    m_box->setFixedSize(Ui::px(58), Ui::px(46));
+    m_box->setFixedSize(Ui::px(Ui::kCellW), Ui::px(Ui::kBoxH));
 
     outer->addLayout(leftCol, 1);
     outer->addWidget(m_box, 0, Qt::AlignVCenter);
@@ -1208,6 +1207,28 @@ QFrame* makeSeparatorLine()
     f->setFrameShape(QFrame::NoFrame);
     f->setFixedHeight(1);
     return f;
+}
+
+QWidget* makeLabeledGroup(const QString& label, QWidget* control)
+{
+    auto* w = new QWidget;
+    auto* v = new QVBoxLayout(w);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
+    v->addWidget(makeParamLabel(label));
+    v->addWidget(control);
+    return w;
+}
+
+QWidget* makeLabeledGroup(const QString& label, QLayout* control)
+{
+    auto* w = new QWidget;
+    auto* v = new QVBoxLayout(w);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
+    v->addWidget(makeParamLabel(label));
+    v->addLayout(control);
+    return w;
 }
 
 QPushButton* makeIconButton(const QString& iconRes)

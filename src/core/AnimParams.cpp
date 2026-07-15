@@ -62,6 +62,13 @@ const std::array<ParamDesc, int(ParamId::LocFirst)> kDescs = {{
     { "Stipple",             0,   100,  true,  ParamScope::Ascii },
     { "Contour",             0,   100,  true,  ParamScope::Ascii },
 
+    { "Spacing",             2,   200,  false, ParamScope::Mosaic },
+    { "Width %",            10,   300,  false, ParamScope::Mosaic },
+    { "Height %",           10,   300,  false, ParamScope::Mosaic },
+    { "Text padding",        0,    45,  true,  ParamScope::Mosaic },
+    { "Gap X",               0,    90,  false, ParamScope::Mosaic },
+    { "Gap Y",               0,    90,  false, ParamScope::Mosaic },
+
     { "Threshold 1",        0,   255,  true,  ParamScope::Tonal },
     { "Threshold 2",        0,   255,  true,  ParamScope::Tonal },
     { "Threshold 3",        0,   255,  true,  ParamScope::Tonal },
@@ -104,6 +111,7 @@ const char* kLocLabels[int(LocParam::Count)] = {
     "Diameter", "Gamma", "Weight", "Jitter",
     "Strength", "Threshold", "Levels", "Line angle", "Line spacing",
     "Gamma", "Edges", "Hatching", "Stipple", "Contour",
+    "Spacing", "Width %", "Height %", "Text padding", "Gap X", "Gap Y",
 };
 
 ParamScope locScope(LocParam p)
@@ -111,6 +119,7 @@ ParamScope locScope(LocParam p)
     switch (locParamKind(p)) {
         case LayerKind::Dither: return ParamScope::Dither;
         case LayerKind::Ascii:  return ParamScope::Ascii;
+        case LayerKind::Mosaic: return ParamScope::Mosaic;
         default:                return ParamScope::Halftone;
     }
 }
@@ -121,6 +130,7 @@ const LocMap& locMapFor(const Layer& l, LocParam p)
     switch (locParamKind(p)) {
         case LayerKind::Dither: return l.dither.loc;
         case LayerKind::Ascii:  return l.ascii.loc;
+        case LayerKind::Mosaic: return l.mosaic.loc;
         default:                return l.halftone.loc;
     }
 }
@@ -234,6 +244,13 @@ double getParam(const Layer& l, ParamId id)
         case ParamId::AsStipple:  return l.ascii.stipple;
         case ParamId::AsContour:  return l.ascii.contour;
 
+        case ParamId::MsSpacing:     return l.mosaic.spacing;
+        case ParamId::MsWidthPct:    return l.mosaic.widthPct;
+        case ParamId::MsHeightPct:   return l.mosaic.heightPct;
+        case ParamId::MsTextPadding: return l.mosaic.textPadding;
+        case ParamId::MsGapX:        return l.mosaic.gapX;
+        case ParamId::MsGapY:        return l.mosaic.gapY;
+
         default: return 0.0;   // Document params handled elsewhere
     }
 }
@@ -314,6 +331,13 @@ void setParam(Layer& l, ParamId id, double v)
         case ParamId::AsStipple:  l.ascii.stipple  = iv; break;
         case ParamId::AsContour:  l.ascii.contour  = iv; break;
 
+        case ParamId::MsSpacing:     l.mosaic.spacing     = fv; break;
+        case ParamId::MsWidthPct:    l.mosaic.widthPct    = fv; break;
+        case ParamId::MsHeightPct:   l.mosaic.heightPct   = fv; break;
+        case ParamId::MsTextPadding: l.mosaic.textPadding = iv; break;
+        case ParamId::MsGapX:        l.mosaic.gapX        = fv; break;
+        case ParamId::MsGapY:        l.mosaic.gapY        = fv; break;
+
         default: break;   // Document params handled elsewhere
     }
 }
@@ -343,9 +367,7 @@ std::vector<ParamId> animatableParams(const Layer& layer)
         case LayerKind::Halftone: kindScope = ParamScope::Halftone; break;
         case LayerKind::Dither:   kindScope = ParamScope::Dither;   break;
         case LayerKind::Ascii:    kindScope = ParamScope::Ascii;    break;
-        // ponytail: no mosaic-specific ParamIds yet — transform/adjustments +
-        // tone thresholds still animate; add a Mosaic scope when cells need keys.
-        case LayerKind::Mosaic:   kindScope = ParamScope::AllLayers; break;
+        case LayerKind::Mosaic:   kindScope = ParamScope::Mosaic;  break;
         case LayerKind::Original: kindScope = ParamScope::AllLayers; break;  // adjustments only
     }
 

@@ -364,6 +364,7 @@ MainWindow::MainWindow(QWidget* parent)
         if (!l || l->kind != locParamKind(p)) return;
         LocMap& m = (l->kind == LayerKind::Halftone) ? l->halftone.loc
                   : (l->kind == LayerKind::Dither)   ? l->dither.loc
+                  : (l->kind == LayerKind::Mosaic)   ? l->mosaic.loc
                                                      : l->ascii.loc;
         m[p].enabled = false;
         m_right->setLocPoint(p, m[p]);
@@ -1439,6 +1440,7 @@ static LocMap& layerLocMap(Layer& l, LocParam p)
     switch (locParamKind(p)) {
         case LayerKind::Dither: return l.dither.loc;
         case LayerKind::Ascii:  return l.ascii.loc;
+        case LayerKind::Mosaic: return l.mosaic.loc;
         default:                return l.halftone.loc;
     }
 }
@@ -1582,6 +1584,7 @@ void MainWindow::pushPreviewTransform()
             case LayerKind::Halftone: m = &l->halftone.loc; break;
             case LayerKind::Dither:   m = &l->dither.loc;   break;
             case LayerKind::Ascii:    m = &l->ascii.loc;    break;
+            case LayerKind::Mosaic:   m = &l->mosaic.loc;   break;
             default: break;
         }
         if (m)

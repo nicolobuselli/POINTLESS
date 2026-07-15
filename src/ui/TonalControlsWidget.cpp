@@ -1,5 +1,5 @@
 #include "TonalControlsWidget.h"
-#include "UiScale.h"
+#include "Theme.h"
 #include "../core/PaletteStore.h"
 
 #include <QHBoxLayout>
@@ -420,7 +420,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
 
     auto* vl = new QVBoxLayout(this);
     vl->setContentsMargins(0, 0, 0, 0);
-    vl->setSpacing(Ui::px(10));
+    vl->setSpacing(Ui::px(Ui::kGapRows));
 
     // The body extends to the +/− gutter (24px). The favourite sits in that
     // gutter; every other control stops kGutterComp earlier (the 70px box
@@ -433,7 +433,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
     {
         auto* pl = new QVBoxLayout(m_paletteSection);
         pl->setContentsMargins(0, 0, 0, 0);
-        pl->setSpacing(Ui::px(6));
+        pl->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
         m_paletteLabel = makeParamLabel("Palette");
         pl->addWidget(m_paletteLabel);
 
@@ -445,7 +445,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
         m_paletteHeader = new QPushButton;
         m_paletteHeader->setObjectName("paletteHeader");
         m_paletteHeader->setCursor(Qt::PointingHandCursor);
-        m_paletteHeader->setFixedHeight(Ui::px(48));
+        m_paletteHeader->setFixedHeight(Ui::px(Ui::kBoxH));
         {
             auto* hl = new QHBoxLayout(m_paletteHeader);
             hl->setContentsMargins(Ui::px(14), 0, Ui::px(10), 0);
@@ -655,7 +655,7 @@ void TonalControlsWidget::rebuildRows()
         auto* rowWidget = new QWidget;
         auto* rvl = new QVBoxLayout(rowWidget);
         rvl->setContentsMargins(0, 0, 0, 0);
-        rvl->setSpacing(Ui::px(4));
+        rvl->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
         // Single fixed tone needs no "Color" caption; multi-tone / palette do.
         if (palette || n > 1)
             rvl->addWidget(makeParamLabel(

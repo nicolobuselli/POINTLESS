@@ -316,6 +316,7 @@ enum class LocParam {
     HtDiameter, HtGamma, HtWeight, HtJitter,
     DiStrength, DiThreshold, DiLevels, DiLineAngle, DiLineSpacing,
     AsGamma, AsEdges, AsHatching, AsStipple, AsContour,
+    MsSpacing, MsWidthPct, MsHeightPct, MsTextPadding, MsGapX, MsGapY,
     Count
 };
 
@@ -331,7 +332,8 @@ inline LayerKind locParamKind(LocParam p)
 {
     if (p <= LocParam::HtJitter)      return LayerKind::Halftone;
     if (p <= LocParam::DiLineSpacing) return LayerKind::Dither;
-    return LayerKind::Ascii;
+    if (p <= LocParam::AsContour)     return LayerKind::Ascii;
+    return LayerKind::Mosaic;
 }
 
 // Multiplier field for one localized parameter, precomputed in the pixel
@@ -571,6 +573,7 @@ struct MosaicSettings {
     std::vector<QColor>  textColors; // per-tone text colour; invalid = auto contrast
 
     TonalSettings tonal { ToneMode::FixedTones, defaultTones(4) };
+    LocMap loc;
 
     float cellW() const { return qBound(2.0f, spacing, 600.0f) * qBound(10.0f, widthPct, 300.0f)  / 100.0f; }
     float cellH() const { return qBound(2.0f, spacing, 600.0f) * qBound(10.0f, heightPct, 300.0f) / 100.0f; }
@@ -583,7 +586,7 @@ inline bool operator==(const MosaicSettings& a, const MosaicSettings& b) {
         && a.fontFamily == b.fontFamily && a.fontWeight == b.fontWeight
         && a.opacity == b.opacity && a.cornerRadius == b.cornerRadius
         && a.texts == b.texts && a.textColors == b.textColors
-        && a.tonal == b.tonal;
+        && a.tonal == b.tonal && a.loc == b.loc;
 }
 
 // ============================================================

@@ -1,5 +1,5 @@
 #include "TimelineWidget.h"
-#include "UiScale.h"
+#include "Theme.h"
 #include "../core/AnimParams.h"
 
 #include <QHBoxLayout>
@@ -492,6 +492,7 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent)
     m_autoKeyBtn->setObjectName("autoKeyBtn");
     m_autoKeyBtn->setCheckable(true);
     m_autoKeyBtn->setCursor(Qt::PointingHandCursor);
+    m_autoKeyBtn->setFixedHeight(Ui::px(Ui::kBoxH));
     connect(m_autoKeyBtn, &QPushButton::toggled, this,
             [this](bool on) { if (onAutoKeyToggled) onAutoKeyToggled(on); });
     bar->addWidget(m_autoKeyBtn);
@@ -501,7 +502,7 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent)
     // ── Transport box (rounded, 6 buttons split by 1px lines) ─
     auto* box = new QFrame;
     box->setObjectName("transportBox");
-    box->setFixedHeight(Ui::px(42));
+    box->setFixedHeight(Ui::px(Ui::kBoxH));
     auto* bl = new QHBoxLayout(box);
     bl->setContentsMargins(0, 0, 0, 0);
     bl->setSpacing(0);
@@ -511,7 +512,7 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent)
         auto* b = new QPushButton;
         b->setObjectName("tlBtn");
         b->setCursor(Qt::PointingHandCursor);
-        b->setFixedSize(Ui::px(34), Ui::px(40));
+        b->setFixedSize(Ui::px(34), Ui::px(Ui::kBoxH - 2));   // fits inside the 48 box border
         b->setIcon(svgIcon(res, icoBox.width(), icoBox.height(), flip));
         b->setIconSize(icoBox);
         return b;
@@ -558,7 +559,7 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent)
     m_frameSpin->setValue(m_anim.playhead);
     m_frameSpin->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_frameSpin->setAlignment(Qt::AlignCenter);
-    m_frameSpin->setFixedHeight(Ui::px(34));
+    m_frameSpin->setFixedHeight(Ui::px(Ui::kBoxH));
     m_frameSpin->setMinimumWidth(Ui::px(66));
     connect(m_frameSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
         if (m_updating) return;
@@ -569,7 +570,7 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent)
     // ── Combined start / end box (single rounded container) ──
     auto* rangeBox = new QFrame;
     rangeBox->setObjectName("tlRangeBox");
-    rangeBox->setFixedHeight(Ui::px(34));
+    rangeBox->setFixedHeight(Ui::px(Ui::kBoxH));
     auto* rl = new QHBoxLayout(rangeBox);
     rl->setContentsMargins(Ui::px(14), 0, Ui::px(14), 0);
     rl->setSpacing(Ui::px(8));

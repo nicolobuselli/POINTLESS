@@ -1,5 +1,5 @@
 #include "AdjustmentsPanel.h"
-#include "UiScale.h"
+#include "Theme.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -31,9 +31,11 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     content->setObjectName("controlRoot");
     auto* vlay = new QVBoxLayout(content);
     // Left edge aligns with the section titles (40px); the right keeps a 70px
-    // gutter free for the +/−/favourite icon column (design spec).
-    vlay->setContentsMargins(Ui::px(40), Ui::px(18), Ui::px(70), Ui::px(12));
-    vlay->setSpacing(Ui::px(10));
+    // gutter free for the +/−/favourite icon column; standard title→first gap
+    // and row rhythm (Theme.h).
+    vlay->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(Ui::kGapTitleToFirst),
+                             Ui::px(Ui::kColRight), Ui::px(12));
+    vlay->setSpacing(Ui::px(Ui::kGapRows));
 
     auto addRow = [&](SliderRow*& target, const QString& label,
                       int minV, int maxV, int defV) {
@@ -48,22 +50,23 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     addRow(m_contrast,   "Contrast",   -100, 100,   0);
     addRow(m_gamma,      "Gamma",        10, 300, 100);
 
-    vlay->addWidget(makeParamLabel("Levels"));
     m_levels = new LevelsWidget;
     m_levels->onChanged = [this]() { emit adjustmentsChanged(); };
-    vlay->addWidget(m_levels);
+    vlay->addWidget(makeLabeledGroup("Levels", m_levels));
 
     // Invert: checkable box, same visual language as the DragSpinBox boxes.
     m_invert = new QPushButton("Invert");
     m_invert->setCheckable(true);
     m_invert->setCursor(Qt::PointingHandCursor);
-    m_invert->setFixedHeight(Ui::px(48));
+    m_invert->setFixedHeight(Ui::px(Ui::kBoxH));
     m_invert->setStyleSheet(QString(
-        "QPushButton{background:#3B3B3B;border:1px solid #5D5D5D;border-radius:%1px;"
-        "color:#B2B2B2;font-size:%2px;font-weight:500;}"
-        "QPushButton:hover{border-color:#828282;}"
-        "QPushButton:checked{background:#484848;border-color:#828282;color:#E3E3E3;}")
-        .arg(Ui::px(8)).arg(Ui::px(18)));
+        "QPushButton{background:%1;border:1px solid %2;border-radius:%3px;"
+        "color:%4;font-size:%5px;font-weight:500;}"
+        "QPushButton:hover{border-color:%6;}"
+        "QPushButton:checked{background:%7;border-color:%6;color:%8;}")
+        .arg(Ui::kColBoxBg).arg(Ui::kColBoxBorder).arg(Ui::px(Ui::kBoxRadius))
+        .arg(Ui::kColLabel).arg(Ui::px(Ui::kBoxFontPx))
+        .arg(Ui::kColBoxHover).arg(Ui::kColBoxChecked).arg(Ui::kColText));
     connect(m_invert, &QPushButton::toggled, this,
             [this](bool) { emit adjustmentsChanged(); });
     vlay->addWidget(m_invert);
@@ -93,11 +96,10 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     // Reset button: always visible at the foot of the scroll area.
     auto* btnReset = new QPushButton("reset adjustments");
     btnReset->setObjectName("resetBtn");
-    btnReset->setFixedHeight(Ui::px(44));
+    btnReset->setFixedHeight(Ui::px(Ui::kBoxH));
     btnReset->setCursor(Qt::PointingHandCursor);
     connect(btnReset, &QPushButton::clicked, this, &AdjustmentsPanel::resetRequested);
 
-    vlay->addSpacing(2);
     vlay->addWidget(btnReset);
     vlay->addStretch();
 
