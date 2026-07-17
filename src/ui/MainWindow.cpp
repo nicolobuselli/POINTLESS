@@ -10,6 +10,7 @@
 #include "Widgets.h"
 #include "../workers/RenderWorker.h"
 #include "../core/ImageAdjuster.h"
+#include "../core/ProjectIO.h"
 #include "../core/VideoIO.h"
 
 #include <QApplication>
@@ -22,7 +23,6 @@
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMessageBox>
 #include <QPainter>
 #include <QPushButton>
 #include <QShortcut>
@@ -156,7 +156,7 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_worker(new RenderWorker(this))
 {
-    setWindowTitle("ULTRA TOOL — Ditherer");
+    setWindowTitle("ULTRATOOL");
     setWindowIcon(QIcon(":/logo.png"));
     setMinimumSize(1100, 680);
 
@@ -208,15 +208,15 @@ MainWindow::MainWindow(QWidget* parent)
         b->setAutoExclusive(true);
         b->setCursor(Qt::PointingHandCursor);
     }
-    tabTimeline->setChecked(true);
-    trl->addWidget(tabTimeline);
     trl->addWidget(tabLibrary);
+    trl->addWidget(tabTimeline);
     trl->addStretch(1);
+    tabLibrary->setChecked(true);
 
     auto* bottomStack = new QStackedWidget;
-    bottomStack->addWidget(m_timeline);    // page 0 (default)
-    bottomStack->addWidget(m_filmstrip);   // page 1 (Library)
-    bottomStack->setCurrentIndex(0);   // default to Timeline
+    bottomStack->addWidget(m_filmstrip);   // page 0 (default, Library)
+    bottomStack->addWidget(m_timeline);    // page 1 (Timeline)
+    bottomStack->setCurrentIndex(0);   // default to Library
 
     auto* underTabs = new QFrame;
     underTabs->setObjectName("bandLine");
@@ -264,7 +264,7 @@ MainWindow::MainWindow(QWidget* parent)
             b->setAutoExclusive(true);
         }
         if (!collapsed) {
-            (page == 0 ? tabTimeline : tabLibrary)->setChecked(true);
+            (page == 0 ? tabLibrary : tabTimeline)->setChecked(true);
             bottomStack->setCurrentIndex(page);
         }
     };
@@ -284,8 +284,8 @@ MainWindow::MainWindow(QWidget* parent)
             }
         }
     };
-    connect(tabTimeline, &QPushButton::clicked, this, [onTabClicked] { onTabClicked(0); });
-    connect(tabLibrary,  &QPushButton::clicked, this, [onTabClicked] { onTabClicked(1); });
+    connect(tabLibrary,  &QPushButton::clicked, this, [onTabClicked] { onTabClicked(0); });
+    connect(tabTimeline, &QPushButton::clicked, this, [onTabClicked] { onTabClicked(1); });
     connect(centerSplit, &QSplitter::splitterMoved, this,
             [this, bottomPanel, collapsedH, setBottomCollapsed](int, int) {
         const int h = bottomPanel->height();
@@ -472,17 +472,6 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_layersPanel, &LayersPanel::parentRenamed,           this, &MainWindow::onParentRenamed);
 
     connect(m_worker, &RenderWorker::renderComplete, this, &MainWindow::onRenderComplete);
-    m_renderStatusTimer.setSingleShot(true);
-    m_renderStatusTimer.setInterval(1000);
-    connect(&m_renderStatusTimer, &QTimer::timeout, this, [this]() {
-        m_renderStatusVisible = true;
-        m_preview->setStatus(m_pendingRenderStatus);
-    });
-    connect(m_worker, &RenderWorker::renderStarted, this, [this](bool isPreview) {
-        m_pendingRenderStatus = isPreview ? "Preview…" : "Rendering full resolution…";
-        if (m_renderStatusVisible) m_preview->setStatus(m_pendingRenderStatus);
-        else if (!m_renderStatusTimer.isActive()) m_renderStatusTimer.start();
-    });
 
     // ── Undo debounce ────────────────────────────────────────
     m_undoTimer.setSingleShot(true);
@@ -524,20 +513,29 @@ MainWindow::MainWindow(QWidget* parent)
     addShortcut(QKeySequence("Ctrl+C"),       &MainWindow::copyToClipboard);
     addShortcut(QKeySequence("Ctrl+V"), [this]() {
         QWidget* fw = QApplication::focusWidget();
-        if (m_timeline && fw && (fw == m_timeline || m_timeline->isAncestorOf(fw)))
+        if (m_timeline && fw && (fw == m_timeline || m_timeline->isAncestorOf(fw))) {
             m_timeline->pasteKeys();
-        else if (m_layersPanel && fw && m_layersPanel->isAncestorOf(fw))
+            return;
+        }
+        if (m_layersPanel && fw && m_layersPanel->isAncestorOf(fw)) {
             pasteLayerBelowActive();
+            return;
+        }
+        // Image copied from outside the app (browser, file explorer, another
+        // editor) → import it into the library and place it as a layer, same
+        // as dropping a file onto the canvas.
+        const QImage img = QApplication::clipboard()->image();
+        if (!img.isNull())
+            addLayerFromMedia(addImageToLibrary(img, "Pasted image"));
     });
+    addShortcut(QKeySequence("Ctrl+S"), [this]() { saveProject(/*forceDialog=*/false); });
+    addShortcut(QKeySequence("Ctrl+Shift+S"), [this]() { saveProject(/*forceDialog=*/true); });
+    addShortcut(QKeySequence("Ctrl+O"), &MainWindow::openProject);
 
-    // ── Demo image ───────────────────────────────────────────
-    // Keep one image loaded for convenience: add it to the library and place it
-    // as a layer so there's something on screen without importing.
-    addImages({ ":/example.jpg" });
-    if (m_current >= 0) {
-        const auto ids = m_images[m_current].media.keys();
-        if (!ids.isEmpty()) addLayerFromMedia(ids.first());
-    }
+    // Empty composition board so the frame is visible on launch, before any
+    // image is imported — same board scheduleRender() already draws as a
+    // plain background fill when a board has zero layers.
+    ensureBoard();
 }
 
 MainWindow::~MainWindow() = default;
@@ -652,6 +650,7 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 {
+
     if (obj == this && event->type() == QEvent::WindowStateChange && m_titleBar) {
         m_titleBar->updateMaxIcon();
 #ifdef Q_OS_WIN
@@ -792,10 +791,8 @@ void MainWindow::updatePreviewInteractionState()
         m_preview->setStatus("Original + adjustments (Caps Lock active)");
     } else if (m_spaceDown) {
         m_preview->setStatus("Pan (hold Space and drag)");
-    } else if (!m_lastRender.isNull()) {
-        m_preview->setStatus("Done");
-    } else if (!m_lastPreviewFrame.isNull()) {
-        m_preview->setStatus("Preview (full render pending…)");
+    } else {
+        m_preview->setStatus(QString());
     }
 }
 
@@ -965,16 +962,21 @@ SessionParams MainWindow::collectParams() const
 // State → panels: shows the active layer's values.
 void MainWindow::applyParams(const SessionParams& p)
 {
+    // Frame + background are document-level: push them even with zero layers
+    // (a freshly loaded or emptied composition), or Frame dimensions/Background
+    // silently keep showing whatever the UI happened to have before.
+    m_left->setFrameSize(p.frameW > 0 ? p.frameW : 1080,
+                         p.frameH > 0 ? p.frameH : 1080);
+    m_right->setBackground(p.background, p.backgroundOpacity);
+
     int idx = findLayerById(p.layers, p.activeLayerId);
     if (idx < 0 && !p.layers.empty()) idx = 0;
-    if (idx < 0) return;
+    if (idx < 0) { pushPreviewTransform(); refreshAnimationIndicators(); return; }
 
     m_selectedParentMediaId = -1;   // panels now follow a concrete child again
 
     const Layer& l = p.layers[idx];
     m_left->setAdjustments(l.adjustments);
-    m_left->setFrameSize(p.frameW > 0 ? p.frameW : 1080,
-                         p.frameH > 0 ? p.frameH : 1080);
     m_left->setTransform(l.transform);   // boxes follow the active layer
     pushPreviewTransform();              // overlay follows the active layer
 
@@ -988,9 +990,7 @@ void MainWindow::applyParams(const SessionParams& p)
     }
     m_left->setLocalizeChecked(locPointOr(*maskMap, maskParamFor(l.kind)).enabled);
 
-    // Fill (tonal), Fusion and enabled-state are handled by setFromLayer;
-    // background is shared and set explicitly.
-    m_right->setBackground(p.background, p.backgroundOpacity);
+    // Fill (tonal), Fusion and enabled-state are handled by setFromLayer.
     m_right->setFromLayer(l);
     refreshAnimationIndicators();
 }
@@ -2069,8 +2069,7 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
         // Full pass only — no fast preview pass to flash/jitter during zoom.
         m_worker->requestFullRender(source, params, ls);
     else
-        m_worker->requestRender(source, params, /*fullPass=*/!previewOnly, ls,
-                                /*cheapDrag=*/m_transformDragging);
+        m_worker->requestRender(source, params, /*fullPass=*/!previewOnly, ls);
 }
 
 // Resolve, for each media layer, the image it draws at `frame` (a clip indexes
@@ -2116,17 +2115,10 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
     }
     updateDisplayedPreview();
     pushPreviewTransform();
-    if (isPreview) {
-        // Preview pass done, full pass still pending. Don't flash this unless the
-        // progress caption is already on screen (a genuinely slow render).
-        m_pendingRenderStatus = "Preview (full render pending…)";
-        if (m_renderStatusVisible) m_preview->setStatus(m_pendingRenderStatus);
-    } else {
-        // Full pass done → back to idle; cancel any pending "Rendering…" caption.
-        m_renderStatusTimer.stop();
-        m_renderStatusVisible = false;
-        m_preview->setStatus("Done");
-    }
+    // A full render landed: clear whatever hint/confirmation text ("Drop
+    // images here…", "Layer copied", …) was on screen — there's now an
+    // actual result to look at instead.
+    if (!isPreview) m_preview->setStatus(QString());
 }
 
 // ---------------------------------------------------------------------------
@@ -2237,11 +2229,10 @@ QVector<int> MainWindow::addImages(const QStringList& paths)
     // A numbered batch (frame_0001.png …) is almost always a video as frames —
     // offer to import it as a single animated clip, like DaVinci's image sequence.
     if (looksLikeSequence(paths)) {
-        const auto reply = QMessageBox::question(this, "Import sequence",
-            QString("These %1 files look like an image sequence.\n\n"
-                    "Import them as a single animated clip?").arg(paths.size()),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-        if (reply == QMessageBox::Yes) { importSequence(paths); return {}; }
+        if (askYesNo(this, QString("These %1 files look like an image sequence.\n\n"
+                    "Import them as a single animated clip?").arg(paths.size()))) {
+            importSequence(paths); return {};
+        }
     }
 
     // Load a file into a MediaClip (decoding video via ffmpeg).
@@ -2249,8 +2240,7 @@ QVector<int> MainWindow::addImages(const QStringList& paths)
         clip.name = path.startsWith(":/") ? "example" : QFileInfo(path).fileName();
         if (isVideoFile(path)) {
             if (!VideoIO::available()) {
-                QMessageBox::warning(this, "Import video",
-                    "ffmpeg.exe was not found.\n\nPlace ffmpeg.exe next to the application "
+                showMessage(this, "ffmpeg.exe was not found.\n\nPlace ffmpeg.exe next to the application "
                     "to import and export videos.");
                 return false;
             }
@@ -2258,13 +2248,13 @@ QVector<int> MainWindow::addImages(const QStringList& paths)
             QVector<QImage> frames; double fps = 24.0; QString err;
             const bool ok = VideoIO::decode(path, frames, fps, err);
             QApplication::restoreOverrideCursor();
-            if (!ok) { QMessageBox::warning(this, "Import video", err); return false; }
+            if (!ok) { showMessage(this, err); return false; }
             clip.frames = frames; clip.image = frames.first(); clip.fps = fps;
             return true;
         }
         QImage im(path);
         if (im.isNull()) {
-            QMessageBox::warning(this, "Error", "Could not load image:\n" + path);
+            showMessage(this, "Could not load image:\n" + path);
             return false;
         }
         clip.image = im;
@@ -2290,6 +2280,22 @@ QVector<int> MainWindow::addImages(const QStringList& paths)
     return added;
 }
 
+// Same library entry as addImages(), for an image that's already in memory
+// (clipboard paste) instead of on disk.
+int MainWindow::addImageToLibrary(const QImage& img, const QString& name)
+{
+    const int bi = ensureBoard();
+    SessionImage& board = m_images[bi];
+    MediaClip clip;
+    clip.name  = name;
+    clip.image = img;
+    const int mid = board.nextMediaId++;
+    board.media.insert(mid, clip);
+    m_filmstrip->addThumb(mid, clip.image, clip.name);
+    m_filmstrip->setActive(mid);
+    return mid;
+}
+
 // Create the single composition board if it doesn't exist yet, and return its
 // index. The board starts with an empty layer stack — sources live in the
 // library until placed.
@@ -2305,8 +2311,157 @@ int MainWindow::ensureBoard()
     si.undoIndex = 0;
     m_images.append(si);
     m_current = m_images.size() - 1;
+    m_savedParams = si.state;   // empty board is the "clean" baseline
+    m_savedAnim   = si.anim;
     switchToImage(m_current);   // init panels/preview/timeline for the empty board
     return m_current;
+}
+
+// Ctrl+S. Video sources aren't supported by the .ultra file yet: any layer,
+// parent group, and animation track that draws from a video media entry is
+// silently dropped from what's written (the library still holds the video —
+// only the saved file is missing it).
+bool MainWindow::saveProject(bool forceDialog)
+{
+    if (m_current < 0) return true;   // nothing to save
+    SessionImage& img = m_images[m_current];
+
+    QString path = m_projectPath;
+    if (forceDialog || path.isEmpty()) {
+        const QString suggested = path.isEmpty()
+            ? (img.title.isEmpty() ? "untitled.ultra" : img.title + ".ultra") : path;
+        path = QFileDialog::getSaveFileName(this, "Save project", suggested,
+                                            "ULTRATOOL project (*.ultra)");
+        if (path.isEmpty()) return false;
+        if (!path.endsWith(".ultra", Qt::CaseInsensitive)) path += ".ultra";
+    }
+
+    QSet<int> stillMediaIds;
+    for (auto it = img.media.cbegin(); it != img.media.cend(); ++it)
+        if (it.value().frames.isEmpty()) stillMediaIds.insert(it.key());
+
+    ProjectIO::ProjectData data;
+    data.title  = img.title;
+    data.params = img.state;
+    data.anim   = img.anim;
+
+    int skippedVideos = 0;
+    for (auto it = img.media.cbegin(); it != img.media.cend(); ++it) {
+        if (stillMediaIds.contains(it.key()))
+            data.media.insert(it.key(), { it.value().name, it.value().image });
+        else
+            ++skippedVideos;
+    }
+
+    std::vector<Layer> keptLayers;
+    QSet<int> keptLayerIds;
+    for (const Layer& l : data.params.layers) {
+        if (l.mediaId != -1 && !stillMediaIds.contains(l.mediaId)) continue;
+        keptLayerIds.insert(l.id);
+        keptLayers.push_back(l);
+    }
+    data.params.layers = keptLayers;
+
+    std::vector<ParentGroup> keptParents;
+    for (const ParentGroup& g : data.params.parents)
+        if (stillMediaIds.contains(g.mediaId)) keptParents.push_back(g);
+    data.params.parents = keptParents;
+
+    std::vector<Track> keptTracks;
+    for (const Track& t : data.anim.tracks)
+        if (t.layerId == -1 || keptLayerIds.contains(t.layerId)) keptTracks.push_back(t);
+    data.anim.tracks = keptTracks;
+
+    QString err;
+    if (!ProjectIO::save(path, data, &err)) {
+        showMessage(this, "Could not save:\n" + err);
+        return false;
+    }
+    m_projectPath = path;
+    m_savedParams = img.state;   // full in-memory state, not the video-stripped `data`:
+    m_savedAnim   = img.anim;    // nothing changed session-side just because the file omits video
+    m_preview->setStatus(skippedVideos > 0
+        ? QString("Saved (skipped %1 video layer%2 — not supported yet)")
+              .arg(skippedVideos).arg(skippedVideos == 1 ? "" : "s")
+        : "Saved");
+    return true;
+}
+
+// Ctrl+O. Replaces the current composition — this app has one board at a
+// time, no multi-project tabs.
+void MainWindow::openProject()
+{
+    const QString path = QFileDialog::getOpenFileName(this, "Open project", "",
+                                                       "ULTRATOOL project (*.ultra)");
+    if (path.isEmpty()) return;
+    openProjectFromPath(path);
+}
+
+// Shared by the Ctrl+O dialog and a path handed in on the command line
+// (double-clicking a .ultra file once file association is registered).
+void MainWindow::openProjectFromPath(const QString& path)
+{
+    ProjectIO::ProjectData data;
+    QString err;
+    if (!ProjectIO::load(path, &data, &err)) {
+        showMessage(this, "Could not open:\n" + err);
+        return;
+    }
+
+    m_filmstrip->clear();
+    m_images.clear();
+    m_current = -1;
+
+    SessionImage si;
+    si.title = data.title;
+    si.name  = data.title;
+    si.state = data.params;
+    si.anim  = data.anim;
+
+    int maxMediaId = 0;
+    for (auto it = data.media.cbegin(); it != data.media.cend(); ++it) {
+        MediaClip clip;
+        clip.name  = it.value().name;
+        clip.image = it.value().image;
+        si.media.insert(it.key(), clip);
+        maxMediaId = qMax(maxMediaId, it.key());
+        m_filmstrip->addThumb(it.key(), clip.image, clip.name);
+    }
+    si.nextMediaId = maxMediaId + 1;
+    syncBoardSource(si);
+    si.undoStack.append({ si.state, si.anim });
+    si.undoIndex = 0;
+
+    m_images.append(si);
+    m_current = 0;
+    m_projectPath = path;
+    m_savedParams = si.state;
+    m_savedAnim   = si.anim;
+    switchToImage(m_current);
+}
+
+bool MainWindow::isDirty() const
+{
+    if (m_current < 0) return false;
+    const SessionImage& img = m_images[m_current];
+    return img.state != m_savedParams || img.anim != m_savedAnim;
+}
+
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    if (!isDirty()) { event->accept(); return; }
+
+    const QString name = (m_current >= 0 && !m_images[m_current].title.isEmpty())
+        ? m_images[m_current].title : "Untitled";
+    UnsavedChangesDialog dlg(name, this);
+    dlg.exec();
+
+    if (dlg.choice() == UnsavedChangesDialog::Cancel) { event->ignore(); return; }
+    if (dlg.choice() == UnsavedChangesDialog::Save && !saveProject(/*forceDialog=*/false)) {
+        event->ignore();   // Save As dialog was cancelled, or the write failed
+        return;
+    }
+    event->accept();
 }
 
 // Place a library source into the composition as a new layer (creating its
@@ -2358,7 +2513,7 @@ void MainWindow::importSequence(const QStringList& paths)
         if (!im.isNull()) frames.append(im);
     }
     if (frames.isEmpty()) {
-        QMessageBox::warning(this, "Import sequence", "No valid images in the selection.");
+        showMessage(this, "No valid images in the selection.");
         return;
     }
 
@@ -2393,7 +2548,6 @@ void MainWindow::switchToImage(int index)
         m_preview->setShowOriginal(false);
         m_preview->resetZoom();
         m_preview->setImage({});
-        m_preview->setStatus("Drop images here or use the orange button below");
         m_filmstrip->setActive(-1);
         m_left->setSourceImage({});
         m_right->setSourceImage({});
@@ -2478,10 +2632,9 @@ void MainWindow::onThumbCloseRequested(int mediaId)
     const bool inUse = std::any_of(st.layers.begin(), st.layers.end(),
         [mediaId](const Layer& l){ return l.mediaId == mediaId; });
     if (inUse) {
-        const auto reply = QMessageBox::question(this, "Remove from library",
-            "This source is used by one or more layers.\n\nRemove it and its layers?",
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (reply != QMessageBox::Yes) return;
+        if (!askYesNo(this, "This source is used by one or more layers.\n\nRemove it and its layers?",
+                      /*defaultYes=*/false))
+            return;
     }
 
     for (const Layer& l : st.layers)
@@ -2507,7 +2660,7 @@ void MainWindow::onThumbCloseRequested(int mediaId)
 void MainWindow::onExport()
 {
     if (m_current < 0) {
-        QMessageBox::information(this, "Export", "No image loaded.");
+        showMessage(this, "No image loaded.");
         return;
     }
 
@@ -2553,8 +2706,7 @@ void MainWindow::onExport()
 
     int quality = (format == "jpg") ? 95 : -1;
     if (!canvas.save(savePath, format.toUpper().toUtf8().constData(), quality)) {
-        QMessageBox::critical(this, "Export Failed",
-                              "Could not save file:\n" + savePath);
+        showMessage(this, "Could not save file:\n" + savePath);
         return;
     }
 
@@ -2581,13 +2733,11 @@ void MainWindow::exportSvg(const QString& baseName)
     // thousands of shapes — a huge file that may lag or crash while writing.
     const int elements = RenderWorker::estimateSvgElements(source, params, ls);
     if (elements > 150000) {
-        const auto reply = QMessageBox::warning(this, "Heavy SVG export",
-            QString("This export contains roughly %1 vector shapes.\n\n"
+        if (!askYesNo(this, QString("This export contains roughly %1 vector shapes.\n\n"
                     "The SVG may be very large and slow to open, and the app "
                     "could lag or run out of memory while writing it.\n\nContinue?")
-                .arg(elements),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (reply != QMessageBox::Yes) return;
+                .arg(elements), /*defaultYes=*/false))
+            return;
     }
 
     const QString savePath = QFileDialog::getSaveFileName(
@@ -2595,7 +2745,7 @@ void MainWindow::exportSvg(const QString& baseName)
     if (savePath.isEmpty()) return;
 
     if (!RenderWorker::renderDocumentToSvg(savePath, source, params, ls)) {
-        QMessageBox::critical(this, "Export Failed", "Could not write SVG:\n" + savePath);
+        showMessage(this, "Could not write SVG:\n" + savePath);
         return;
     }
     m_preview->setStatus("Exported: " + savePath);
@@ -2632,7 +2782,7 @@ void MainWindow::exportSequence(const QString& baseName)
             ? paramsAtFrame(img.state, img.anim, frame)
             : img.state);
 
-        const QImage canvas = RenderWorker::renderDocument(src, p, layerSourcesAt(img, frame));
+        const QImage canvas = m_worker->renderDocumentInteractive(src, p, layerSourcesAt(img, frame));
         const QString fn = QString("%1/%2_%3.png")
             .arg(dir, baseName, QString::number(frame).rightJustified(digits, '0'));
         if (canvas.save(fn, "PNG")) ++written;
@@ -2648,8 +2798,7 @@ void MainWindow::exportVideoMp4(const QString& baseName)
 {
     if (m_current < 0) return;
     if (!VideoIO::available()) {
-        QMessageBox::warning(this, "Export video",
-            "ffmpeg.exe was not found.\n\nPlace ffmpeg.exe next to the application to export videos.");
+        showMessage(this, "ffmpeg.exe was not found.\n\nPlace ffmpeg.exe next to the application to export videos.");
         return;
     }
 
@@ -2664,7 +2813,7 @@ void MainWindow::exportVideoMp4(const QString& baseName)
 
     QTemporaryDir tmp;
     if (!tmp.isValid()) {
-        QMessageBox::critical(this, "Export video", "Could not create a temporary folder.");
+        showMessage(this, "Could not create a temporary folder.");
         return;
     }
 
@@ -2681,7 +2830,7 @@ void MainWindow::exportVideoMp4(const QString& baseName)
             ? paramsAtFrame(img.state, img.anim, frame)
             : img.state);
 
-        QImage canvas = RenderWorker::renderDocument(src, p, layerSourcesAt(img, frame));
+        QImage canvas = m_worker->renderDocumentInteractive(src, p, layerSourcesAt(img, frame));
         // mp4 (yuv420p) has no alpha — flatten on an opaque background.
         QImage flat(canvas.size(), QImage::Format_RGB32);
         QColor bg = p.background; bg.setAlpha(255);
@@ -2704,6 +2853,6 @@ void MainWindow::exportVideoMp4(const QString& baseName)
     QApplication::restoreOverrideCursor();
     progress.close();
 
-    if (!ok) { QMessageBox::critical(this, "Export video", err); return; }
+    if (!ok) { showMessage(this, err); return; }
     m_preview->setStatus("Exported video: " + savePath);
 }

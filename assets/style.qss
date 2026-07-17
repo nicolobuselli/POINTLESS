@@ -1,5 +1,5 @@
 /* ============================================================
-   ULTRA_Ditherer — Design system
+   ULTRATOOL — Design system
 
    Every color below is a @token (e.g. @boxStroke), substituted by
    substitutePaletteTokens() in main.cpp against a single named palette —
@@ -261,6 +261,12 @@ QPushButton#tabBtn[tabPos="last"]:checked {
     background-color: @bgPanel;
 }
 
+#filmstripEmptyHint {
+    color: @textDim;
+    font-size: s(16)px;
+    font-weight: 500;
+}
+
 /* ── Export button ───────────────────────────────────────────── */
 QPushButton#exportBtn {
     background-color: @boxFill;
@@ -333,6 +339,61 @@ QProgressBar#animProgressBar::chunk {
     background-color: @accent;
     border-radius: s(8)px;
 }
+
+/* ── Unsaved-changes dialog (UnsavedChangesDialog) ──────────────
+   Mini title bar (name + a permanently-red close = Cancel) over a
+   warning icon + message + Yes/No, styled like the rest of the app
+   instead of a native QMessageBox. */
+#miniTitleBar {
+    background-color: @surface2;
+    border-top-left-radius: 9px;
+    border-top-right-radius: 9px;
+}
+#miniTitleText {
+    color: @textTitle;
+    font-size: s(20)px;
+    font-weight: 700;
+    background: transparent;
+}
+#miniCloseBtn {
+    background-color: #C83A3A;
+    border: none;
+    border-top-right-radius: 9px;
+}
+#miniCloseBtn:hover   { background-color: #FF3A36; }
+#miniCloseBtn:pressed { background-color: #C81C19; }
+
+#dialogPane {
+    background: transparent;
+}
+#dialogMessage {
+    color: @textBody;
+    font-size: s(20)px;
+    font-weight: 500;
+    background: transparent;
+}
+
+QPushButton#dialogYesBtn {
+    background-color: @modeFill;
+    border: 1px solid @modeStroke;
+    border-radius: s(24)px;
+    color: @textTitle;
+    font-size: s(17)px;
+    font-weight: 600;
+}
+QPushButton#dialogYesBtn:hover   { background-color: @modeStrokeHover; }
+QPushButton#dialogYesBtn:pressed { background-color: @modeStroke; }
+
+QPushButton#dialogNoBtn {
+    background-color: transparent;
+    border: 1px solid @popupBorder;
+    border-radius: s(24)px;
+    color: @textBody;
+    font-size: s(17)px;
+    font-weight: 600;
+}
+QPushButton#dialogNoBtn:hover   { border-color: @boxStrokeHover; }
+QPushButton#dialogNoBtn:pressed { background-color: @surface2; }
 
 /* ── Accent button (Confirm / Generate / destructive confirm) ────
    Same box metrics as every other box (height s(48), radius s(8),

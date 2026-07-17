@@ -54,7 +54,6 @@ QPointF rotationHandleWidget(const QPolygonF& q, QPointF centre)
 
 PreviewWidget::PreviewWidget(QWidget* parent)
     : QWidget(parent)
-    , m_status("Drop images here or use the orange button below")
 {
     setAcceptDrops(true);
     setMinimumSize(300, 200);
@@ -135,7 +134,7 @@ void PreviewWidget::setStatus(const QString& text)
 
 void PreviewWidget::resetZoom()
 {
-    m_zoomFactor = 1.0;
+    m_zoomFactor = 0.7;   // frame fits at 70% of the canvas, not edge-to-edge
     m_panOffset = {};
     m_dragging = false;
     m_dragButton = Qt::NoButton;

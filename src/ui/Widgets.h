@@ -18,7 +18,7 @@
 class QResizeEvent;
 
 // ============================================================
-//  Shared custom widgets for ULTRA_Ditherer panels.
+//  Shared custom widgets for ULTRATOOL panels.
 //  Callback style (std::function) — no extra signals/moc needed.
 // ============================================================
 
@@ -276,6 +276,55 @@ private:
     int  m_minDurationMs = 0;
     bool m_canceled      = false;
 };
+
+// ── UnsavedChangesDialog ─────────────────────────────────────
+// Frameless close-confirmation prompt, styled like the rest of the app
+// instead of a native QMessageBox: mini title bar (ULTRATOOL + a
+// permanently-red close button) over a warning icon, message, and Yes/No.
+// The close button (or Esc) leaves choice() at Cancel — same as dismissing
+// a native dialog without picking an option.
+
+class UnsavedChangesDialog : public QDialog {
+public:
+    enum Choice { Cancel, Save, Discard };
+
+    explicit UnsavedChangesDialog(const QString& documentName, QWidget* parent = nullptr);
+
+    Choice choice() const { return m_choice; }
+
+protected:
+    void paintEvent(QPaintEvent*) override;
+
+private:
+    Choice m_choice = Cancel;
+};
+
+// ── StyledMessageBox ─────────────────────────────────────────
+// In-app-styled stand-in for QMessageBox: same frameless chrome as
+// UnsavedChangesDialog (mini "ULTRATOOL" title bar + warning icon)
+// instead of a native OS dialog. Two buttons (Yes/No) or one (OK),
+// picked by leaving noText empty. Use askYesNo()/showMessage() below
+// rather than constructing this directly.
+class StyledMessageBox : public QDialog {
+public:
+    StyledMessageBox(const QString& message, QWidget* parent,
+                      const QString& yesText, const QString& noText, bool defaultYes);
+
+    bool accepted() const { return m_accepted; }
+
+protected:
+    void paintEvent(QPaintEvent*) override;
+
+private:
+    bool m_accepted = false;
+};
+
+// Blocking Yes/No prompt, styled like the app instead of a native QMessageBox.
+// Returns true iff the user picked "Yes" (closing via the X or Esc is "No").
+bool askYesNo(QWidget* parent, const QString& message, bool defaultYes = true);
+
+// Blocking single-button ("OK") notice, same styled chrome.
+void showMessage(QWidget* parent, const QString& message);
 
 // ── PopupPicker ──────────────────────────────────────────────
 // Combo-look button that opens a boxed grid popup of value entries, with

@@ -34,15 +34,8 @@ public:
     // fullPass=false renders only the fast preview (used during playback so
     // the full-resolution pass never floods the thread). layerSrc maps a
     // layerId → the media image that layer draws this frame.
-    // cheapDrag=true is for a live canvas drag (position/rotation/scale):
-    // symbol pitch (halftone spacing, ascii cell, dither pixel) is left at
-    // its authored size instead of shrinking with the preview, so symbol
-    // COUNT drops with the preview area instead of staying constant — the
-    // fast pass actually gets cheaper. Fine for a transient drag frame;
-    // the full-quality pass on release restores authored pitch.
     void requestRender(const QImage& source, const SessionParams& params,
-                       bool fullPass = true, const QHash<int, QImage>& layerSrc = {},
-                       bool cheapDrag = false);
+                       bool fullPass = true, const QHash<int, QImage>& layerSrc = {});
 
     // Full pass only (no fast preview pass): used for the zoom quality re-render,
     // so the on-screen frame isn't replaced by a low-res preview on every scroll.
@@ -83,6 +76,16 @@ public:
     // differences just recomposite the cached raster.
     QImage renderPreviewCached(const QImage& source, const SessionParams& params, int maxPx,
                                const QHash<int, QImage>& layerSrc = {});
+    // Full-resolution renderDocument that reuses this instance's layer cache
+    // (see renderPreviewCached above) instead of the static renderDocument's
+    // fresh render every call. Also usable outside live preview: a sequential
+    // export loop (PNG sequence / mp4) that calls this per frame on the same
+    // owned RenderWorker instance skips re-rendering any layer whose content-
+    // affecting params and source pixels didn't change frame-to-frame (e.g.
+    // only position/rotation is animated) — position/rotation always use the
+    // live transform regardless of cache hits, so placement stays correct.
+    QImage renderDocumentInteractive(const QImage& source, const SessionParams& params,
+                                     const QHash<int, QImage>& layerSrc);
     // One layer's renderer, into an open painter (used for SVG export).
     // `adjusted` must already have the layer's adjustments applied.
     static void   renderLayerInto(QPainter& painter, const QImage& adjusted,
@@ -112,11 +115,7 @@ private slots:
     void onFullRenderFinished();
 
 private:
-    // shrinkSymbols=false skips the symbol-pitch-follows-image-scale step
-    // (see requestRender's cheapDrag) — used only for the interactive pass
-    // during a canvas drag.
-    static SessionParams scaledForPreview(const SessionParams& params, float scale,
-                                          bool shrinkSymbols = true);
+    static SessionParams scaledForPreview(const SessionParams& params, float scale);
 
     // Caches renderLayer()'s output per layer id: position/rotation/flip don't
     // affect that pixel content (only placement does), so a move/rotate-only
@@ -136,8 +135,6 @@ private:
                                      const QHash<int, QImage>& layerSrc,
                                      QHash<int, QHash<qint64, LayerCacheEntry>>* cache,
                                      QMutex* cacheMutex);
-    QImage renderDocumentInteractive(const QImage& source, const SessionParams& params,
-                                     const QHash<int, QImage>& layerSrc);
 
     QHash<int, QHash<qint64, LayerCacheEntry>> m_layerCache;
     QMutex                                     m_layerCacheMutex;
@@ -159,7 +156,6 @@ private:
 
     int   m_interactivePx     = INTERACTIVE_MAX_PX;
     float m_fullQualityScale  = 1.0f;   // zoom-driven supersample for the full pass
-    bool  m_cheapDrag         = false;  // true while requestRender's cheapDrag is set
 
     QFutureWatcher<QImage> m_fastWatcher;
     QFutureWatcher<QImage> m_fullWatcher;

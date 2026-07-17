@@ -1,12 +1,51 @@
 #include <QApplication>
+#include <QDir>
 #include <QFile>
 #include <QFontDatabase>
 #include <QFont>
 #include <QScreen>
+#include <QTimer>
 #include <QRegularExpression>
 #include <QHash>
 #include "ui/MainWindow.h"
 #include "ui/UiScale.h"
+
+#ifdef Q_OS_WIN
+#include <QSettings>
+#include <shlobj.h>
+
+// Registers ULTRATOOL as the handler for .ultra files under the CURRENT
+// USER's registry hive (HKCU — no admin rights needed), pointing at
+// wherever this exe currently is, and gives the file type this exe's own
+// icon. Idempotent: re-checks every launch, only writes (and pokes the
+// shell to refresh) when something's actually out of date — e.g. the exe
+// was moved since the last run.
+static void registerFileAssociation()
+{
+    const QString exePath = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+    const QString wantedCmd  = "\"" + exePath + "\" \"%1\"";
+    const QString wantedIcon = "\"" + exePath + "\",0";
+    const QString kProgId = "ULTRATOOL.Project";
+
+    QSettings ext("HKEY_CURRENT_USER\\Software\\Classes\\.ultra", QSettings::NativeFormat);
+    QSettings progid("HKEY_CURRENT_USER\\Software\\Classes\\" + kProgId, QSettings::NativeFormat);
+    QSettings icon("HKEY_CURRENT_USER\\Software\\Classes\\" + kProgId + "\\DefaultIcon", QSettings::NativeFormat);
+    QSettings cmd("HKEY_CURRENT_USER\\Software\\Classes\\" + kProgId + "\\shell\\open\\command", QSettings::NativeFormat);
+
+    if (ext.value(".").toString() == kProgId
+     && icon.value(".").toString() == wantedIcon
+     && cmd.value(".").toString() == wantedCmd)
+        return;   // already correct — skip the writes and the shell refresh
+
+    ext.setValue(".", kProgId);
+    progid.setValue(".", "ULTRATOOL Project");
+    icon.setValue(".", wantedIcon);
+    cmd.setValue(".", wantedCmd);
+    for (QSettings* s : { &ext, &progid, &icon, &cmd }) s->sync();
+
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+}
+#endif
 
 // Replace s(N) tokens in the stylesheet with round(N * scale) px values, so
 // every dimension scales with the design reference width.
@@ -100,9 +139,13 @@ static QString substitutePaletteTokens(QString css)
 int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
-    app.setApplicationName("ULTRA_Ditherer");
+    app.setApplicationName("ULTRATOOL");
     app.setApplicationVersion("2.0.0");
-    app.setOrganizationName("ULTRA_Ditherer");
+    app.setOrganizationName("ULTRATOOL");
+
+#ifdef Q_OS_WIN
+    registerFileAssociation();
+#endif
 
     // Global UI scale: design is drawn at Ui::kDesignWidth; match it to the
     // screen the window will fill. A small bump (kUiBump) makes type a touch
@@ -128,6 +171,17 @@ int main(int argc, char* argv[])
 
     MainWindow w;
     w.showMaximized();
+
+    // Double-clicking a .ultra file (once registerFileAssociation() has run
+    // at least once) launches us with its path as argv[1]. Deferred to the
+    // next event-loop tick: called this early, the window hasn't been shown/
+    // laid out yet, so widgets like the library grid still report a stale
+    // (pre-layout) size and size themselves wrong.
+    const QStringList args = app.arguments();
+    if (args.size() > 1 && args[1].endsWith(".ultra", Qt::CaseInsensitive)) {
+        const QString startupPath = args[1];
+        QTimer::singleShot(150, &w, [&w, startupPath]() { w.openProjectFromPath(startupPath); });
+    }
 
     return app.exec();
 }

@@ -7,6 +7,7 @@
 class QScrollArea;
 class QGridLayout;
 class QResizeEvent;
+class QLabel;
 class FilmstripThumb;
 class AddImageButton;
 
@@ -32,6 +33,7 @@ public:
 
     void addThumb(int mediaId, const QImage& source, const QString& name);
     void removeThumb(int mediaId);
+    void clear();   // drops every thumb (e.g. before loading a different project)
     void setActive(int mediaId);
     int  count() const { return m_thumbs.size(); }
 
@@ -62,6 +64,7 @@ private:
     QWidget*               m_thumbRow    = nullptr;
     QGridLayout*           m_thumbLayout = nullptr;
     AddImageButton*        m_addBtn      = nullptr;
+    QLabel*                m_emptyHint   = nullptr;
     QList<FilmstripThumb*> m_thumbs;
     int                    m_columns     = kMinColumns;
 };

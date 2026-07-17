@@ -46,7 +46,7 @@ const std::array<ParamDesc, int(ParamId::LocFirst)> kDescs = {{
     { "Opacity",            0,     1,  false, ParamScope::Halftone },
     { "Corner radius",      0,   100,  false, ParamScope::Halftone },
 
-    { "Pixel size",         1,    16,  true,  ParamScope::Dither },
+    { "Pixel size",         1,   100,  true,  ParamScope::Dither },
     { "Strength",           0,   100,  true,  ParamScope::Dither },
     { "Opacity",            0,     1,  false, ParamScope::Dither },
     { "Corner radius",      0,   100,  false, ParamScope::Dither },

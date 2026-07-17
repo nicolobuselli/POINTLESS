@@ -94,7 +94,7 @@ private:
 
     // Cached scaled image to avoid re-scaling on every paint
     QImage  m_scaled;
-    double  m_zoomFactor = 1.0;
+    double  m_zoomFactor = 0.7;
     QPoint  m_panOffset;
     QPoint  m_lastDragPos;
     bool    m_showOriginal = false;

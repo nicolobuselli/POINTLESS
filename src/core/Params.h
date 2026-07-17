@@ -458,7 +458,7 @@ enum class DitherAlgorithm {
 struct DitherSettings {
     DitherAlgorithm algorithm = DitherAlgorithm::FloydSteinberg;
     int             bayerSize = 8;    // 2, 4, 8, 16
-    int             pixelSize = 2;    // 1..16 — chunky pixels
+    int             pixelSize = 2;    // 1..100 — chunky pixels
     int             strength  = 50;   // 0..100
     int             threshold = 50;   // 0..100 — only for the Threshold algorithm
     float           opacity      = 1.0f;

@@ -535,7 +535,7 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
 {
     if (input.isNull()) return {};
 
-    const int ps = qBound(1, s.pixelSize, 32);
+    const int ps = qBound(1, s.pixelSize, 100);
     QImage work = input;
     if (ps > 1) {
         work = input.scaled(qMax(1, input.width()  / ps),
@@ -669,7 +669,7 @@ int DitherRenderer::paintMergedRects(const QImage& input, const DitherSettings& 
 
     // Build the quantised grid at cell resolution (the small image, before the
     // block upscale render() does), so each pixel here is exactly one cell.
-    const int ps = qBound(1, s.pixelSize, 32);
+    const int ps = qBound(1, s.pixelSize, 100);
     QImage work = input;
     if (ps > 1)
         work = input.scaled(qMax(1, input.width() / ps), qMax(1, input.height() / ps),

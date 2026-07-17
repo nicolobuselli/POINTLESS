@@ -1052,7 +1052,7 @@ public:
             pl->setContentsMargins(0, 0, 0, 0);
             pl->setSpacing(Ui::px(Ui::kGapRows));
 
-            m_pixelSize = new SliderRow("Pixel size", 1, 16, 2);
+            m_pixelSize = new SliderRow("Pixel size", 1, 100, 2);
             m_strength  = new SliderRow("Strength",   0, 100, 50);
             m_threshold = new SliderRow("Threshold",  0, 100, 50);
             m_levels    = new SliderRow("Color levels", 2, 16, 2);

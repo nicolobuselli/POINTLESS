@@ -1,6 +1,7 @@
 #include "AsciiRenderer.h"
 #include "ColorMath.h"
 #include "GridGenerator.h"
+#include "Parallel.h"
 
 #include <QFont>
 #include <QFontMetricsF>
@@ -415,18 +416,25 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
     // pass, which needs neighbour cells).
     std::vector<float> lumLinGrid(size_t(cols) * rows);
     std::vector<float> lumPercGrid(size_t(cols) * rows);
-    for (int row = 0; row < rows; ++row) {
-        const int cy = row * cellH;
-        const int ch = qMin(cellH, imgH - cy);
-        for (int col = 0; col < cols; ++col) {
-            const int cx = col * cellW;
-            const int cw = qMin(cellW, imgW - cx);
-            const float lumLin = cellLuminosity(rgb, cx, cy, cw, ch);
-            lumLinGrid [size_t(row) * cols + col] = lumLin;
-            lumPercGrid[size_t(row) * cols + col] =
-                ColorMath::linearToSrgb8(lumLin) / 255.0f;
+    // Rows are independent (each only reads its own image slice, writes its
+    // own grid slice) — safe to split across the thread pool. This precompute
+    // touches every source pixel once, same order of cost as the draw pass
+    // below, so it's worth the threading unlike the draw pass itself (which
+    // must stay serial: it draws into a single shared QPainter/QImage).
+    parallelRows(rows, [&](int rowBegin, int rowEnd) {
+        for (int row = rowBegin; row < rowEnd; ++row) {
+            const int cy = row * cellH;
+            const int ch = qMin(cellH, imgH - cy);
+            for (int col = 0; col < cols; ++col) {
+                const int cx = col * cellW;
+                const int cw = qMin(cellW, imgW - cx);
+                const float lumLin = cellLuminosity(rgb, cx, cy, cw, ch);
+                lumLinGrid [size_t(row) * cols + col] = lumLin;
+                lumPercGrid[size_t(row) * cols + col] =
+                    ColorMath::linearToSrgb8(lumLin) / 255.0f;
+            }
         }
-    }
+    });
 
     // Edge pass — Sobel on the cell-luminosity grid. A cell whose gradient
     // magnitude clears the threshold is drawn as an oriented contour glyph

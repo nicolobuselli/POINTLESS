@@ -1356,6 +1356,208 @@ void AnimProgressDialog::paintEvent(QPaintEvent*)
     p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
 }
 
+// ── UnsavedChangesDialog ───────────────────────────────────────
+
+UnsavedChangesDialog::UnsavedChangesDialog(const QString& documentName, QWidget* parent)
+    : QDialog(parent, Qt::FramelessWindowHint | Qt::Dialog)
+{
+    setAttribute(Qt::WA_TranslucentBackground);
+    setModal(true);
+    setWindowModality(Qt::WindowModal);
+    setFixedWidth(Ui::px(620));
+
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+
+    auto* bar = new QWidget;
+    bar->setObjectName("miniTitleBar");
+    bar->setFixedHeight(Ui::px(56));
+    auto* barL = new QHBoxLayout(bar);
+    barL->setContentsMargins(Ui::px(24), 0, 0, 0);
+    barL->setSpacing(0);
+    auto* title = new QLabel("ULTRATOOL");
+    title->setObjectName("miniTitleText");
+    barL->addWidget(title);
+    barL->addStretch(1);
+    auto* closeBtn = new QPushButton;
+    closeBtn->setObjectName("miniCloseBtn");
+    closeBtn->setCursor(Qt::PointingHandCursor);
+    closeBtn->setFixedSize(Ui::px(72), Ui::px(56));
+    closeBtn->setIcon(QIcon(":/icons/x.svg"));
+    closeBtn->setIconSize(QSize(Ui::px(18), Ui::px(18)));
+    connect(closeBtn, &QPushButton::clicked, this, &QDialog::reject);
+    barL->addWidget(closeBtn);
+    root->addWidget(bar);
+
+    // Plain QWidget picks up the global "QWidget { background-color: @bgPanel }"
+    // rule (assets/style.qss) and paints a flat block in its own right —
+    // visibly different from the card's own #1E1E1E (paintEvent below). Every
+    // container between here and the card edge needs objectName "dialogPane"
+    // (background: transparent) so the card colour is the only thing showing.
+    auto* body = new QWidget;
+    body->setObjectName("dialogPane");
+    auto* bodyL = new QHBoxLayout(body);
+    bodyL->setContentsMargins(Ui::px(36), Ui::px(32), Ui::px(36), Ui::px(28));
+    bodyL->setSpacing(Ui::px(26));
+
+    // Source is 200×176 (viewBox) — keep that ~1.14:1 aspect instead of
+    // squashing it into a square.
+    auto* warn = new QLabel;
+    warn->setObjectName("dialogPane");
+    const int warnW = Ui::px(64);
+    const int warnH = int(warnW * 176.0 / 200.0);
+    warn->setPixmap(QIcon(":/icons/warning.svg").pixmap(QSize(warnW, warnH)));
+    warn->setFixedSize(warnW, warnH);
+    bodyL->addWidget(warn, 0, Qt::AlignTop);
+
+    auto* msg = new QLabel(QString::fromUtf8("Save changes to “%1” before closing?")
+                           .arg(documentName));
+    msg->setObjectName("dialogMessage");
+    msg->setWordWrap(true);
+    bodyL->addWidget(msg, 1);
+    root->addWidget(body);
+
+    auto* btnRowWidget = new QWidget;
+    btnRowWidget->setObjectName("dialogPane");
+    auto* btnRow = new QHBoxLayout(btnRowWidget);
+    btnRow->setContentsMargins(Ui::px(36), 0, Ui::px(36), Ui::px(28));
+    btnRow->setSpacing(Ui::px(14));
+    btnRow->addStretch(1);
+    auto* yesBtn = new QPushButton("Yes");
+    yesBtn->setObjectName("dialogYesBtn");
+    yesBtn->setCursor(Qt::PointingHandCursor);
+    yesBtn->setFixedSize(Ui::px(110), Ui::px(48));
+    yesBtn->setDefault(true);
+    connect(yesBtn, &QPushButton::clicked, this, [this] { m_choice = Save; accept(); });
+    auto* noBtn = new QPushButton("No");
+    noBtn->setObjectName("dialogNoBtn");
+    noBtn->setCursor(Qt::PointingHandCursor);
+    noBtn->setFixedSize(Ui::px(110), Ui::px(48));
+    connect(noBtn, &QPushButton::clicked, this, [this] { m_choice = Discard; accept(); });
+    btnRow->addWidget(yesBtn);
+    btnRow->addWidget(noBtn);
+    root->addWidget(btnRowWidget);
+
+    if (parent)
+        move(parent->window()->frameGeometry().center() - QPoint(width() / 2, sizeHint().height() / 2));
+}
+
+void UnsavedChangesDialog::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(QColor("#5D5D5D"), 1));
+    p.setBrush(QColor("#1E1E1E"));
+    p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
+}
+
+// ── StyledMessageBox ─────────────────────────────────────────
+
+StyledMessageBox::StyledMessageBox(const QString& message, QWidget* parent,
+                                    const QString& yesText, const QString& noText, bool defaultYes)
+    : QDialog(parent, Qt::FramelessWindowHint | Qt::Dialog)
+{
+    setAttribute(Qt::WA_TranslucentBackground);
+    setModal(true);
+    setWindowModality(Qt::WindowModal);
+    setFixedWidth(Ui::px(620));
+
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+
+    auto* bar = new QWidget;
+    bar->setObjectName("miniTitleBar");
+    bar->setFixedHeight(Ui::px(56));
+    auto* barL = new QHBoxLayout(bar);
+    barL->setContentsMargins(Ui::px(24), 0, 0, 0);
+    barL->setSpacing(0);
+    auto* title = new QLabel("ULTRATOOL");
+    title->setObjectName("miniTitleText");
+    barL->addWidget(title);
+    barL->addStretch(1);
+    auto* closeBtn = new QPushButton;
+    closeBtn->setObjectName("miniCloseBtn");
+    closeBtn->setCursor(Qt::PointingHandCursor);
+    closeBtn->setFixedSize(Ui::px(72), Ui::px(56));
+    closeBtn->setIcon(QIcon(":/icons/x.svg"));
+    closeBtn->setIconSize(QSize(Ui::px(18), Ui::px(18)));
+    connect(closeBtn, &QPushButton::clicked, this, &QDialog::reject);
+    barL->addWidget(closeBtn);
+    root->addWidget(bar);
+
+    auto* body = new QWidget;
+    body->setObjectName("dialogPane");
+    auto* bodyL = new QHBoxLayout(body);
+    bodyL->setContentsMargins(Ui::px(36), Ui::px(32), Ui::px(36), Ui::px(28));
+    bodyL->setSpacing(Ui::px(26));
+
+    auto* warn = new QLabel;
+    warn->setObjectName("dialogPane");
+    const int warnW = Ui::px(64);
+    const int warnH = int(warnW * 176.0 / 200.0);
+    warn->setPixmap(QIcon(":/icons/warning.svg").pixmap(QSize(warnW, warnH)));
+    warn->setFixedSize(warnW, warnH);
+    bodyL->addWidget(warn, 0, Qt::AlignTop);
+
+    auto* msg = new QLabel(message);
+    msg->setObjectName("dialogMessage");
+    msg->setWordWrap(true);
+    bodyL->addWidget(msg, 1);
+    root->addWidget(body);
+
+    auto* btnRowWidget = new QWidget;
+    btnRowWidget->setObjectName("dialogPane");
+    auto* btnRow = new QHBoxLayout(btnRowWidget);
+    btnRow->setContentsMargins(Ui::px(36), 0, Ui::px(36), Ui::px(28));
+    btnRow->setSpacing(Ui::px(14));
+    btnRow->addStretch(1);
+
+    auto* yesBtn = new QPushButton(yesText);
+    yesBtn->setObjectName("dialogYesBtn");
+    yesBtn->setCursor(Qt::PointingHandCursor);
+    yesBtn->setFixedSize(Ui::px(110), Ui::px(48));
+    yesBtn->setDefault(defaultYes);
+    connect(yesBtn, &QPushButton::clicked, this, [this] { m_accepted = true; accept(); });
+    btnRow->addWidget(yesBtn);
+    if (!noText.isEmpty()) {
+        auto* noBtn = new QPushButton(noText);
+        noBtn->setObjectName("dialogNoBtn");
+        noBtn->setCursor(Qt::PointingHandCursor);
+        noBtn->setFixedSize(Ui::px(110), Ui::px(48));
+        noBtn->setDefault(!defaultYes);
+        connect(noBtn, &QPushButton::clicked, this, [this] { m_accepted = false; accept(); });
+        btnRow->addWidget(noBtn);
+    }
+    root->addWidget(btnRowWidget);
+
+    if (parent)
+        move(parent->window()->frameGeometry().center() - QPoint(width() / 2, sizeHint().height() / 2));
+}
+
+void StyledMessageBox::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(QPen(QColor("#5D5D5D"), 1));
+    p.setBrush(QColor("#1E1E1E"));
+    p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
+}
+
+bool askYesNo(QWidget* parent, const QString& message, bool defaultYes)
+{
+    StyledMessageBox dlg(message, parent, "Yes", "No", defaultYes);
+    dlg.exec();
+    return dlg.accepted();
+}
+
+void showMessage(QWidget* parent, const QString& message)
+{
+    StyledMessageBox dlg(message, parent, "OK", QString(), true);
+    dlg.exec();
+}
+
 // ── Auto-hide scrollbar ──────────────────────────────────────
 namespace {
 class AutoHideFilter : public QObject {

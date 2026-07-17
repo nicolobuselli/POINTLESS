@@ -566,13 +566,11 @@ RenderWorker::RenderWorker(QObject* parent)
 RenderWorker::~RenderWorker() = default;
 
 void RenderWorker::requestRender(const QImage& source, const SessionParams& params,
-                                 bool fullPass, const QHash<int, QImage>& layerSrc,
-                                 bool cheapDrag)
+                                 bool fullPass, const QHash<int, QImage>& layerSrc)
 {
     m_sourceImage  = source;
     m_latestParams = params;
     m_layerSrc     = layerSrc;
-    m_cheapDrag    = cheapDrag;
 
     if (m_fastWatcher.isRunning()) {
         m_fastPending = true;
@@ -652,8 +650,7 @@ QImage RenderWorker::renderPreviewCached(const QImage& source, const SessionPara
     return renderDocumentImpl(small, p, scaledLayerSrc(layerSrc, k), &m_layerCache, &m_layerCacheMutex);
 }
 
-SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float scale,
-                                             bool shrinkSymbols)
+SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float scale)
 {
     SessionParams p = params;
     // The frame is the output canvas; scale it (and the per-pixel params) so the
@@ -661,17 +658,11 @@ SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float 
     p.frameW = qMax(1, qRound(p.frameW * scale));
     p.frameH = qMax(1, qRound(p.frameH * scale));
     for (Layer& l : p.layers) {
-        if (shrinkSymbols) {
-            l.ascii.cellSize   = qMax(3, int(l.ascii.cellSize * scale));
-            l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize * scale));
-            // Halftone dot pitch is a fixed pixel value: scale it with the image too,
-            // or dots stay full-size on the shrunk preview and look ~1/scale too big.
-            l.halftone.grid.spacing = qMax(2.0f, l.halftone.grid.spacing * scale);
-        }
-        // Symbol pitch left at authored size (shrinkSymbols=false, a live canvas
-        // drag): symbol COUNT then drops with the shrunk area instead of staying
-        // constant, which is what actually makes the interactive pass cheap —
-        // oversized dots/glyphs for one drag frame are an acceptable trade-off.
+        l.ascii.cellSize   = qMax(3, int(l.ascii.cellSize * scale));
+        l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize * scale));
+        // Halftone dot pitch is a fixed pixel value: scale it with the image too,
+        // or dots stay full-size on the shrunk preview and look ~1/scale too big.
+        l.halftone.grid.spacing = qMax(2.0f, l.halftone.grid.spacing * scale);
         l.adjustments.sharpenRadius = qMax(1, qRound(l.adjustments.sharpenRadius * scale));
     }
     return p;
@@ -709,21 +700,17 @@ void RenderWorker::launchFast()
             m_cachedSmallSrcK        = k;
         }
         src = m_cachedSmallSrc;
-        p  = scaledForPreview(m_latestParams, k, /*shrinkSymbols=*/!m_cheapDrag);
+        p  = scaledForPreview(m_latestParams, k);
         ls = scaledLayerSrc(m_layerSrc, k);
 
         // Keep preview and full render at the same effective halftone scale.
-        // Skipped during a cheap drag: inputDpi there should stay as authored,
-        // matching grid.spacing also being left unscaled above.
-        if (!m_cheapDrag) {
-            for (Layer& l : p.layers) {
-                if (l.kind != LayerKind::Halftone) continue;
-                const float requestedScale = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
-                const float maxBySize = 6000.0f / float(srcMax);
-                const float minBySize = 16.0f   / float(srcMax);
-                const float eff = qBound(minBySize, requestedScale, maxBySize);
-                l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
-            }
+        for (Layer& l : p.layers) {
+            if (l.kind != LayerKind::Halftone) continue;
+            const float requestedScale = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
+            const float maxBySize = 6000.0f / float(srcMax);
+            const float minBySize = 16.0f   / float(srcMax);
+            const float eff = qBound(minBySize, requestedScale, maxBySize);
+            l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
         }
     }
 

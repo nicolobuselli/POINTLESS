@@ -1,4 +1,4 @@
-ULTRA_Ditherer — third-party licenses
+ULTRATOOL — third-party licenses
 ======================================
 
 This project reuses material from the following open-source projects.
@@ -33,3 +33,43 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
 IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
 OF SUCH DAMAGE.
+
+---------------------------------------------------------------------------
+FFmpeg  —  https://ffmpeg.org
+---------------------------------------------------------------------------
+Used for: video import/export (src/core/VideoIO.cpp spawns the bundled
+tools/ffmpeg.exe as an external process; no FFmpeg code or headers are
+linked into this project).
+
+The bundled tools/ffmpeg.exe is the Windows "essentials" build published by
+https://www.gyan.dev/ffmpeg/builds/ (build string visible via
+`ffmpeg -version`), configured with --enable-gpl --enable-version3 and is
+therefore licensed under the GNU General Public License v3 (see LICENSE in
+this repository — this project is also GPLv3). Matching source code for
+that build is available from the FFmpeg project at https://ffmpeg.org and
+from the gyan.dev build scripts at
+https://github.com/GyanD/codexffmpeg.
+
+Copyright (C) The FFmpeg developers.
+
+---------------------------------------------------------------------------
+Funnel Display  —  https://github.com/Dicotype/Funnel
+---------------------------------------------------------------------------
+Used for: the UI font (assets/fonts/FunnelDisplay.ttf).
+
+Copyright 2024 The Funnel Project Authors
+(https://github.com/Dicotype/Funnel)
+
+Licensed under the SIL Open Font License, Version 1.1. Full license text
+in assets/fonts/OFL.txt.
+
+---------------------------------------------------------------------------
+Qt 6  —  https://www.qt.io
+---------------------------------------------------------------------------
+Used for: the application framework (Core, Gui, Widgets, Svg, Concurrent),
+dynamically linked; the Qt DLLs are deployed alongside the executable by
+windeployqt and are not modified.
+
+Copyright (C) The Qt Company Ltd. and other contributors. Licensed under
+the GNU Lesser General Public License v3 (LGPLv3) / GPLv3 — see
+https://www.qt.io/licensing/ for details.

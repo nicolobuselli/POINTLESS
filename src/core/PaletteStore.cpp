@@ -12,8 +12,8 @@
 
 namespace {
 
-constexpr const char* kOrg     = "ULTRA_Ditherer";
-constexpr const char* kApp     = "ULTRA_Ditherer";
+constexpr const char* kOrg     = "ULTRATOOL";
+constexpr const char* kApp     = "ULTRATOOL";
 constexpr const char* kArray   = "palettes";
 constexpr const char* kSeeded  = "palettes_seeded";
 

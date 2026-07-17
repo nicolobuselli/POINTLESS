@@ -10,6 +10,7 @@
 #include <QHash>
 #include <QSet>
 #include <QKeyEvent>
+#include <QCloseEvent>
 #include "../core/Params.h"
 #include "../core/Animation.h"
 
@@ -38,6 +39,11 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    // Loads a .ultra file, replacing the current composition — used for the
+    // Ctrl+O dialog and for a path handed in on the command line (double-
+    // clicking a .ultra file once file association is registered).
+    void openProjectFromPath(const QString& path);
 
 private slots:
     void onParamsChanged();
@@ -133,10 +139,14 @@ private:
     QHash<int, QImage> layerSourcesAt(const SessionImage& img, int frame) const;
     void pushUndoSnapshot();
     QVector<int> addImages(const QStringList& paths);   // load files into the library only; returns new media ids
+    int  addImageToLibrary(const QImage& img, const QString& name);   // in-memory image (e.g. clipboard paste) → library
     void addLayerFromMedia(int mediaId);        // place a library source as a layer
     int  ensureBoard();                         // make sure the single composition exists
     void importSequence(const QStringList& paths);
     void switchToImage(int index);
+    bool saveProject(bool forceDialog);   // Ctrl+S; forceDialog=true always shows Save As. false = cancelled/failed
+    void openProject();                   // Ctrl+O; replaces the current composition
+    bool isDirty() const;                 // current state differs from the last save/load/empty baseline
 
     // Animation / timeline
     void setPlayhead(int frame);          // scrub: apply interpolated params + render
@@ -159,6 +169,7 @@ protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;   // prompts to save unsaved changes
 #ifdef Q_OS_WIN
     // Custom client-drawn title bar: strip the native caption via WM_NCCALCSIZE
     // while keeping native resize/snap/shadow (WM_NCHITTEST borders + caption).
@@ -193,11 +204,9 @@ private:
     QTimer m_previewTimer;   // debounce live preview until param edits settle
     QTimer m_zoomRenderTimer; // debounce re-render at higher res after zooming
 
-    // Defer the "Rendering…" status caption: only show it if a render is still
-    // running after this delay, so quick renders don't flash it on every click.
-    QTimer  m_renderStatusTimer;
-    QString m_pendingRenderStatus;
-    bool    m_renderStatusVisible = false;
+    QString       m_projectPath;    // last save/open .ultra path; empty → Ctrl+S prompts Save As
+    SessionParams m_savedParams;    // state as of the last save/load/empty-board — isDirty() diffs against this
+    Animation     m_savedAnim;
 
     QTimer          m_playTimer;
     bool            m_autoKey = false;
@@ -208,6 +217,6 @@ private:
     // Bottom Timeline/Library panel: collapses to just its tab titles when
     // dragged down past a threshold (see MainWindow ctor).
     bool m_bottomCollapsed  = false;
-    int  m_bottomExpandedH  = 220;   // default height restored when a title is clicked from collapsed
-    int  m_bottomLastPage   = 0;     // 0=Timeline, 1=Library — restored when re-expanding via drag
+    int  m_bottomExpandedH  = 150;   // default height restored when a title is clicked from collapsed
+    int  m_bottomLastPage   = 0;     // 0=Library, 1=Timeline — restored when re-expanding via drag
 };

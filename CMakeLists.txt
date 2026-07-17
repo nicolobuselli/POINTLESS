@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ULTRA_Ditherer VERSION 1.0.0 LANGUAGES CXX)
+project(ULTRATOOL VERSION 1.0.0 LANGUAGES CXX)
 
 # ── C++ standard ────────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD 17)
@@ -42,6 +42,8 @@ set(SOURCES
     src/core/BlendCompositor.h
     src/core/PaletteStore.cpp
     src/core/PaletteStore.h
+    src/core/ProjectIO.cpp
+    src/core/ProjectIO.h
     src/core/VideoIO.cpp
     src/core/VideoIO.h
 
@@ -78,13 +80,13 @@ set(SOURCES
 
 # ── Executable ───────────────────────────────────────────────────────────────
 if(WIN32)
-    add_executable(ULTRA_Ditherer WIN32 ${SOURCES})
+    add_executable(ULTRATOOL WIN32 ${SOURCES})
 else()
-    add_executable(ULTRA_Ditherer ${SOURCES})
+    add_executable(ULTRATOOL ${SOURCES})
 endif()
 
 # ── Link Qt ──────────────────────────────────────────────────────────────────
-target_link_libraries(ULTRA_Ditherer
+target_link_libraries(ULTRATOOL
     PRIVATE
         Qt6::Core
         Qt6::Gui
@@ -93,8 +95,13 @@ target_link_libraries(ULTRA_Ditherer
         Qt6::Concurrent
 )
 
+# Shell32: SHChangeNotify (main.cpp's .ultra file-association registration).
+if(WIN32)
+    target_link_libraries(ULTRATOOL PRIVATE Shell32)
+endif()
+
 # ── Include paths ────────────────────────────────────────────────────────────
-target_include_directories(ULTRA_Ditherer PRIVATE src)
+target_include_directories(ULTRATOOL PRIVATE src)
 
 # ── Windows: deploy Qt DLLs after build ──────────────────────────────────────
 if(WIN32)
@@ -103,11 +110,11 @@ if(WIN32)
     find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS "${_qt_bin_dir}")
 
     if(WINDEPLOYQT_EXECUTABLE)
-        add_custom_command(TARGET ULTRA_Ditherer POST_BUILD
+        add_custom_command(TARGET ULTRATOOL POST_BUILD
             COMMAND "${WINDEPLOYQT_EXECUTABLE}"
                     --no-translations
                     --no-opengl-sw
-                    "$<TARGET_FILE:ULTRA_Ditherer>"
+                    "$<TARGET_FILE:ULTRATOOL>"
             COMMENT "Running windeployqt..."
             VERBATIM
         )
@@ -115,10 +122,10 @@ if(WIN32)
 
     # Bundle ffmpeg.exe next to the app so video import/export works out of the box.
     if(EXISTS "${CMAKE_SOURCE_DIR}/tools/ffmpeg.exe")
-        add_custom_command(TARGET ULTRA_Ditherer POST_BUILD
+        add_custom_command(TARGET ULTRATOOL POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${CMAKE_SOURCE_DIR}/tools/ffmpeg.exe"
-                    "$<TARGET_FILE_DIR:ULTRA_Ditherer>/ffmpeg.exe"
+                    "$<TARGET_FILE_DIR:ULTRATOOL>/ffmpeg.exe"
             COMMENT "Bundling ffmpeg.exe..."
             VERBATIM
         )
@@ -127,7 +134,7 @@ endif()
 
 # ── Compiler warnings ─────────────────────────────────────────────────────────
 if(MSVC)
-    target_compile_options(ULTRA_Ditherer PRIVATE /W3)
+    target_compile_options(ULTRATOOL PRIVATE /W3)
 else()
-    target_compile_options(ULTRA_Ditherer PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(ULTRATOOL PRIVATE -Wall -Wextra -Wpedantic)
 endif()

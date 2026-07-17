@@ -3,7 +3,6 @@
         <file alias="style.qss">../assets/style.qss</file>
         <file alias="fonts/FunnelDisplay.ttf">../assets/fonts/FunnelDisplay.ttf</file>
         <file alias="logo.png">../assets/logo.png</file>
-        <file alias="example.jpg">../assets/example.jpg</file>
         <file alias="icons/plus.svg">../assets/icons/plus.svg</file>
         <file alias="icons/add_image.svg">../assets/icons/add_image.svg</file>
         <file alias="icons/minus.svg">../assets/icons/minus.svg</file>
@@ -33,5 +32,6 @@
         <file alias="icons/lock.svg">../assets/icons/lock.svg</file>
         <file alias="icons/lock_open.svg">../assets/icons/lock_open.svg</file>
         <file alias="icons/check.svg">../assets/icons/check.svg</file>
+        <file alias="icons/warning.svg">../assets/icons/warning.svg</file>
 </qresource>
 </RCC>

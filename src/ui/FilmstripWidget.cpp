@@ -4,6 +4,7 @@
 
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QAbstractButton>
@@ -260,6 +261,14 @@ FilmstripWidget::FilmstripWidget(QWidget* parent)
     m_thumbLayout->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     m_thumbRow->installEventFilter(this);
 
+    // Shown only while the library is empty; sits over the (then-empty) grid
+    // area and is kept in sync with m_thumbRow's size in the resize filter below.
+    m_emptyHint = new QLabel("Drop images here or on the frame", m_thumbRow);
+    m_emptyHint->setObjectName("filmstripEmptyHint");
+    m_emptyHint->setAlignment(Qt::AlignCenter);
+    m_emptyHint->setWordWrap(true);
+    m_emptyHint->setAttribute(Qt::WA_TransparentForMouseEvents);
+
     m_scroll->setWidget(m_thumbRow);
     installOverlayScrollbar(m_scroll);
     hl->addWidget(m_scroll, 1);
@@ -283,6 +292,7 @@ void FilmstripWidget::addThumb(int mediaId, const QImage& source, const QString&
         drag->exec(Qt::CopyAction);
     };
 
+    m_emptyHint->hide();
     relayoutGrid();
 }
 
@@ -293,9 +303,21 @@ void FilmstripWidget::removeThumb(int mediaId)
         FilmstripThumb* t = m_thumbs.takeAt(i);
         m_thumbLayout->removeWidget(t);
         t->deleteLater();
+        m_emptyHint->setVisible(m_thumbs.isEmpty());
         relayoutGrid();
         return;
     }
+}
+
+void FilmstripWidget::clear()
+{
+    for (FilmstripThumb* t : m_thumbs) {
+        m_thumbLayout->removeWidget(t);
+        t->deleteLater();
+    }
+    m_thumbs.clear();
+    m_emptyHint->show();
+    relayoutGrid();
 }
 
 void FilmstripWidget::setActive(int mediaId)
@@ -369,8 +391,10 @@ void FilmstripWidget::resizeEvent(QResizeEvent* event)
 
 bool FilmstripWidget::eventFilter(QObject* obj, QEvent* event)
 {
-    if (obj == m_thumbRow && event->type() == QEvent::Resize)
+    if (obj == m_thumbRow && event->type() == QEvent::Resize) {
         applyCellSizes();
+        m_emptyHint->setGeometry(m_thumbRow->rect());
+    }
     return QWidget::eventFilter(obj, event);
 }
 
