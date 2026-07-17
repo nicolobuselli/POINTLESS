@@ -19,10 +19,19 @@ with layers, live preview, and a dark-themed control panel.
 - Gamma-correct color math throughout (linear light for quantities,
   perceptual luma for tone/glyph selection).
 
-## Build
+## Download
 
-Requires **Qt 6** (Core, Gui, Widgets, Svg, Concurrent) and **CMake ≥ 3.22**.
-Windows only for now (video export and the app icon rely on Win32 APIs).
+Grab the latest Windows build from the
+[Releases page](https://github.com/nicolobuselli/ULTRATOOL/releases/latest):
+download the zip, extract it anywhere, and run `ULTRATOOL.exe`. No Qt,
+CMake, or other install required — the zip already bundles the Qt DLLs and
+FFmpeg.
+
+## Build from source
+
+Only needed if you want to modify the code. Requires **Qt 6** (Core, Gui,
+Widgets, Svg, Concurrent) and **CMake ≥ 3.22**. Windows only for now (video
+export and the app icon rely on Win32 APIs).
 
 ```bash
 cmake -B build -DCMAKE_PREFIX_PATH="<path-to-Qt6-install>"
