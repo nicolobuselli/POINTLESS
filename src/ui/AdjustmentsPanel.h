@@ -10,6 +10,8 @@
 #include <QHash>
 
 class QPushButton;
+class QVBoxLayout;
+class QLabel;
 
 /**
  * AdjustmentsPanel (left column)
@@ -41,9 +43,24 @@ public:
     // setAnimatedParams touches.
     QHash<QWidget*, ParamId> paramWidgets() const;
 
+    // Round-trip the "Localize" button's checked state (silent — no signal).
+    void setLocalizeChecked(bool on);
+
+    // Inserts a widget above every row here (Brightness, Contrast, …), inside
+    // the same scrolling viewport — used by ControlsPanel to fold the
+    // Transform (Position/Rotation/Scale) rows into the same scroll as the
+    // adjustments, so the merged "Transform" section scrolls as one list
+    // instead of Transform staying pinned above an independently-scrolling
+    // Adjustments viewport.
+    void prependWidget(QWidget* w);
+
 signals:
     void adjustmentsChanged();
     void resetRequested();
+    // The whole-layer mask circle (position/radius/falloff, on-canvas) should
+    // flip enabled/disabled. MainWindow owns which LocParam that maps to for
+    // the active layer's kind.
+    void localizeToggleRequested();
 
 private:
     // Tone
@@ -58,6 +75,7 @@ private:
     SliderRow* m_sharpenRadius    = nullptr;
     SliderRow* m_edgeEnhancement  = nullptr;
     QPushButton* m_invert         = nullptr;
+    QLabel*      m_invertSquare   = nullptr;   // checkmark indicator, see setAdjustments()
     SliderRow* m_blur             = nullptr;
     SliderRow* m_grain            = nullptr;
 
@@ -67,4 +85,9 @@ private:
     // Creative
     SliderRow* m_posterize = nullptr;
     SliderRow* m_threshold = nullptr;
+
+    QPushButton* m_localize       = nullptr;
+    QLabel*      m_localizeSquare = nullptr;   // checkmark indicator, see setLocalizeChecked()
+
+    QVBoxLayout* m_vlay = nullptr;   // scrollable content layout — see prependWidget()
 };

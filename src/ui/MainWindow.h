@@ -53,6 +53,7 @@ private slots:
     void onModeSelected(RenderMode m);
     void onLayerVisibilityToggled(int layerId, bool visible);
     void onLayerSelected(int layerId);
+    void onParentSelected(int mediaId);
     void onLayerRangeRequested(int layerId);
     void onLayerToggleRequested(int layerId);
     void onLayerRenamed(int layerId, const QString& name);
@@ -63,6 +64,7 @@ private slots:
     void onGroupTransformChanged(const QHash<int, LayerTransform>& byId);
     void onLocalizationChanged(LocParam p, const LocPoint& pt);
     void onLocalizationToggleRequested(LocParam p);
+    void onLocalizeToggleRequested();   // Adjustments' single mask button
     void onCanvasSelectionChanged(const QSet<int>& ids, int activeId);
     void onAddLayerRequested();
     void onLayerReordered(int layerId, int insertIndex);
@@ -125,6 +127,7 @@ private:
     void selectLayerInternal(int layerId, bool makeVisible);
     QString uniqueLayerName(const SessionParams& p, LayerKind kind, int mediaId) const;
     void syncLayersPanel();
+    void pasteLayerBelowActive();   // Ctrl+V on a focused layer row: paste right under it
     void scheduleRender(bool previewOnly = false, bool qualityOnly = false);
     float zoomQualityScale() const;   // full-pass supersample for the current zoom
     QHash<int, QImage> layerSourcesAt(const SessionImage& img, int frame) const;
@@ -178,6 +181,7 @@ private:
     int                   m_selAnchor = -1;   // anchor layer for shift-range selection
     Layer                 m_layerClipboard;
     bool                  m_hasLayerClipboard = false;
+    int                   m_selectedParentMediaId = -1;   // parent row selected (Backspace deletes group)
 
     QImage m_lastRender;
     QImage m_lastPreviewFrame;

@@ -29,6 +29,8 @@
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
 #include <QTimer>
+#include <QFontMetrics>
+#include <QResizeEvent>
 #include <cmath>
 
 // ============================================================
@@ -70,14 +72,12 @@ DragSpinBox::DragSpinBox(const QString& iconRes, int minVal, int maxVal, int def
     // Read-only + transparent-for-mouse → clicks/drags pass through to the frame;
     // it becomes the box's focus proxy so Tab stops here exactly once.
     m_valueEdit = new QLineEdit(this);
+    m_valueEdit->setObjectName("dragSpinValue");   // QSS: transparent, color, size
     m_valueEdit->setReadOnly(true);
     m_valueEdit->setFrame(false);
     m_valueEdit->setContextMenuPolicy(Qt::NoContextMenu);
     m_valueEdit->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     m_valueEdit->setAlignment(Qt::AlignVCenter | (hasIcon ? Qt::AlignRight : Qt::AlignHCenter));
-    m_valueEdit->setStyleSheet(QString(
-        "background:transparent; color:%1; font-size:%2px; font-weight:500; border:none; padding:0; min-height:0;")
-        .arg(Ui::kColValue).arg(Ui::px(Ui::kBoxFontPx)));
     m_valueEdit->installEventFilter(this);
     connect(m_valueEdit, &QLineEdit::editingFinished, this, [this]() { commitEdit(); });
     lay->addWidget(m_valueEdit, 1);
@@ -92,18 +92,11 @@ void DragSpinBox::setValue(int v)
     updateDisplay();
 }
 
-void DragSpinBox::setCompact()
+void DragSpinBox::setRange(int minVal, int maxVal)
 {
-    m_compact = true;
-    setObjectName("dragSpinBoxCompact");   // QSS: smaller min/max-height
-    setFixedHeight(Ui::px(24));
-    layout()->setContentsMargins(Ui::px(10), 0, Ui::px(10), 0);
-    m_valueEdit->setStyleSheet(QString(
-        "background:transparent; color:#A6A6A6; font-size:%1px; font-weight:500; border:none; padding:0; min-height:0;")
-        .arg(Ui::px(14)));
-    // Re-polish so the new objectName picks up its QSS rule.
-    style()->unpolish(this);
-    style()->polish(this);
+    m_min = minVal;
+    m_max = maxVal;
+    setValue(m_value);   // re-clamp to the new bounds and redraw
 }
 
 void DragSpinBox::setAnimated(bool on)
@@ -117,12 +110,11 @@ void DragSpinBox::setTextLabel(const QString& text)
 {
     if (!m_iconLbl) {
         m_iconLbl = new QLabel(this);
+        m_iconLbl->setObjectName("dragSpinLetter");   // QSS: color, size, weight
         m_iconLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
         static_cast<QHBoxLayout*>(layout())->insertWidget(0, m_iconLbl);
     }
     m_iconLbl->setText(text);
-    m_iconLbl->setStyleSheet(QString("color:%1; font-size:%2px; font-weight:700; background:transparent;")
-                             .arg(Ui::kColTitle).arg(Ui::px(Ui::kBoxFontPx)));
     // Value sits just after the letter, left-aligned.
     m_valueEdit->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
 }
@@ -182,6 +174,9 @@ void DragSpinBox::beginEdit()
     m_valueEdit->setText(QString::number(m_value));
     m_valueEdit->setFocus(Qt::OtherFocusReason);
     m_valueEdit->selectAll();
+    setProperty("editing", true);
+    style()->unpolish(this);
+    style()->polish(this);
 }
 
 void DragSpinBox::commitEdit()
@@ -193,6 +188,9 @@ void DragSpinBox::commitEdit()
     m_valueEdit->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     m_valueEdit->deselect();
     updateDisplay();
+    setProperty("editing", false);
+    style()->unpolish(this);
+    style()->polish(this);
 }
 
 void DragSpinBox::updateDisplay()
@@ -265,6 +263,19 @@ void SliderRow::setValue(int v)
     m_updating = false;
 }
 
+void SliderRow::setRange(int minVal, int maxVal)
+{
+    m_updating = true;
+    const int v = qBound(minVal, m_slider->value(), maxVal);
+    m_slider->blockSignals(true);
+    m_slider->setRange(minVal, maxVal);
+    m_slider->setValue(v);
+    m_slider->blockSignals(false);
+    m_box->setRange(minVal, maxVal);
+    m_box->setValue(v);
+    m_updating = false;
+}
+
 void SliderRow::setAnimated(bool on)
 {
     m_box->setAnimated(on);
@@ -281,15 +292,18 @@ namespace {
     static constexpr int kLvRadius  = 10;   // histogram box corner radius
     static constexpr int kLvHandleW = 13;   // handle base width (odd)
     static constexpr int kLvMarginX = 8;    // side padding (handles stay inside)
-    static constexpr int kLvBoxH    = 22;   // compact input box height
     static constexpr int kLvGap     = 6;
-    static constexpr int kLvTotalH  = kLvTrackH + kLvGap + kLvBoxH;
 } // namespace
 
 LevelsWidget::LevelsWidget(QWidget* parent)
     : QWidget(parent)
 {
-    setFixedHeight(kLvTotalH);
+    // Input boxes are full standard height (DragSpinBox's own default, same
+    // as every other box in the app) rather than the old compact/short
+    // variant, which read as a stray undersized control next to its
+    // full-height neighbours.
+    const int boxH = Ui::px(Ui::kBoxH);
+    setFixedHeight(kLvTrackH + kLvGap + boxH);
     setCursor(Qt::SizeHorCursor);
 
     // Layout only occupies the bottom strip; top is custom-painted.
@@ -304,10 +318,16 @@ LevelsWidget::LevelsWidget(QWidget* parent)
     m_boxMid   = new DragSpinBox("", 10,  500, 100, "", this);
     m_boxWhite = new DragSpinBox("", 0,   255, 255, "", this);
     for (DragSpinBox* b : { m_boxBlack, m_boxMid, m_boxWhite })
-        b->setCompact();
-    row->addWidget(m_boxBlack, 1);
-    row->addWidget(m_boxMid,   1);
-    row->addWidget(m_boxWhite, 1);
+        b->setFixedWidth(Ui::px(Ui::kCellW));   // same width as every other box's value cell
+    // Fixed-width boxes with stretch between/around them so they still sit
+    // roughly under their black/mid/white handles instead of each claiming
+    // an equal third of the full row (which made them much wider than every
+    // other box in the app).
+    row->addWidget(m_boxBlack);
+    row->addStretch(1);
+    row->addWidget(m_boxMid);
+    row->addStretch(1);
+    row->addWidget(m_boxWhite);
     vl->addLayout(row);
 
     auto boxChanged = [this](int) {
@@ -435,19 +455,23 @@ void LevelsWidget::paintEvent(QPaintEvent*)
             maxLog = std::max(maxLog, std::log1p(float(m_histogram[i])));
 
         if (maxLog > 0.0f) {
-            const float usable  = float(w) - 2.0f * kLvMarginX;
+            // Plot across the full box width (not inset by kLvMarginX, which
+            // is only needed so the handles below stay clear of the rounded
+            // corners) — the clip to boxPath below already tapers the fill
+            // into the rounding, so a manual inset here just left a flat
+            // vertical gap before the curve instead of following it.
             const float bottomY = float(kLvHistH) - 1.0f;
             const float barH    = float(kLvHistH) - 10.0f;
 
             QPolygonF poly;
             poly.reserve(258);
-            poly << QPointF(float(kLvMarginX), bottomY);
+            poly << QPointF(0.0f, bottomY);
             for (int i = 0; i < 256; ++i) {
-                const float x = kLvMarginX + i * usable / 255.0f;
+                const float x = i * float(w) / 255.0f;
                 const float t = std::log1p(float(m_histogram[i])) / maxLog;
                 poly << QPointF(x, bottomY - t * barH);
             }
-            poly << QPointF(float(kLvMarginX) + usable, bottomY);
+            poly << QPointF(float(w), bottomY);
 
             p.save();
             p.setClipPath(boxPath);
@@ -548,7 +572,7 @@ ChevronButton::ChevronButton(Direction dir, QWidget* parent)
     : QPushButton(parent), m_dir(dir)
 {
     setObjectName("iconBtn");
-    setFixedSize(24, 24);
+    setFixedSize(Ui::px(24), Ui::px(24));
     setCursor(Qt::PointingHandCursor);
 }
 
@@ -594,8 +618,9 @@ void ChevronButton::paintEvent(QPaintEvent*)
 FillSwatch::FillSwatch(QColor color, float opacity, bool showOpacity, QWidget* parent)
     : QWidget(parent), m_color(color), m_opacity(opacity), m_showOpacity(showOpacity)
 {
-    setFixedHeight(Ui::px(48));
+    setFixedHeight(Ui::px(Ui::kBoxH));
     setCursor(Qt::PointingHandCursor);
+    setAttribute(Qt::WA_Hover, true);   // so paintEvent's underMouse() repaints on hover
 
     // Selectable / hand-editable hex value over the painted area.
     m_hexEdit = new QLineEdit(this);
@@ -648,16 +673,21 @@ void FillSwatch::resizeEvent(QResizeEvent*)
     placeHexEdit();
 }
 
-int FillSwatch::dividerX() const { return width() - Ui::px(56); }
+int FillSwatch::dividerX() const { return width() - Ui::px(66); }   // room for "100%" after the line
 
 void FillSwatch::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
-    p.setPen(QPen(QColor("#5D5D5D"), 1));
-    p.setBrush(QColor("#3B3B3B"));
-    p.drawRoundedRect(rect().adjusted(0, 0, -1, -1), Ui::px(8), Ui::px(8));
+    // Same box language as every other box: transparent fill, @boxStroke
+    // border, @boxStrokeHover on hover (kept as literals here — this is raw
+    // QPainter, not QSS). Half-pixel-adjusted rect for a crisp antialiased
+    // 1px line, same technique as TextColorSwatch.
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    p.setPen(QPen(underMouse() ? QColor(0x61, 0x61, 0x61) : QColor(0x3D, 0x3D, 0x3D), 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(r, Ui::px(8), Ui::px(8));
 
     const int h      = height();
     const int padH   = Ui::px(8);
@@ -698,7 +728,7 @@ void FillSwatch::paintEvent(QPaintEvent*)
 
         p.setPen(QColor("#E3E3E3"));
         p.setFont(f);
-        p.drawText(QRect(divX + 1, 0, width() - divX - 1, h),
+        p.drawText(QRect(divX + 1, 0, width() - divX - 1 - padH, h),
                    Qt::AlignVCenter | Qt::AlignCenter,
                    QString::number(qRound(m_opacity * 100)) + "%");
     }
@@ -710,6 +740,9 @@ void FillSwatch::mouseReleaseEvent(QMouseEvent* e)
     if (e->button() == Qt::LeftButton && onClicked) onClicked();
 }
 
+void FillSwatch::enterEvent(QEnterEvent*) { update(); }
+void FillSwatch::leaveEvent(QEvent*)       { update(); }
+
 // ============================================================
 //  Color picker internals
 // ============================================================
@@ -718,14 +751,17 @@ class ColorFieldWidget : public QWidget {
 public:
     std::function<void(float s, float v)> onChanged;
     explicit ColorFieldWidget(QWidget* p = nullptr) : QWidget(p) {
-        setMinimumSize(200, 150); setCursor(Qt::CrossCursor);
+        setMinimumSize(Ui::px(200), Ui::px(150)); setCursor(Qt::CrossCursor);
     }
     void setHue(float h)         { m_hue = h; update(); }
     void setSV(float s, float v) { m_s = s; m_v = v; update(); }
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, false);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        QPainterPath clip;
+        clip.addRoundedRect(rect(), Ui::px(Ui::kBoxRadius), Ui::px(Ui::kBoxRadius));
+        p.setClipPath(clip);
         QColor hc; hc.setHsvF(qBound(0.0, (double)m_hue, 1.0), 1.0, 1.0);
         QLinearGradient hg(0, 0, width(), 0);
         hg.setColorAt(0, Qt::white); hg.setColorAt(1, hc);
@@ -735,7 +771,6 @@ protected:
         p.fillRect(rect(), vg);
         int cx = int(m_s * width());
         int cy = int((1.0f - m_v) * height());
-        p.setRenderHint(QPainter::Antialiasing, true);
         p.setPen(QPen(Qt::black, 2)); p.setBrush(Qt::NoBrush);
         p.drawEllipse(QPointF(cx, cy), 7, 7);
         p.setPen(QPen(Qt::white, 2));
@@ -755,7 +790,7 @@ private:
 class HueBarWidget : public QWidget {
 public:
     std::function<void(float h)> onChanged;
-    explicit HueBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(16); setCursor(Qt::SizeHorCursor); }
+    explicit HueBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(Ui::px(16)); setCursor(Qt::SizeHorCursor); }
     void setHue(float h) { m_hue = h; update(); }
 protected:
     void paintEvent(QPaintEvent*) override {
@@ -783,7 +818,7 @@ private:
 class OpacityBarWidget : public QWidget {
 public:
     std::function<void(float a)> onChanged;
-    explicit OpacityBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(16); setCursor(Qt::SizeHorCursor); }
+    explicit OpacityBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(Ui::px(16)); setCursor(Qt::SizeHorCursor); }
     void setColor(QColor c) { m_color = c; update(); }
     void setAlpha(float a)  { m_alpha = a; update(); }
 protected:
@@ -974,7 +1009,7 @@ ColorPickerDialog::ColorPickerDialog(QColor initial, float initialOpacity,
 {
     setAttribute(Qt::WA_TranslucentBackground);
     setModal(false);
-    setFixedSize(300, showOpacity ? 350 : 300);
+    setFixedSize(Ui::px(340), Ui::px(showOpacity ? 350 : 300));
 
     initial.getHsvF(&m_h, &m_s, &m_v);
     if (m_h < 0) m_h = 0.f;
@@ -1033,8 +1068,8 @@ void ColorPickerDialog::buildUI(bool showOpacity)
         "QLineEdit:focus{border-color:#828282;}";
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(16, 16, 16, 16);
-    root->setSpacing(12);
+    root->setContentsMargins(Ui::px(16), Ui::px(16), Ui::px(16), Ui::px(16));
+    root->setSpacing(Ui::px(12));
 
     // Saturation / value field
     m_field = new ColorFieldWidget;
@@ -1044,13 +1079,14 @@ void ColorPickerDialog::buildUI(bool showOpacity)
     // Eyedropper (left) + hue / opacity bars (right)
     {
         auto* row = new QHBoxLayout;
-        row->setSpacing(12);
+        row->setSpacing(Ui::px(12));
 
         auto* eyeBtn = new QPushButton;
         eyeBtn->setObjectName("eyeDropBtn");
+        eyeBtn->setAutoDefault(false);   // else Enter in hex/opacity fields also fires this
         eyeBtn->setCursor(Qt::PointingHandCursor);
-        eyeBtn->setFixedSize(30, 30);
-        eyeBtn->setIconSize(QSize(18, 18));
+        eyeBtn->setFixedSize(Ui::px(30), Ui::px(30));
+        eyeBtn->setIconSize(QSize(Ui::px(18), Ui::px(18)));
         eyeBtn->setIcon(QIcon(":/icons/color_picker.svg"));
         eyeBtn->setToolTip("Pick color from screen");
         eyeBtn->setStyleSheet(
@@ -1059,7 +1095,7 @@ void ColorPickerDialog::buildUI(bool showOpacity)
         row->addWidget(eyeBtn, 0, Qt::AlignVCenter);
 
         auto* bars = new QVBoxLayout;
-        bars->setSpacing(10);
+        bars->setSpacing(Ui::px(10));
         m_hueBar = new HueBarWidget;
         bars->addWidget(m_hueBar);
         if (showOpacity) {
@@ -1100,7 +1136,7 @@ void ColorPickerDialog::buildUI(bool showOpacity)
     // Hex value + opacity %
     {
         auto* row = new QHBoxLayout;
-        row->setSpacing(8);
+        row->setSpacing(Ui::px(8));
 
         m_hexInput = new QLineEdit;
         m_hexInput->setStyleSheet(kInputQss);
@@ -1109,7 +1145,7 @@ void ColorPickerDialog::buildUI(bool showOpacity)
         if (showOpacity) {
             m_opacityInput = new QLineEdit;
             m_opacityInput->setAlignment(Qt::AlignCenter);
-            m_opacityInput->setFixedWidth(52);
+            m_opacityInput->setFixedWidth(Ui::px(64));
             m_opacityInput->setStyleSheet(kInputQss);
             row->addWidget(m_opacityInput);
 
@@ -1236,8 +1272,17 @@ QPushButton* makeIconButton(const QString& iconRes)
     auto* btn = new QPushButton;
     btn->setObjectName("iconBtn");
     btn->setIcon(QIcon(iconRes));
-    btn->setIconSize(QSize(14, 14));
-    btn->setFixedSize(24, 24);
+    // Icon size derived from the button size (not scaled independently):
+    // Ui::px() rounds each argument on its own, so a separately-scaled
+    // 24/14 pair can land on an odd button-minus-icon difference, which
+    // makes Qt's integer icon-centering math split the leftover pixel
+    // unevenly (icon reads off-centre, more margin on one side). Deriving
+    // the icon size from the already-rounded button size keeps the gap
+    // exactly 2×pad — always even, so the icon lands dead centre.
+    const int btnPx = Ui::px(24);
+    const int pad   = Ui::px(5);
+    btn->setIconSize(QSize(btnPx - 2 * pad, btnPx - 2 * pad));
+    btn->setFixedSize(btnPx, btnPx);
     return btn;
 }
 
@@ -1269,7 +1314,7 @@ AnimProgressDialog::AnimProgressDialog(const QString& labelText, int maxValue, Q
     auto* btnRow = new QHBoxLayout;
     btnRow->addStretch(1);
     auto* cancelBtn = new QPushButton("Cancel");
-    cancelBtn->setObjectName("resetBtn");
+    cancelBtn->setObjectName("exportBtn");
     cancelBtn->setCursor(Qt::PointingHandCursor);
     cancelBtn->setFixedHeight(Ui::px(36));
     connect(cancelBtn, &QPushButton::clicked, this, [this] { m_canceled = true; });
@@ -1477,11 +1522,21 @@ PopupPicker::PopupPicker(int columns, QWidget* parent)
 {
     setObjectName("algoBox");
     setCursor(Qt::PointingHandCursor);
-    setFixedHeight(Ui::px(48));
+    setFixedHeight(Ui::px(Ui::kBoxH));
 
     auto* hl = new QHBoxLayout(this);
-    hl->setContentsMargins(0, 0, Ui::px(14), 0);
-    hl->addStretch(1);
+    hl->setContentsMargins(Ui::px(12), 0, Ui::px(14), 0);
+    hl->setSpacing(Ui::px(6));
+    // The value text is its own label (not the QPushButton's native text):
+    // native text painting ignores the arrow's layout slot and a long value
+    // (e.g. a font family name) draws straight under/over it. The label
+    // elides with "…" instead, same behaviour as a QComboBox's own text.
+    m_label = new QLabel;
+    m_label->setObjectName("algoBoxLabel");   // own QSS rule: font-size doesn't reliably
+                                               // cascade from #algoBox down to a child QLabel
+    m_label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    hl->addWidget(m_label, 1);
     m_arrow = new QLabel;
     m_arrow->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_arrow->setStyleSheet("background:transparent; border:none;");
@@ -1507,13 +1562,41 @@ void PopupPicker::setValue(const QVariant& v)
 {
     m_value = v;
     for (const auto& e : m_entries)
-        if (!e.label.isEmpty() && e.value == v) { setText(e.label); break; }
+        if (!e.label.isEmpty() && e.value == v) { m_fullText = e.label; updateElide(); break; }
+}
+
+void PopupPicker::setPlaceholder(const QString& text)
+{
+    m_value = QVariant();
+    m_fullText = text;
+    updateElide();
+}
+
+void PopupPicker::setAccent(bool on)
+{
+    setObjectName(on ? "algoBoxAccent" : "algoBox");
+    m_label->setObjectName(on ? "algoBoxLabelAccent" : "algoBoxLabel");
+    style()->unpolish(this);
+    style()->polish(this);
+    style()->unpolish(m_label);
+    style()->polish(m_label);
 }
 
 void PopupPicker::setArrowOpen(bool open)
 {
     m_arrow->setPixmap(QIcon(open ? ":/icons/arrow_up.svg" : ":/icons/arrow.svg")
                            .pixmap(Ui::px(14), Ui::px(8)));
+}
+
+void PopupPicker::updateElide()
+{
+    m_label->setText(QFontMetrics(m_label->font()).elidedText(m_fullText, Qt::ElideRight, m_label->width()));
+}
+
+void PopupPicker::resizeEvent(QResizeEvent* e)
+{
+    QPushButton::resizeEvent(e);
+    updateElide();
 }
 
 void PopupPicker::openPopup()
@@ -1547,7 +1630,16 @@ void PopupPicker::openPopup()
 
     int row = 0, col = 0;
     for (const auto& e : m_entries) {
-        if (e.label.isEmpty()) {                        // group header pill
+        if (e.label.isEmpty() && e.lineHeader) {        // plain divider (Fusion's categories)
+            if (col) { ++row; col = 0; }
+            if (row > 0) {   // nothing to divide from above the very first entry
+                auto* line = new QFrame;
+                line->setFixedHeight(1);
+                line->setStyleSheet("background:#5d5d5d;border:none;");
+                gl->addWidget(line, row++, 0, 1, m_columns);
+                measureWidgets.push_back(line);
+            }
+        } else if (e.label.isEmpty()) {                 // group header pill
             if (col) { ++row; col = 0; }
             auto* h = new QLabel(e.header);
             h->setObjectName("algoHeader");
@@ -1637,6 +1729,14 @@ void PopupPicker::openPopup()
     pop->move(pos);
 
     setArrowOpen(true);
-    connect(pop, &QObject::destroyed, this, [this]() { setArrowOpen(false); });
+    setProperty("popupOpen", true);
+    style()->unpolish(this);
+    style()->polish(this);
+    connect(pop, &QObject::destroyed, this, [this]() {
+        setArrowOpen(false);
+        setProperty("popupOpen", false);
+        style()->unpolish(this);
+        style()->polish(this);
+    });
     pop->show();
 }

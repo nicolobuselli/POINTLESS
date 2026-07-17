@@ -2,6 +2,7 @@
 #include "PreviewWidget.h"
 #include "ControlsPanel.h"
 #include "UiScale.h"
+#include "Theme.h"
 #include "ModePanel.h"
 #include "FilmstripWidget.h"
 #include "TimelineWidget.h"
@@ -38,6 +39,19 @@
 namespace {
 constexpr int kMaxUndoSteps   = 100;
 constexpr int kUndoDebounceMs = 400;
+
+// The whole-layer-mask LocParam for a layer kind — the single "Localize"
+// button in Adjustments toggles this one point (position/radius/falloff),
+// which the shared LocMask/spotlight logic already masks the render with.
+LocParam maskParamFor(LayerKind kind)
+{
+    switch (kind) {
+        case LayerKind::Dither: return LocParam::DiMask;
+        case LayerKind::Ascii:  return LocParam::AsMask;
+        case LayerKind::Mosaic: return LocParam::MsMask;
+        default:                return LocParam::HtMask;
+    }
+}
 
 bool isVideoFile(const QString& path)
 {
@@ -88,7 +102,7 @@ public:
         auto* hl = new QHBoxLayout(this);
         // Left gutter 40 = left column gutter. Right gutter pulled in from the
         // screen edge (the controls sit at the maximized window's corner).
-        hl->setContentsMargins(Ui::px(40), 0, Ui::px(30), 0);
+        hl->setContentsMargins(Ui::px(Ui::kColLeft), 0, Ui::px(30), 0);
         hl->setSpacing(0);
 
         const int lh = Ui::px(34);
@@ -297,7 +311,7 @@ MainWindow::MainWindow(QWidget* parent)
     mainSplit->setStretchFactor(1, 1);
     mainSplit->setStretchFactor(2, 0);
     // Start with the side columns at their minimum width (the user can widen).
-    mainSplit->setSizes({ Ui::px(420), Ui::px(1718), Ui::px(420) });
+    mainSplit->setSizes({ Ui::px(410), Ui::px(1738), Ui::px(410) });
 
     hl->addWidget(mainSplit);
     rootV->addWidget(content, 1);
@@ -374,6 +388,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_undoTimer.start();
     });
     connect(m_right, &ModePanel::localizationToggleRequested, this, &MainWindow::onLocalizationToggleRequested);
+    connect(m_left, &ControlsPanel::localizeToggleRequested, this, &MainWindow::onLocalizeToggleRequested);
     connect(m_preview, &PreviewWidget::selectionChanged, this, &MainWindow::onCanvasSelectionChanged);
     connect(m_right, &ModePanel::paramsChanged,             this, &MainWindow::onParamsChanged);
     connect(m_right, &ModePanel::tonalChanged,              this, &MainWindow::onParamsChanged);
@@ -435,6 +450,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_undoTimer.start();      // no render: locking changes no pixels
     });
     connect(m_layersPanel, &LayersPanel::layerSelected,     this, &MainWindow::onLayerSelected);
+    connect(m_layersPanel, &LayersPanel::parentSelected,    this, &MainWindow::onParentSelected);
     connect(m_layersPanel, &LayersPanel::layerRangeRequested, this, &MainWindow::onLayerRangeRequested);
     connect(m_layersPanel, &LayersPanel::layerToggleRequested, this, &MainWindow::onLayerToggleRequested);
     connect(m_layersPanel, &LayersPanel::layerRenamed,      this, &MainWindow::onLayerRenamed);
@@ -510,6 +526,8 @@ MainWindow::MainWindow(QWidget* parent)
         QWidget* fw = QApplication::focusWidget();
         if (m_timeline && fw && (fw == m_timeline || m_timeline->isAncestorOf(fw)))
             m_timeline->pasteKeys();
+        else if (m_layersPanel && fw && m_layersPanel->isAncestorOf(fw))
+            pasteLayerBelowActive();
     });
 
     // ── Demo image ───────────────────────────────────────────
@@ -573,7 +591,14 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         break;
     }
     case WM_NCHITTEST: {
-        const qreal dpr = devicePixelRatioF();
+        // devicePixelRatioF() can lag behind the monitor the window is
+        // currently on (mixed-DPI multi-monitor moves) — read the DPI live
+        // off the window itself, same source WM_NCCALCSIZE above uses, so
+        // this physical→logical conversion can't drift out of sync with it.
+        // A drifted dpr here made canvas clicks occasionally land inside the
+        // title bar's mapped rect → HTCAPTION → Windows' native window-drag
+        // ghost preview flashing over the canvas.
+        const qreal dpr = ::GetDpiForWindow(msg->hwnd) / 96.0;
         const LONG gx = GET_X_LPARAM(msg->lParam);
         const LONG gy = GET_Y_LPARAM(msg->lParam);
         RECT w; ::GetWindowRect(msg->hwnd, &w);
@@ -591,11 +616,27 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
             if (B)      { *result = HTBOTTOM;      return true; }
         }
         // Over the custom caption (but not its buttons) → native drag/snap.
+        // The vertical/horizontal band is derived from the window's own
+        // just-queried rect (w) and the same design-scale formula Ui::px()
+        // uses, NOT from m_titleBar->height()/width()/mapFromGlobal(): those
+        // route through Qt's cached widget-layout geometry, which can lag a
+        // live resize/maximize by a frame (confirmed by logging — a stale
+        // rect once reported 960x28 at (50,176) while the real window was
+        // still fullscreen). nativeEvent runs synchronously off the raw
+        // Win32 message pump, so it can observe that stale geometry mid-
+        // transition — a click deep in the canvas would then test against a
+        // leftover, wrongly-sized/positioned title-bar rect and be misread
+        // as HTCAPTION, flashing Windows' native window-drag ghost preview
+        // over the canvas for an ordinary click. Recomputing the band from
+        // data fetched in this exact call can't ever be stale.
         if (m_titleBar) {
-            const QPoint local = m_titleBar->mapFromGlobal(
-                QPoint(qRound(gx / dpr), qRound(gy / dpr)));
-            if (m_titleBar->rect().contains(local)
-                && !qobject_cast<QPushButton*>(m_titleBar->childAt(local))) {
+            const double winWidthLogical = (w.right - w.left) / dpr;
+            const int titleH = qRound(44.0 * (winWidthLogical / Ui::kDesignWidth));
+            const int localX = qRound((gx - w.left) / dpr);
+            const int localY = qRound((gy - w.top)  / dpr);
+            if (localY >= 0 && localY < titleH
+                && localX >= 0 && localX < qRound(winWidthLogical)
+                && !qobject_cast<QPushButton*>(m_titleBar->childAt(localX, localY))) {
                 *result = HTCAPTION;
                 return true;
             }
@@ -611,8 +652,27 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 {
-    if (obj == this && event->type() == QEvent::WindowStateChange && m_titleBar)
+    if (obj == this && event->type() == QEvent::WindowStateChange && m_titleBar) {
         m_titleBar->updateMaxIcon();
+#ifdef Q_OS_WIN
+        // Windows quirk with frameless custom-chrome windows: restoring from
+        // the taskbar while maximized can bring the window back at its
+        // pre-maximize RECT even though IsZoomed()/isMaximized() still
+        // reports true (so the titlebar's restore-icon and showNormal()/
+        // showMaximized() toggle both stay "correct" on paper, but the
+        // window visibly renders windowed-sized). Nudge Win32 to redo the
+        // NCCALCSIZE layout pass (our WM_NCCALCSIZE handler above) so the
+        // visible geometry matches the reported state again.
+        auto* wsce = static_cast<QWindowStateChangeEvent*>(event);
+        const bool wasMinimized = wsce->oldState() & Qt::WindowMinimized;
+        const bool nowMinimized = windowState() & Qt::WindowMinimized;
+        if (wasMinimized && !nowMinimized && isMaximized()) {
+            HWND hwnd = reinterpret_cast<HWND>(winId());
+            ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+#endif
+    }
 
     const bool editableFocus = qobject_cast<QLineEdit*>(QApplication::focusWidget()) != nullptr;
 
@@ -744,6 +804,15 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
     // Backspace / Delete removes the active layer (unless typing in a field).
     if ((event->key() == Qt::Key_Backspace || event->key() == Qt::Key_Delete)
         && !qobject_cast<QLineEdit*>(QApplication::focusWidget())) {
+        // A selected parent (source image) row deletes the whole group — itself
+        // plus every child layer drawing from it — instead of a single layer.
+        if (m_selectedParentMediaId >= 0) {
+            const int mediaId = m_selectedParentMediaId;
+            m_selectedParentMediaId = -1;
+            onDeleteParentRequested(mediaId);
+            event->accept();
+            return;
+        }
         // Selected timeline keyframes take precedence over deleting the layer.
         if (m_timeline && m_timeline->deleteSelectedKeys()) {
             event->accept();
@@ -900,12 +969,24 @@ void MainWindow::applyParams(const SessionParams& p)
     if (idx < 0 && !p.layers.empty()) idx = 0;
     if (idx < 0) return;
 
+    m_selectedParentMediaId = -1;   // panels now follow a concrete child again
+
     const Layer& l = p.layers[idx];
     m_left->setAdjustments(l.adjustments);
     m_left->setFrameSize(p.frameW > 0 ? p.frameW : 1080,
                          p.frameH > 0 ? p.frameH : 1080);
     m_left->setTransform(l.transform);   // boxes follow the active layer
     pushPreviewTransform();              // overlay follows the active layer
+
+    // "Localize" button follows the active layer's own mask point.
+    const LocMap* maskMap = nullptr;
+    switch (l.kind) {
+        case LayerKind::Dither: maskMap = &l.dither.loc; break;
+        case LayerKind::Ascii:  maskMap = &l.ascii.loc;  break;
+        case LayerKind::Mosaic: maskMap = &l.mosaic.loc; break;
+        default:                maskMap = &l.halftone.loc; break;
+    }
+    m_left->setLocalizeChecked(locPointOr(*maskMap, maskParamFor(l.kind)).enabled);
 
     // Fill (tonal), Fusion and enabled-state are handled by setFromLayer;
     // background is shared and set explicitly.
@@ -934,6 +1015,7 @@ void MainWindow::syncLayersPanel()
     m_layersPanel->setBackground(st.background, st.backgroundOpacity);
     m_layersPanel->setTree(st.parents, st.layers, st.activeLayerId, mediaImages);
     m_layersPanel->setSelection(m_selection);   // reflect multi-select highlight
+    m_layersPanel->setSelectedParent(m_selectedParentMediaId);
 }
 
 void MainWindow::onParamsChanged()
@@ -1254,8 +1336,19 @@ void MainWindow::onModeSelected(RenderMode m)
     if (!act) return;
     if (act->kind == kind) { applyParams(st); return; }
 
+    // Each mode keeps its own `tonal` field, but re-doing the Fill setup after
+    // every mode switch is friction — carry whatever is currently shown into
+    // the new mode's slot before applyParams() reads it back.
+    const TonalSettings tonal = m_right->tonalSettings();
     act->kind = kind;
     act->name = uniqueLayerName(st, kind, act->mediaId);   // name follows the mode
+    switch (kind) {
+        case LayerKind::Halftone: act->halftone.tonal = tonal; break;
+        case LayerKind::Dither:   act->dither.tonal   = tonal; break;
+        case LayerKind::Ascii:    act->ascii.tonal    = tonal; break;
+        case LayerKind::Mosaic:   act->mosaic.tonal   = tonal; break;
+        case LayerKind::Original: break;
+    }
 
     applyParams(st);
     syncLayersPanel();
@@ -1281,6 +1374,7 @@ void MainWindow::onLayerVisibilityToggled(int layerId, bool visible)
 void MainWindow::onLayerSelected(int layerId)
 {
     if (m_current < 0) return;
+    m_selectedParentMediaId = -1;     // picking a child deselects any parent row
     m_selAnchor = layerId;            // anchor for a subsequent shift-range
     m_selection = { layerId };
     if (m_images[m_current].state.activeLayerId == layerId) {
@@ -1296,6 +1390,7 @@ void MainWindow::onLayerSelected(int layerId)
 void MainWindow::onLayerRangeRequested(int layerId)
 {
     if (m_current < 0) return;
+    m_selectedParentMediaId = -1;
     auto& st = m_images[m_current].state;
     const int to = findLayerById(st.layers, layerId);
     if (to < 0) return;
@@ -1316,6 +1411,7 @@ void MainWindow::onLayerRangeRequested(int layerId)
 void MainWindow::onLayerToggleRequested(int layerId)
 {
     if (m_current < 0) return;
+    m_selectedParentMediaId = -1;
     auto& st = m_images[m_current].state;
     if (findLayerById(st.layers, layerId) < 0) return;
 
@@ -1490,6 +1586,13 @@ void MainWindow::onLocalizationToggleRequested(LocParam p)
     m_undoTimer.start();
 }
 
+void MainWindow::onLocalizeToggleRequested()
+{
+    Layer* l = activeLayer();
+    if (!l) return;
+    onLocalizationToggleRequested(maskParamFor(l->kind));
+}
+
 void MainWindow::onGroupTransformChanged(const QHash<int, LayerTransform>& byId)
 {
     if (m_current < 0) return;
@@ -1605,7 +1708,13 @@ void MainWindow::onCanvasSelectionChanged(const QSet<int>& ids, int activeId)
         st.activeLayerId = activeId;
 
     applyParams(st);      // refresh panels + pushPreviewTransform (pushes selection)
-    syncLayersPanel();
+    // Highlight-only: a canvas click never touches a layer's pixels, so a full
+    // syncLayersPanel() (which re-renders every thumbnail, incl. the palette
+    // colour-match pass) was doing a wasted synchronous re-render per click —
+    // heavy enough with a Fill palette active to briefly freeze/ghost the
+    // window. setActiveSelection() just updates which row(s) read selected.
+    m_layersPanel->setActiveSelection(st.activeLayerId, m_selection);
+    m_layersPanel->setSelectedParent(m_selectedParentMediaId);
     // No scheduleRender(): clicking the canvas only changes which layer is
     // active/selected (a UI concept — activeLayerId isn't read by the render
     // pipeline), never a layer's visibility or content, so the composited
@@ -1622,14 +1731,15 @@ void MainWindow::onAddLayerRequested()
     if (!act) return;                 // need a parent to attach the new child to
 
     Layer nl = *act;                  // duplicate the active child (settings + parent)
-    nl.id      = st.nextLayerId++;
-    nl.kind    = LayerKind::Original; // new children start mode-less; user picks a mode
-    nl.name    = uniqueLayerName(st, nl.kind, nl.mediaId);
-    nl.visible = true;
-    nl.pinned  = true;
+    nl.id        = st.nextLayerId++;
+    nl.kind      = LayerKind::Original; // new children start mode-less; user picks a mode
+    nl.name      = uniqueLayerName(st, nl.kind, nl.mediaId);
+    nl.visible   = true;
+    nl.pinned    = true;
+    nl.transform = LayerTransform{};  // fresh layer, not stacked on the source's placement
 
     const int insertAt = findLayerById(st.layers, act->id);
-    st.layers.insert(st.layers.begin() + qMax(0, insertAt), nl);
+    st.layers.insert(st.layers.begin() + qBound(0, insertAt + 1, int(st.layers.size())), nl);
     st.activeLayerId = nl.id;
     regroupLayers(st);
 
@@ -1718,6 +1828,31 @@ void MainWindow::onPasteLayerRequested(int layerId)
     m_undoTimer.start();
 }
 
+// Ctrl+V while a layer row has focus: paste directly under the active layer
+// (context-menu "Paste layer" instead pastes above the row it was invoked on).
+void MainWindow::pasteLayerBelowActive()
+{
+    if (m_current < 0 || !m_hasLayerClipboard) return;
+    auto& st = m_images[m_current].state;
+
+    const int activeIdx = findLayerById(st.layers, st.activeLayerId);
+    if (activeIdx < 0) return;
+
+    Layer nl = m_layerClipboard;
+    nl.id   = st.nextLayerId++;
+    nl.name = uniqueLayerName(st, nl.kind, nl.mediaId);
+
+    st.layers.insert(st.layers.begin() + activeIdx + 1, nl);
+    st.activeLayerId = nl.id;
+    regroupLayers(st);
+
+    applyParams(st);
+    syncLayersPanel();
+    scheduleRender();
+    m_undoTimer.start();
+    m_preview->setStatus("Layer pasted");
+}
+
 // ── Cascade operations (driven by the layer tree) ───────────────────────────
 
 void MainWindow::onAddChildRequested(int mediaId)
@@ -1736,6 +1871,15 @@ void MainWindow::onAddChildRequested(int mediaId)
     st.layers.insert(st.layers.begin(), child);
     st.activeLayerId = child.id;
     commitStructuralChange();
+}
+
+void MainWindow::onParentSelected(int mediaId)
+{
+    if (m_current < 0) return;
+    m_selectedParentMediaId = mediaId;
+    m_selection.clear();   // clear child highlight so only the parent row reads selected
+    m_preview->setSelection(m_selection, m_images[m_current].state.activeLayerId);
+    syncLayersPanel();
 }
 
 void MainWindow::onParentReordered(int mediaId, int insertIndex)
@@ -1828,6 +1972,8 @@ void MainWindow::onDeleteParentRequested(int mediaId)
     auto& st = board.state;
     const int pi = findParentByMedia(st.parents, mediaId);
     if (pi < 0) return;
+
+    if (m_selectedParentMediaId == mediaId) m_selectedParentMediaId = -1;
 
     // Remove the source from the COMPOSITION (its layers + group), but keep it
     // in the library (board.media + filmstrip) so it can be re-added. Use the
@@ -1923,7 +2069,8 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
         // Full pass only — no fast preview pass to flash/jitter during zoom.
         m_worker->requestFullRender(source, params, ls);
     else
-        m_worker->requestRender(source, params, /*fullPass=*/!previewOnly, ls);
+        m_worker->requestRender(source, params, /*fullPass=*/!previewOnly, ls,
+                                /*cheapDrag=*/m_transformDragging);
 }
 
 // Resolve, for each media layer, the image it draws at `frame` (a clip indexes
@@ -2066,6 +2213,13 @@ void MainWindow::copyToClipboard()
     }
     if (auto* le = qobject_cast<QLineEdit*>(QApplication::focusWidget())) {
         le->copy();
+        return;
+    }
+    // A layer row has keyboard focus (clicked in the panel) → copy that layer,
+    // not the rendered image.
+    if (m_layersPanel && fw && m_layersPanel->isAncestorOf(fw) && m_current >= 0) {
+        const int id = m_images[m_current].state.activeLayerId;
+        if (id >= 0) onCopyLayerRequested(id);
         return;
     }
     if (!m_lastRender.isNull()) {

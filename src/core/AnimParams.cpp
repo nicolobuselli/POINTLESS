@@ -55,19 +55,19 @@ const std::array<ParamDesc, int(ParamId::LocFirst)> kDescs = {{
     { "Line angle",         0,   180,  false, ParamScope::Dither },
     { "Line spacing",       2,    32,  true,  ParamScope::Dither },
 
-    { "Cell size",          4,    48,  true,  ParamScope::Ascii },
+    { "Cell size",          4,   100,  true,  ParamScope::Ascii },
     { "Gamma",            0.1,   5.0,  false, ParamScope::Ascii },
     { "Edges",              0,   100,  true,  ParamScope::Ascii },
     { "Hatching",            0,   100,  true,  ParamScope::Ascii },
     { "Stipple",             0,   100,  true,  ParamScope::Ascii },
     { "Contour",             0,   100,  true,  ParamScope::Ascii },
+    { "Opacity",             0,     1,  false, ParamScope::Ascii },
 
     { "Spacing",             2,   200,  false, ParamScope::Mosaic },
     { "Width %",            10,   300,  false, ParamScope::Mosaic },
     { "Height %",           10,   300,  false, ParamScope::Mosaic },
     { "Text padding",        0,    45,  true,  ParamScope::Mosaic },
-    { "Gap X",               0,    90,  false, ParamScope::Mosaic },
-    { "Gap Y",               0,    90,  false, ParamScope::Mosaic },
+    { "Grid rotation",       0,   360,  false, ParamScope::Mosaic },
 
     { "Threshold 1",        0,   255,  true,  ParamScope::Tonal },
     { "Threshold 2",        0,   255,  true,  ParamScope::Tonal },
@@ -108,10 +108,10 @@ int toneLevelIndex(ParamId id)
 
 // Display name of each LocParam; order MUST match the LocParam enum.
 const char* kLocLabels[int(LocParam::Count)] = {
-    "Diameter", "Gamma", "Weight", "Jitter",
-    "Strength", "Threshold", "Levels", "Line angle", "Line spacing",
-    "Gamma", "Edges", "Hatching", "Stipple", "Contour",
-    "Spacing", "Width %", "Height %", "Text padding", "Gap X", "Gap Y",
+    "Diameter", "Gamma", "Weight", "Jitter", "Mask",
+    "Strength", "Threshold", "Levels", "Line angle", "Line spacing", "Mask",
+    "Gamma", "Edges", "Hatching", "Stipple", "Contour", "Mask",
+    "Spacing", "Width %", "Height %", "Text padding", "Mask",
 };
 
 ParamScope locScope(LocParam p)
@@ -243,13 +243,13 @@ double getParam(const Layer& l, ParamId id)
         case ParamId::AsHatching: return l.ascii.hatching;
         case ParamId::AsStipple:  return l.ascii.stipple;
         case ParamId::AsContour:  return l.ascii.contour;
+        case ParamId::AsOpacity:  return l.ascii.opacity;
 
         case ParamId::MsSpacing:     return l.mosaic.spacing;
         case ParamId::MsWidthPct:    return l.mosaic.widthPct;
         case ParamId::MsHeightPct:   return l.mosaic.heightPct;
         case ParamId::MsTextPadding: return l.mosaic.textPadding;
-        case ParamId::MsGapX:        return l.mosaic.gapX;
-        case ParamId::MsGapY:        return l.mosaic.gapY;
+        case ParamId::MsGridRotation: return l.mosaic.gridRotation;
 
         default: return 0.0;   // Document params handled elsewhere
     }
@@ -330,13 +330,13 @@ void setParam(Layer& l, ParamId id, double v)
         case ParamId::AsHatching: l.ascii.hatching = iv; break;
         case ParamId::AsStipple:  l.ascii.stipple  = iv; break;
         case ParamId::AsContour:  l.ascii.contour  = iv; break;
+        case ParamId::AsOpacity:  l.ascii.opacity  = fv; break;
 
         case ParamId::MsSpacing:     l.mosaic.spacing     = fv; break;
         case ParamId::MsWidthPct:    l.mosaic.widthPct    = fv; break;
         case ParamId::MsHeightPct:   l.mosaic.heightPct   = fv; break;
         case ParamId::MsTextPadding: l.mosaic.textPadding = iv; break;
-        case ParamId::MsGapX:        l.mosaic.gapX        = fv; break;
-        case ParamId::MsGapY:        l.mosaic.gapY        = fv; break;
+        case ParamId::MsGridRotation: l.mosaic.gridRotation = fv; break;
 
         default: break;   // Document params handled elsewhere
     }

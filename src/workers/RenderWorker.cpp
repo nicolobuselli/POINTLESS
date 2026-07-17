@@ -273,9 +273,16 @@ QImage RenderWorker::renderDocumentInteractive(const QImage& source, const Sessi
     return renderDocumentImpl(source, params, layerSrc, &m_layerCache, &m_layerCacheMutex);
 }
 
+// Exact (collision-free) key for a raster size, used to let the interactive,
+// full and zoomed-full passes keep separate cache slots per layer id.
+static qint64 rasterSizeKey(QSize s)
+{
+    return (qint64(quint32(s.width())) << 32) | quint32(s.height());
+}
+
 QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParams& params,
                                         const QHash<int, QImage>& layerSrc,
-                                        QHash<int, RenderWorker::LayerCacheEntry>* cache,
+                                        QHash<int, QHash<qint64, RenderWorker::LayerCacheEntry>>* cache,
                                         QMutex* cacheMutex)
 {
     // Canvas size = the frame. Fallback to the base/first-media size for
@@ -318,15 +325,20 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
         contentKey.transform.flipH = contentKey.transform.flipV = false;
         const void* srcBits = static_cast<const void*>(j.origSrc.constBits());
 
+        const qint64 sizeKey = rasterSizeKey(j.origSrc.size());
+
         QImage rendered;
         bool hit = false;
         if (cache) {
             QMutexLocker lock(cacheMutex);
-            auto it = cache->find(j.origLayer.id);
-            if (it != cache->end() && it->key == contentKey
-                && it->srcSize == j.origSrc.size() && it->srcBits == srcBits) {
-                rendered = it->rendered;
-                hit = true;
+            auto layerIt = cache->find(j.origLayer.id);
+            if (layerIt != cache->end()) {
+                auto sizeIt = layerIt->find(sizeKey);
+                if (sizeIt != layerIt->end() && sizeIt->key == contentKey
+                    && sizeIt->srcBits == srcBits) {
+                    rendered = sizeIt->rendered;
+                    hit = true;
+                }
             }
         }
         if (!hit) {
@@ -337,7 +349,7 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
             rendered = renderLayer(wsrc, wlayer);
             if (cache) {
                 QMutexLocker lock(cacheMutex);
-                (*cache)[j.origLayer.id] = { contentKey, j.origSrc.size(), srcBits, rendered };
+                (*cache)[j.origLayer.id][sizeKey] = { contentKey, j.origSrc.size(), srcBits, rendered };
             }
         }
 
@@ -554,11 +566,13 @@ RenderWorker::RenderWorker(QObject* parent)
 RenderWorker::~RenderWorker() = default;
 
 void RenderWorker::requestRender(const QImage& source, const SessionParams& params,
-                                 bool fullPass, const QHash<int, QImage>& layerSrc)
+                                 bool fullPass, const QHash<int, QImage>& layerSrc,
+                                 bool cheapDrag)
 {
     m_sourceImage  = source;
     m_latestParams = params;
     m_layerSrc     = layerSrc;
+    m_cheapDrag    = cheapDrag;
 
     if (m_fastWatcher.isRunning()) {
         m_fastPending = true;
@@ -638,7 +652,8 @@ QImage RenderWorker::renderPreviewCached(const QImage& source, const SessionPara
     return renderDocumentImpl(small, p, scaledLayerSrc(layerSrc, k), &m_layerCache, &m_layerCacheMutex);
 }
 
-SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float scale)
+SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float scale,
+                                             bool shrinkSymbols)
 {
     SessionParams p = params;
     // The frame is the output canvas; scale it (and the per-pixel params) so the
@@ -646,11 +661,17 @@ SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float 
     p.frameW = qMax(1, qRound(p.frameW * scale));
     p.frameH = qMax(1, qRound(p.frameH * scale));
     for (Layer& l : p.layers) {
-        l.ascii.cellSize   = qMax(3, int(l.ascii.cellSize * scale));
-        l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize * scale));
-        // Halftone dot pitch is a fixed pixel value: scale it with the image too,
-        // or dots stay full-size on the shrunk preview and look ~1/scale too big.
-        l.halftone.grid.spacing = qMax(2.0f, l.halftone.grid.spacing * scale);
+        if (shrinkSymbols) {
+            l.ascii.cellSize   = qMax(3, int(l.ascii.cellSize * scale));
+            l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize * scale));
+            // Halftone dot pitch is a fixed pixel value: scale it with the image too,
+            // or dots stay full-size on the shrunk preview and look ~1/scale too big.
+            l.halftone.grid.spacing = qMax(2.0f, l.halftone.grid.spacing * scale);
+        }
+        // Symbol pitch left at authored size (shrinkSymbols=false, a live canvas
+        // drag): symbol COUNT then drops with the shrunk area instead of staying
+        // constant, which is what actually makes the interactive pass cheap —
+        // oversized dots/glyphs for one drag frame are an acceptable trade-off.
         l.adjustments.sharpenRadius = qMax(1, qRound(l.adjustments.sharpenRadius * scale));
     }
     return p;
@@ -672,20 +693,37 @@ void RenderWorker::launchFast()
     QHash<int, QImage> ls = m_layerSrc;
 
     if (k < 1.0f) {
-        src = m_sourceImage.scaled(qMax(1, qRound(m_sourceImage.width()  * k)),
-                                   qMax(1, qRound(m_sourceImage.height() * k)),
-                                   Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        p  = scaledForPreview(m_latestParams, k);   // scales frame + per-pixel params
+        // Reuse the last downscaled buffer when source + scale didn't change
+        // (e.g. every frame of a position-only drag) — a fresh .scaled() call
+        // would allocate a new buffer with a new address every time, and the
+        // layer-render cache below keys on that address, so it would never
+        // hit and every interactive frame would fully re-render each layer.
+        const void* origBits = m_sourceImage.constBits();
+        if (m_cachedSmallSrc.isNull() || m_cachedSmallSrcOrigBits != origBits
+            || qAbs(m_cachedSmallSrcK - k) > 0.0001f) {
+            m_cachedSmallSrc = m_sourceImage.scaled(
+                qMax(1, qRound(m_sourceImage.width()  * k)),
+                qMax(1, qRound(m_sourceImage.height() * k)),
+                Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            m_cachedSmallSrcOrigBits = origBits;
+            m_cachedSmallSrcK        = k;
+        }
+        src = m_cachedSmallSrc;
+        p  = scaledForPreview(m_latestParams, k, /*shrinkSymbols=*/!m_cheapDrag);
         ls = scaledLayerSrc(m_layerSrc, k);
 
         // Keep preview and full render at the same effective halftone scale.
-        for (Layer& l : p.layers) {
-            if (l.kind != LayerKind::Halftone) continue;
-            const float requestedScale = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
-            const float maxBySize = 6000.0f / float(srcMax);
-            const float minBySize = 16.0f   / float(srcMax);
-            const float eff = qBound(minBySize, requestedScale, maxBySize);
-            l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
+        // Skipped during a cheap drag: inputDpi there should stay as authored,
+        // matching grid.spacing also being left unscaled above.
+        if (!m_cheapDrag) {
+            for (Layer& l : p.layers) {
+                if (l.kind != LayerKind::Halftone) continue;
+                const float requestedScale = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
+                const float maxBySize = 6000.0f / float(srcMax);
+                const float minBySize = 16.0f   / float(srcMax);
+                const float eff = qBound(minBySize, requestedScale, maxBySize);
+                l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
+            }
         }
     }
 

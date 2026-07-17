@@ -1,18 +1,34 @@
 /* ============================================================
    ULTRA_Ditherer — Design system
-   Bg left:    #1E1E1E
-   Bg panel:   #272727
-   Separator:  #828282
-   Box bg:     #3B3B3B   border: #5D5D5D
-   Text:       #E3E3E3
-   Title:      #EEEEEE
-   Label:      #B2B2B2
+
+   Every color below is a @token (e.g. @boxStroke), substituted by
+   substitutePaletteTokens() in main.cpp against a single named palette —
+   change a color there and every rule using it follows. This file only
+   keeps the *shape* of the design system (which rule uses which token);
+   the actual hex values live in one place, main.cpp.
+
+   ── Palette (see main.cpp for the authoritative values) ──
+   Surfaces:   @bgWindow @bgPanel @surface2 @surface3 @popupBorder @vlineColor
+   Text:       @textBody @textTitle @textLabel @textValue @textDim
+   Box system: @boxFill @boxStroke @boxStrokeHover @boxStrokeActive
+               (every dropdown / number / text / svg box: transparent fill
+               always, @boxStroke border, @boxStrokeHover border on hover,
+               @boxStrokeActive border while being edited/opened/pressed)
+   Special boxes (own colors instead of the box system above):
+               reset adjustments → @resetStroke / @resetStrokeHover
+               active layer row  → @activeLayerFill (border stays @boxStroke)
+               mode picker       → @modeFill / @modeStroke / @modeStrokeHover
+   Accent:     @accent @accentHover @accentPress          (orange CTA)
+   Selection:  @selBlue @selBlueHover                     (blue)
+   Danger:     @danger @dangerHover                       (red)
+   Other:      @keyOrange (timeline auto-key — distinct from @accent)
+               @scrollHandle @scrollHandleHover
    ============================================================ */
 
 /* ── Global ─────────────────────────────────────────────────── */
 QWidget {
-    background-color: #272727;
-    color: #E3E3E3;
+    background-color: @bgPanel;
+    color: @textBody;
     font-family: "Funnel Display", "Segoe UI", Arial, sans-serif;
     font-size: 10pt;
     outline: none;
@@ -24,12 +40,12 @@ QLabel {
 }
 
 QMainWindow {
-    background-color: #1E1E1E;
+    background-color: @bgWindow;
 }
 
 /* ── Custom title bar ────────────────────────────────────────── */
 #windowTitleBar {
-    background-color: #3B3B3B;
+    background-color: @surface2;
 }
 #titleLogo { background: transparent; }
 #winBtn, #winCloseBtn {
@@ -39,44 +55,44 @@ QMainWindow {
 }
 #winBtn:hover     { background-color: #4A4A4A; }
 #winBtn:pressed   { background-color: #555555; }
-#winCloseBtn:hover   { background-color: #FD231F; }
+#winCloseBtn:hover   { background-color: @danger; }
 #winCloseBtn:pressed { background-color: #C81C19; }
 
 /* ── Scroll area ─────────────────────────────────────────────── */
 QScrollArea,
 QScrollArea > QWidget > QWidget {
-    background-color: #272727;
+    background-color: @bgPanel;
     border: none;
 }
 
 #controlRoot {
-    background-color: #272727;
+    background-color: @bgPanel;
 }
 
-/* ── Section titles (Funnel Display Bold 22 · #EEEEEE) ────────── */
+/* ── Section titles (Funnel Display Bold 22 · @textTitle) ──────── */
 #sectionTitle {
-    color: #EEEEEE;
-    font-size: s(22)px;
+    color: @textTitle;
+    font-size: s(18)px;
     font-weight: 700;
     background: transparent;
 }
 
 /* Editable file name (top-left) — same look as a section title. */
 #fileTitle, #fileTitleEdit {
-    color: #EEEEEE;
-    font-size: s(22)px;
+    color: @textTitle;
+    font-size: s(18)px;
     font-weight: 700;
     background: transparent;
     border: none;
     padding: 0;
 }
 #fileTitleEdit {
-    selection-background-color: #568AD9;
+    selection-background-color: @selBlue;
 }
 
-/* ── Parameter labels (Funnel Display Medium 16 · #B2B2B2) ────── */
+/* ── Parameter labels (Funnel Display Medium 16 · @textLabel) ─── */
 #paramLabel {
-    color: #B2B2B2;
+    color: @textLabel;
     font-size: s(16)px;
     font-weight: 500;
     background: transparent;
@@ -84,22 +100,22 @@ QScrollArea > QWidget > QWidget {
 
 /* ── Hairlines ───────────────────────────────────────────────────
    ONE rule for every horizontal divider in the app: 1 logical px,
-   #3B3B3B. C++ sides must use setFixedHeight(1) (never Ui::px(1)). */
+   @surface2. C++ sides must use setFixedHeight(1) (never Ui::px(1)). */
 #separator, #bandLine {
-    background-color: #3B3B3B;
+    background-color: @surface2;
     min-height: 1px;
     max-height: 1px;
 }
 
 #vseparator {
-    background-color: #161616;
+    background-color: @vlineColor;
     min-width: 1px;
     max-width: 1px;
 }
 
 /* ── Side panels ─────────────────────────────────────────────── */
 #sidePanel {
-    background-color: #272727;
+    background-color: @bgPanel;
 }
 
 /* Embedded layers list */
@@ -107,13 +123,13 @@ QScrollArea > QWidget > QWidget {
 #layersScroll,
 #layersScroll > QWidget > QWidget,
 #layerRowsArea {
-    background-color: #272727;
+    background-color: @bgPanel;
 }
 
 /* ── Rectangle tabs (Timeline/Library, Halftone/Dither/Ascii) ──── */
 QPushButton#rectTab {
     background-color: transparent;
-    color: #8E8E8E;
+    color: @textDim;
     border: none;
     border-radius: s(5)px;
     padding: s(12)px s(20)px;
@@ -125,27 +141,27 @@ QPushButton#rectTab:hover {
 }
 QPushButton#rectTab:checked {
     background-color: #3F3F3F;
-    color: #EEEEEE;
+    color: @textTitle;
 }
 
 /* ── Bottom bar (same colour as the side panels) ──────────────── */
 #bottomBar, #bottomTabRow {
-    background-color: #272727;
+    background-color: @bgPanel;
 }
 
 /* ── Timeline ────────────────────────────────────────────────── */
 #timelinePanel, #timelineScroll, #timelineScroll > QWidget > QWidget {
-    background-color: #272727;
+    background-color: @bgPanel;
 }
 
 #tlRangeBox {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
 }
-#tlRangeBox:hover { border-color: #828282; }
+#tlRangeBox:hover { border-color: @boxStrokeHover; }
 #tlRangeLbl {
-    color: #8E8E8E;
+    color: @textDim;
     font-size: s(17)px;
     font-weight: 500;
     background: transparent;
@@ -153,34 +169,36 @@ QPushButton#rectTab:checked {
 QSpinBox#tlInnerSpin {
     background: transparent;
     border: none;
-    color: #A6A6A6;
+    color: @textValue;
     font-size: s(17)px;
     font-weight: 500;
     padding: 0;
 }
 
 QPushButton#autoKeyBtn {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
-    color: #B2B2B2;
+    color: @textLabel;
     font-size: s(17)px;
     font-weight: 500;
     padding: 0 s(16)px;
 }
-QPushButton#autoKeyBtn:hover { border-color: #828282; }
+QPushButton#autoKeyBtn:hover   { border-color: @boxStrokeHover; }
+QPushButton#autoKeyBtn:pressed { border-color: @boxStrokeActive; }
 QPushButton#autoKeyBtn:checked {
-    background-color: #FF6A00;
-    border-color: #FF6A00;
+    background-color: @keyOrange;
+    border-color: @keyOrange;
     color: #FFFFFF;
 }
 
 #transportBox {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
 }
-#tlSep { background-color: #5D5D5D; }
+#transportBox:hover { border-color: @boxStrokeHover; }
+#tlSep { background-color: @popupBorder; }
 
 QPushButton#tlBtn {
     background-color: transparent;
@@ -191,23 +209,23 @@ QPushButton#tlBtn:pressed  { background-color: #2E2E2E; }
 QPushButton#tlBtn:checked  { background-color: #4A4A4A; }
 
 QSpinBox#tlSpin {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
-    color: #A6A6A6;
+    color: @textValue;
     font-size: s(17)px;
     font-weight: 500;
     padding: 0 s(12)px;
 }
-QSpinBox#tlSpin:hover { border-color: #828282; }
+QSpinBox#tlSpin:hover { border-color: @boxStrokeHover; }
 
 /* ── Mode tabs ───────────────────────────────────────────────── */
 #tabRow {
-    background-color: #1E1E1E;
+    background-color: @bgWindow;
 }
 
 QPushButton#tabBtn {
-    background-color: #1E1E1E;
+    background-color: @bgWindow;
     color: #828282;
     border: none;
     border-radius: 0;
@@ -215,11 +233,11 @@ QPushButton#tabBtn {
     font-weight: 600;
 }
 QPushButton#tabBtn:hover {
-    color: #B2B2B2;
+    color: @textLabel;
 }
 QPushButton#tabBtn:checked {
-    background-color: #272727;
-    color: #EEEEEE;
+    background-color: @bgPanel;
+    color: @textTitle;
     border-top-left-radius: 12px;
     border-top-right-radius: 12px;
 }
@@ -234,126 +252,147 @@ QPushButton#tabBtn[tabPos="last"]:checked {
    No border-top: the bandLine under the Timeline/Library tabs already
    draws that divider — a border here doubled it to a 2px line. */
 #filmstrip {
-    background-color: #272727;
+    background-color: @bgPanel;
 }
 
 #filmstripScroll,
 #filmstripScroll > QWidget > QWidget,
 #filmstripRow {
-    background-color: #272727;
+    background-color: @bgPanel;
 }
 
 /* ── Export button ───────────────────────────────────────────── */
 QPushButton#exportBtn {
-    background-color: #3B3B3B;
-    color: #E3E3E3;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    color: @textValue;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
     padding: 0 s(14)px;
-    min-height: s(48)px;
     font-size: s(17)px;
     font-weight: 500;
 }
-QPushButton#exportBtn:hover {
-    background-color: #484848;
-    border-color: #828282;
-}
-QPushButton#exportBtn:pressed {
-    background-color: #2E2E2E;
-}
+QPushButton#exportBtn:hover   { border-color: @boxStrokeHover; }
+QPushButton#exportBtn:pressed { border-color: @boxStrokeActive; }
 
-/* ── Reset adjustments button — same label grey as Invert/Ordered dither ── */
+/* ── Reset adjustments button — special box: transparent fill, its own
+   (warning-red) stroke instead of the standard @boxStroke ── */
 QPushButton#resetBtn {
-    background-color: #3B3B3B;
-    color: #B2B2B2;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    color: @textValue;
+    border: 1px solid @resetStroke;
     border-radius: s(8)px;
     padding: 0 s(14)px;
     font-size: s(17)px;
     font-weight: 500;
 }
 QPushButton#resetBtn:hover {
-    background-color: #484848;
-    border-color: #828282;
+    border-color: @resetStrokeHover;
 }
 QPushButton#resetBtn:pressed {
-    background-color: #2E2E2E;
+    background-color: rgba(134, 65, 65, 60);
+}
+
+/* ── Check row (Invert / Localize) — box in the standard box language;
+   the on/off state shows in its own indicator square, not the box. ── */
+QPushButton#checkRow {
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
+    border-radius: s(8)px;
+}
+QPushButton#checkRow:hover   { border-color: @boxStrokeHover; }
+QPushButton#checkRow:pressed { border-color: @boxStrokeActive; }
+#checkRowLabel {
+    background: transparent;
+    color: @textValue;
+    font-size: s(17)px;
+    font-weight: 500;
+}
+QLabel#checkSquare {
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
+    border-radius: s(4)px;
+}
+/* Persistent "on" indicator (not the transient click cue above): filled
+   solid, same blue family as @boxStrokeActive. */
+QLabel#checkSquare[checked="true"] {
+    background-color: @boxStrokeActive;
+    border-color: @boxStrokeActive;
 }
 
 /* ── Animation progress bar (playback prep / frame export) ─────── */
 QProgressBar#animProgressBar {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
     text-align: center;
-    color: #E3E3E3;
+    color: @textBody;
     font-size: s(14)px;
     font-weight: 500;
 }
 QProgressBar#animProgressBar::chunk {
-    background-color: #FD5A1F;
+    background-color: @accent;
     border-radius: s(8)px;
 }
 
 /* ── Accent button (Confirm / Generate / destructive confirm) ────
    Same box metrics as every other box (height s(48), radius s(8),
-   text s(17)); only the colours differ. */
+   text s(17)); only the colours differ — a solid CTA, not the default
+   box system. */
 QPushButton#accentBtn {
-    background-color: #FD5A1F;
+    background-color: @accent;
     color: #FFFFFF;
     border: none;
     border-radius: s(8)px;
     padding: 0 s(14)px;
-    min-height: s(48)px;
+    min-height: s(42)px;
     font-size: s(17)px;
     font-weight: 600;
 }
 QPushButton#accentBtn:hover {
-    background-color: #FD6B35;
+    background-color: @accentHover;
 }
 QPushButton#accentBtn:pressed {
-    background-color: #E04E16;
+    background-color: @accentPress;
 }
 
 /* ── Palette selector (custom expandable dropdown) ────────────── */
 QPushButton#paletteHeader {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;   /* same radius as every other main-column box */
     text-align: left;
 }
-QPushButton#paletteHeader:hover {
-    border-color: #828282;
-}
+QPushButton#paletteHeader:hover   { border-color: @boxStrokeHover; }
+QPushButton#paletteHeader:pressed { border-color: @boxStrokeActive; }
 
 QPushButton#paletteItem {
-    background-color: #313131;
+    background-color: @surface3;
     border: 1px solid transparent;
     border-radius: 6px;
     text-align: left;
 }
 QPushButton#paletteItem:hover {
-    background-color: #3B3B3B;
-    border-color: #5D5D5D;
+    background-color: @surface2;
+    border-color: @popupBorder;
 }
 QPushButton#paletteItem[selected="true"] {
-    background-color: #568AD9;
-    border-color: #568AD9;
+    background-color: @selBlue;
+    border-color: @selBlue;
 }
 QPushButton#paletteItem[selected="true"]:hover {
-    background-color: #5E92E0;
+    background-color: @selBlueHover;
 }
 
 #saveEditBox {
-    background-color: #313131;
-    border: 1px solid #5D5D5D;
+    background-color: @surface3;
+    border: 1px solid @popupBorder;
     border-radius: 8px;
 }
 
 /* Palette dropdown (floating popup over the controls) */
 #palettePopup {
-    background-color: #272727;
-    border: 1px solid #5D5D5D;
+    background-color: @bgPanel;
+    border: 1px solid @popupBorder;
     border-radius: 6px;
 }
 #palettePopupScroll, #palettePopupBody { background: transparent; border: none; }
@@ -370,21 +409,21 @@ QPushButton#paletteTrash:pressed { background-color: #3B1F19; }
 /* Save-palette popup */
 #savePopup {
     background-color: #2A2A2A;
-    border: 1px solid #5D5D5D;
+    border: 1px solid @popupBorder;
     border-radius: s(12)px;
 }
 
 /* Inline delete confirmation inside the palette popup */
 #paletteConfirm {
     background-color: #3A2422;
-    border: 1px solid #FD231F;
+    border: 1px solid @danger;
     border-radius: 6px;
 }
 QPushButton#ghostMini {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @surface2;
+    border: 1px solid @popupBorder;
     border-radius: 4px;
-    color: #E3E3E3;
+    color: @textBody;
     font-size: 8pt;
     padding: 0 10px;
 }
@@ -392,7 +431,7 @@ QPushButton#ghostMini:hover {
     border-color: #828282;
 }
 QPushButton#dangerMini {
-    background-color: #FD231F;
+    background-color: @danger;
     border: none;
     border-radius: 4px;
     color: #FFFFFF;
@@ -401,7 +440,7 @@ QPushButton#dangerMini {
     padding: 0 10px;
 }
 QPushButton#dangerMini:hover {
-    background-color: #FF3A36;
+    background-color: @dangerHover;
 }
 
 /* ── Icon-only buttons (+/−) ─────────────────────────────────── */
@@ -417,7 +456,27 @@ QPushButton#iconBtn {
     border-radius: 4px;
 }
 QPushButton#iconBtn:hover {
-    background-color: #3B3B3B;
+    background-color: @surface2;
+}
+
+/* Rotation quick-buttons (rotate90/mirror_x/mirror_y): same hover chrome as
+   #iconBtn, but sized in C++ to fill their segment of the quick-box row —
+   no 24×24 clamp here, unlike #iconBtn. The quick-box container itself is
+   a #dragSpinBox (box system: transparent + @boxStroke), so these segments
+   stay chromeless except for hover/checked feedback. */
+QPushButton#quickIconBtn {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    border-radius: 6px;
+}
+QPushButton#quickIconBtn:hover,
+QPushButton#quickIconBtn:checked {
+    background-color: @surface2;
+}
+QPushButton#quickIconBtn:pressed {
+    background-color: #2A2A2A;
 }
 
 /* Halftone "localize diameter" dot — floats in the right gutter next to the
@@ -425,15 +484,15 @@ QPushButton#iconBtn:hover {
    setFixedSize), not scaled with s(), like the slider handle. */
 QPushButton#locDot {
     background-color: transparent;
-    border: 1px solid #5D5D5D;
+    border: 1px solid @popupBorder;
     border-radius: 5px;
 }
 QPushButton#locDot:hover {
     border-color: #828282;
 }
 QPushButton#locDot:checked {
-    background-color: #FD5A1F;
-    border-color: #FD5A1F;
+    background-color: @accent;
+    border-color: @accent;
 }
 
 /* Parent-row chevron: same chrome as iconBtn but its own size (18×34, wider
@@ -458,22 +517,23 @@ QPushButton#favBtn {
     min-width:  24px;
     max-width:  24px;
 }
-QPushButton#favBtn:hover   { background-color: #3B3B3B; }
+QPushButton#favBtn:hover   { background-color: @surface2; }
 QPushButton#favBtn:pressed { background-color: #2A2A2A; }
 
 /* ── ComboBox ────────────────────────────────────────────────── */
 QComboBox {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
-    color: #E3E3E3;
+    color: @textValue;
     padding: 0 s(12)px;
-    min-height: s(48)px;
+    min-height: s(42)px;
     font-size: s(17)px;
+    font-weight: 500;
     selection-background-color: transparent;
 }
-QComboBox:hover   { border-color: #828282; }
-QComboBox:focus   { border-color: #828282; }
+QComboBox:hover  { border-color: @boxStrokeHover; }
+QComboBox:on     { border-color: @boxStrokeActive; }   /* popup open */
 
 QComboBox::drop-down {
     border: none;
@@ -494,26 +554,54 @@ QComboBox::down-arrow:on {
 /* Closed box mimics a QComboBox; the popup is a grid of boxed items
    with pill group headers. */
 QPushButton#algoBox {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
-    color: #E3E3E3;
+    color: @textValue;
     padding: 0 s(12)px;
     font-size: s(17)px;
+    font-weight: 500;
     text-align: left;
 }
-QPushButton#algoBox:hover { border-color: #828282; }
+QPushButton#algoBox:hover                 { border-color: @boxStrokeHover; }
+QPushButton#algoBox[popupOpen="true"]     { border-color: @boxStrokeActive; }
+QLabel#algoBoxLabel {
+    background: transparent;
+    border: none;
+    color: @textValue;
+    font-size: s(17)px;
+    font-weight: 500;
+}
+
+/* Mode picker: same shape as #algoBox, its own special-box colours (like a
+   permanent CTA) so it reads as the one control at the top of the column
+   that always shows what mode is active. */
+QPushButton#algoBoxAccent {
+    background-color: @modeFill;
+    border: 1px solid @modeStroke;
+    border-radius: s(8)px;
+    padding: 0 s(12)px;
+    text-align: left;
+}
+QPushButton#algoBoxAccent:hover { border-color: @modeStrokeHover; }
+QLabel#algoBoxLabelAccent {
+    background: transparent;
+    border: none;
+    color: #FFFFFF;
+    font-size: s(17)px;
+    font-weight: 600;
+}
 
 QFrame#algoPopup {
-    background-color: #272727;
-    border: 1px solid #5D5D5D;
+    background-color: @bgPanel;
+    border: 1px solid @popupBorder;
     border-radius: 8px;
 }
 #algoPopupScroll, #algoPopupBody { background: transparent; border: none; }
 QLabel#algoHeader {
-    background-color: #3B3B3B;
+    background-color: @surface2;
     border-radius: s(8)px;
-    color: #EEEEEE;
+    color: @textTitle;
     font-size: s(18)px;
     font-weight: 700;
     padding: s(10)px s(15)px;
@@ -522,21 +610,21 @@ QPushButton#algoCell {
     background-color: transparent;
     border: 1px solid transparent;
     border-radius: s(8)px;
-    color: #E3E3E3;
+    color: @textBody;
     font-size: s(18)px;
     padding: s(10)px s(15)px;
     text-align: left;
 }
-QPushButton#algoCell:hover   { border-color: #828282; background-color: #313131; }
-QPushButton#algoCell:checked { background-color: #3B3B3B; border-color: #828282; }
+QPushButton#algoCell:hover   { border-color: #555555; background-color: @surface3; }
+QPushButton#algoCell:checked { background-color: @surface2; border-color: #555555; }
 
 QComboBox QAbstractItemView {
-    background-color: #272727;
-    border: 1px solid #5D5D5D;
+    background-color: @bgPanel;
+    border: 1px solid #555555;
     border-radius: 6px;
-    color: #E3E3E3;
-    selection-background-color: #3B3B3B;
-    selection-color: #E3E3E3;
+    color: @textBody;
+    selection-background-color: @surface2;
+    selection-color: @textBody;
     padding: 4px;
     outline: none;
 }
@@ -546,25 +634,29 @@ QComboBox QAbstractItemView::item {
     min-height: 26px;
 }
 QComboBox QAbstractItemView::item:selected {
-    background-color: #3B3B3B;
+    background-color: @surface2;
 }
 
 /* ── Sliders ─────────────────────────────────────────────────── */
 QSlider::groove:horizontal {
     height: s(7)px;
-    background: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(4)px;
 }
 QSlider::sub-page:horizontal {
-    background: #E3E3E3;
+    background: @textBody;
     border-radius: s(4)px;
 }
 QSlider::handle:horizontal {
     width: s(16)px;
     height: s(16)px;
     margin: s(-6)px 0;
-    background: #E3E3E3;
+    background: @textBody;
+    /* Must stay exactly half of width/height: Qt's rounded-rect renderer
+       degrades to sharp square corners (not a clamp to the largest valid
+       radius) once border-radius exceeds half the box, so anything bigger
+       than s(8) here silently breaks the circle instead of guaranteeing it. */
     border-radius: s(8)px;
 }
 QSlider::handle:horizontal:hover {
@@ -573,58 +665,110 @@ QSlider::handle:horizontal:hover {
 
 /* ── DragSpinBox ──────────────────────────────────────────────── */
 #dragSpinBox {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
 }
 #dragSpinBox:hover {
-    border-color: #828282;
+    border-color: @boxStrokeHover;
+}
+/* Actively editing the number (double-click) → active border, same cue as
+   an open dropdown or a pressed box. */
+#dragSpinBox[editing="true"] {
+    border-color: @boxStrokeActive;
 }
 /* Animated-parameter indicator: tint the value box's stroke when it has a
    keyframe track (same orange as the timeline auto-key dot). */
 #dragSpinBox[animated="true"] {
-    border-color: #FF6A00;
+    border-color: @keyOrange;
 }
 
-/* Compact variant (Levels number boxes) */
-#dragSpinBoxCompact {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
-    border-radius: 6px;
-    min-height: 18px;
-    max-height: 22px;
+/* Value text inside a DragSpinBox: transparent so the frame's own bg/border
+   shows through, cancels the generic QLineEdit rule below. */
+#dragSpinValue {
+    background: transparent;
+    border: none;
+    padding: 0;
+    min-height: 0;
+    color: @textValue;
+    font-size: s(17)px;
+    font-weight: 500;
 }
-#dragSpinBoxCompact:hover {
-    border-color: #828282;
+/* "W/H/X/Y" letter label inside a DragSpinBox */
+#dragSpinLetter {
+    background: transparent;
+    color: @textTitle;
+    font-size: s(17)px;
+    font-weight: 700;
 }
+
+/* Transform → Scale quick-entry box: same bg/border as DragSpinBox, but a
+   plain QLineEdit (not a DragSpinBox frame), so it needs its own full rule. */
+#scaleValueEdit {
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
+    border-radius: s(8)px;
+    color: @textValue;
+    font-size: s(17)px;
+    font-weight: 500;
+    padding: 0;
+    /* No min/max-height here: C++ already pins this to kCellW × kBoxH via
+       setFixedSize(), and a QSS min+max pair would win the polish-time size
+       negotiation over that fixed size, drifting stale whenever kBoxH
+       changes (exactly what made this box shorter than its neighbours). */
+}
+#scaleValueEdit:hover { border-color: @boxStrokeHover; }
+#scaleValueEdit:focus { border-color: @boxStrokeActive; }
+
+/* Mosaic Texts row (per-tone label): same bg/border as DragSpinBox, but a
+   plain QLineEdit — needs its own full rule for the same reason as
+   #scaleValueEdit above. No min-height: C++ already pins the height via
+   setFixedHeight(kBoxH), and the generic QLineEdit rule's min-height tying
+   exactly to that fixed height clipped the border's bottom edge. */
+#toneTextEdit {
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
+    border-radius: s(8)px;
+    color: @textValue;
+    font-size: s(17)px;
+    font-weight: 500;
+    padding: 0 s(12)px;
+    /* Cancel the generic QLineEdit rule's min-height: an ID selector only
+       overrides the properties it sets, so that 48px min-height otherwise
+       still cascades in here and — tied to setFixedHeight(kBoxH) with zero
+       slack — clips the border's bottom edge. */
+    min-height: 0;
+}
+#toneTextEdit:hover { border-color: @boxStrokeHover; }
+#toneTextEdit:focus { border-color: @boxStrokeActive; }
 
 /* ── LineEdit ────────────────────────────────────────────────── */
 QLineEdit {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
-    color: #E3E3E3;
+    color: @textValue;
     padding: 0 s(12)px;
     min-height: s(48)px;
     font-size: s(17)px;
+    font-weight: 500;
 }
-QLineEdit:focus {
-    border-color: #828282;
-}
+QLineEdit:hover { border-color: @boxStrokeHover; }
+QLineEdit:focus { border-color: @boxStrokeActive; }
 
-/* ── Scrollbar (handle #8E8E8E, slim, no arrows) ──────────────── */
+/* ── Scrollbar (handle @scrollHandle, slim, no arrows) ──────────── */
 QScrollBar:vertical {
     width: s(10)px;
     background: transparent;
     margin: 0;
 }
 QScrollBar::handle:vertical {
-    background: #8E8E8E;
+    background: @scrollHandle;
     border-radius: s(5)px;          /* = width/2 → fully rounded pill */
     min-height: s(40)px;
 }
 QScrollBar::handle:vertical:hover {
-    background: #A6A6A6;
+    background: @scrollHandleHover;
 }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical { height: 0; }
@@ -634,19 +778,19 @@ QScrollBar:horizontal { height: 0; }
 
 /* ── Layers panel (floating over preview) ────────────────────── */
 #layersPanel {
-    background-color: #1E1E1E;
-    border: 1px solid #3B3B3B;
+    background-color: @bgWindow;
+    border: 1px solid @surface2;
     border-radius: 10px;
 }
 
 QPushButton#layersToggleBtn {
-    background-color: #1E1E1E;
-    border: 1px solid #3B3B3B;
+    background-color: @bgWindow;
+    border: 1px solid @surface2;
     border-radius: 8px;
 }
 QPushButton#layersToggleBtn:hover {
-    background-color: #272727;
-    border-color: #5D5D5D;
+    background-color: @bgPanel;
+    border-color: #555555;
 }
 QPushButton#layersToggleBtn:pressed {
     background-color: #161616;
@@ -655,17 +799,20 @@ QPushButton#layersToggleBtn:pressed {
 #layerRowOuter {
     background-color: transparent;
 }
+/* Unselected rows stay fully transparent, no border (no hover fill either).
+   The active (selected) layer is the box-system exception: a solid fill
+   instead of transparent, with the standard box stroke. */
 #layerRow {
     background-color: transparent;
     border: none;
     border-radius: s(10)px;
 }
-/* Unselected rows stay fully transparent (no hover fill). */
 #layerRow[selected="true"] {
-    background-color: #568AD9;
+    background-color: @activeLayerFill;
+    border: 1px solid @boxStroke;
 }
 #layerRowOuter:hover #layerRow[selected="true"] {
-    background-color: #5E92E0;
+    border-color: @boxStrokeHover;
 }
 
 /* Parent (source image) row in the cascade tree — a subtle outlined box. */
@@ -674,16 +821,20 @@ QPushButton#layersToggleBtn:pressed {
 }
 #parentRow {
     background-color: #2A2A2A;
-    border: 1px solid #3B3B3B;
+    border: 1px solid @surface2;
     border-radius: s(10)px;
 }
 #parentRow:hover {
-    border-color: #5D5D5D;
+    border-color: @popupBorder;
+}
+#parentRow[selected="true"] {
+    background-color: #26364A;
+    border-color: @selBlue;
 }
 
 #layerName {
     background: transparent;
-    color: #B2B2B2;
+    color: @textLabel;
     font-size: s(18)px;
     font-weight: 400;
 }
@@ -701,76 +852,79 @@ QPushButton#eyeBtn:hover {
     background-color: rgba(255, 255, 255, 28);
 }
 
+/* Trash: an svg box, transparent by default like every other box, but keeps
+   its own red hover/press cue instead of the generic one — it's a
+   destructive action, same reasoning as the reset-adjustments box. */
 QPushButton#trashBtn {
-    background-color: #313131;
-    border: 1px solid #5D5D5D;
+    background-color: @boxFill;
+    border: 1px solid @boxStroke;
     border-radius: 6px;
 }
 QPushButton#trashBtn:hover {
     background-color: #4A2422;
-    border-color: #FD231F;
+    border-color: @danger;
 }
 QPushButton#trashBtn:pressed {
     background-color: #3B1F19;
 }
 QPushButton#trashBtn:disabled {
-    background-color: #272727;
-    border-color: #3B3B3B;
+    background-color: transparent;
+    border-color: @surface2;
 }
 QPushButton#trashBtn[dropHover="true"] {
     background-color: #4A2422;
-    border-color: #FD231F;
+    border-color: @danger;
 }
 
 QComboBox#blendCombo {
     min-height: 30px;
-    background-color: #313131;
+    background-color: @surface3;
     font-size: 9pt;
 }
 
 /* ── Splitter ────────────────────────────────────────────────── */
 QSplitter::handle {
-    background-color: #3B3B3B;
+    background-color: @surface2;
     width: 1px;
 }
 
 /* Draggable Layers/Parameters divider in the left column. */
 #leftSplit::handle:vertical {
-    background-color: #3B3B3B;
+    background-color: @surface2;
 }
 #leftSplit::handle:vertical:hover {
-    background-color: #5D5D5D;
+    background-color: @popupBorder;
 }
 
 /* ── Status bar ──────────────────────────────────────────────── */
 QStatusBar {
-    background-color: #1E1E1E;
+    background-color: @bgWindow;
     color: #828282;
     font-size: 9pt;
-    border-top: 1px solid #3B3B3B;
+    border-top: 1px solid @surface2;
 }
 
 /* ── Context menu (right-click on a layer row, etc.) ──────────── */
 QMenu {
-    background-color: #3B3B3B;
-    border: 1px solid #5D5D5D;
+    background-color: @surface2;
+    border: 1px solid @popupBorder;
     border-radius: s(8)px;
     padding: s(6)px;
 }
 QMenu::item {
     background: transparent;
-    color: #E3E3E3;
+    color: @textBody;
     font-size: s(18)px;
     padding: s(8)px s(18)px;
     margin: s(2)px 0;
     border-radius: s(6)px;
 }
 QMenu::item:selected {
-    background-color: #568AD9;
-    color: #EEEEEE;
+    background-color: @selBlue;
+    color: @textTitle;
 }
 QMenu::separator {
     height: 1px;
-    background: #5D5D5D;
+    background: #555555;
     margin: s(4)px s(8)px;
 }

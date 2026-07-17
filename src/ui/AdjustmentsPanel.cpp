@@ -6,8 +6,57 @@
 #include <QScrollArea>
 #include <QPushButton>
 #include <QLabel>
+#include <QIcon>
+#include <QStyle>
 #include <array>
 #include <cmath>
+
+namespace {
+// Paints (or clears) the little checkmark inside a checkRow's indicator
+// square. Shared by the live toggle handler and the silent setters below,
+// so setAdjustments()/setLocalizeChecked() (which block signals) still
+// leave the square in sync.
+void syncCheckSquare(QLabel* square, bool on)
+{
+    square->setPixmap(on ? QIcon(":/icons/check.svg").pixmap(Ui::px(14), Ui::px(14)) : QPixmap());
+    square->setProperty("checked", on);
+    square->style()->unpolish(square);
+    square->style()->polish(square);
+}
+
+// Invert/Localize box: label on the left, a small checkmark-square
+// indicator on the right — the box itself stays the standard idle chrome,
+// only the square shows on/off state.
+QPushButton* makeCheckRow(const QString& text, QLabel*& squareOut)
+{
+    auto* btn = new QPushButton;
+    btn->setObjectName("checkRow");
+    btn->setCheckable(true);
+    btn->setCursor(Qt::PointingHandCursor);
+    btn->setFixedHeight(Ui::px(Ui::kBoxH));
+
+    auto* hl = new QHBoxLayout(btn);
+    hl->setContentsMargins(Ui::px(14), 0, Ui::px(12), 0);
+    hl->setSpacing(Ui::px(8));
+
+    auto* label = new QLabel(text);
+    label->setObjectName("checkRowLabel");
+    label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    hl->addWidget(label, 1);
+
+    auto* square = new QLabel;
+    square->setObjectName("checkSquare");
+    square->setFixedSize(Ui::px(22), Ui::px(22));
+    square->setAlignment(Qt::AlignCenter);
+    square->setAttribute(Qt::WA_TransparentForMouseEvents);
+    hl->addWidget(square, 0, Qt::AlignVCenter);
+
+    QObject::connect(btn, &QPushButton::toggled, btn, [square](bool on) { syncCheckSquare(square, on); });
+
+    squareOut = square;
+    return btn;
+}
+} // namespace
 
 AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     : QWidget(parent)
@@ -30,9 +79,13 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     auto* content = new QWidget;
     content->setObjectName("controlRoot");
     auto* vlay = new QVBoxLayout(content);
+    m_vlay = vlay;
     // Left edge aligns with the section titles (40px); the right keeps a 70px
     // gutter free for the +/−/favourite icon column; standard title→first gap
-    // and row rhythm (Theme.h).
+    // and row rhythm (Theme.h). ControlsPanel prepends the Transform
+    // (Position/Rotation/Scale) rows above Brightness at index 0, so this is
+    // the "title band → first control" gap for the whole merged section, and
+    // everything below scrolls together as one list.
     vlay->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(Ui::kGapTitleToFirst),
                              Ui::px(Ui::kColRight), Ui::px(12));
     vlay->setSpacing(Ui::px(Ui::kGapRows));
@@ -54,26 +107,32 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     m_levels->onChanged = [this]() { emit adjustmentsChanged(); };
     vlay->addWidget(makeLabeledGroup("Levels", m_levels));
 
-    // Invert: checkable box, same visual language as the DragSpinBox boxes.
-    m_invert = new QPushButton("Invert");
-    m_invert->setCheckable(true);
-    m_invert->setCursor(Qt::PointingHandCursor);
-    m_invert->setFixedHeight(Ui::px(Ui::kBoxH));
-    m_invert->setStyleSheet(QString(
-        "QPushButton{background:%1;border:1px solid %2;border-radius:%3px;"
-        "color:%4;font-size:%5px;font-weight:500;}"
-        "QPushButton:hover{border-color:%6;}"
-        "QPushButton:checked{background:%7;border-color:%6;color:%8;}")
-        .arg(Ui::kColBoxBg).arg(Ui::kColBoxBorder).arg(Ui::px(Ui::kBoxRadius))
-        .arg(Ui::kColLabel).arg(Ui::px(Ui::kBoxFontPx))
-        .arg(Ui::kColBoxHover).arg(Ui::kColBoxChecked).arg(Ui::kColText));
-    connect(m_invert, &QPushButton::toggled, this,
-            [this](bool) { emit adjustmentsChanged(); });
-    vlay->addWidget(m_invert);
-
     addRow(m_blur,      "Blur",      0, 100,   0);
     addRow(m_grain,     "Grain",     0, 100,   0);
     addRow(m_posterize, "Posterize", 2, 256, 256);
+
+    // Invert + Localize: share one row, each a checkRow box with its own
+    // checkmark-square indicator (see makeCheckRow above). Sits at the foot
+    // of the list, right before the reset button.
+    auto* checkRow = new QHBoxLayout;
+    checkRow->setContentsMargins(0, 0, 0, 0);
+    checkRow->setSpacing(Ui::px(Ui::kGapTwinBoxes));
+
+    m_invert = makeCheckRow("Invert", m_invertSquare);
+    connect(m_invert, &QPushButton::toggled, this,
+            [this](bool) { emit adjustmentsChanged(); });
+    checkRow->addWidget(m_invert, 1);
+
+    // Whole-layer localization: masks the layer's effect to an on-canvas
+    // circle (position/radius/falloff) instead of a per-parameter dot next
+    // to every slider. One button, one point — simpler interaction; MainWindow
+    // maps this to the active layer kind's mask LocParam.
+    m_localize = makeCheckRow("Localize", m_localizeSquare);
+    connect(m_localize, &QPushButton::clicked, this,
+            [this]() { emit localizeToggleRequested(); });
+    checkRow->addWidget(m_localize, 1);
+
+    vlay->addLayout(checkRow);
 
     // Removed-from-UI parameters: kept alive (hidden, default values) so the
     // Adjustments struct round-trips unchanged through collect/apply/undo.
@@ -146,10 +205,24 @@ void AdjustmentsPanel::setAdjustments(const Adjustments& a)
     m_invert->blockSignals(true);
     m_invert->setChecked(a.invert);
     m_invert->blockSignals(false);
+    syncCheckSquare(m_invertSquare, a.invert);
     m_blur->setValue(a.blur);
     m_grain->setValue(a.grain);
     m_posterize->setValue(a.posterize);
     m_threshold->setValue(a.threshold);
+}
+
+void AdjustmentsPanel::prependWidget(QWidget* w)
+{
+    m_vlay->insertWidget(0, w);
+}
+
+void AdjustmentsPanel::setLocalizeChecked(bool on)
+{
+    m_localize->blockSignals(true);
+    m_localize->setChecked(on);
+    m_localize->blockSignals(false);
+    syncCheckSquare(m_localizeSquare, on);
 }
 
 void AdjustmentsPanel::setSourceImage(const QImage& img)

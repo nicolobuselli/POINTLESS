@@ -80,6 +80,7 @@ private:
     void setMode(RenderMode m);   // silent: updates tabs + visible page
 
     QWidget*     m_fillSection = nullptr;   // Fill section (per-mode tonal)
+    QWidget*     m_mosaicTextsSection = nullptr;   // Texts section (Mosaic only, between Fill and Background)
     PopupPicker* m_modePick = nullptr;   // mode dropdown (replaced the tab row)
 
     HalftonePage* m_halftonePage = nullptr;
@@ -94,7 +95,7 @@ private:
     bool                 m_bgEnabled = true;      // Background section open = present
     std::function<void(bool)> m_setBgOpen;        // collapse/expand the bg section
 
-    NoWheelComboBox* m_format     = nullptr;
+    PopupPicker* m_format     = nullptr;
 
     RenderMode m_mode     = RenderMode::Halftone;
     bool       m_updating = false;

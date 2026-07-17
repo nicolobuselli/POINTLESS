@@ -66,13 +66,17 @@ void genSquare(const GridSettings& g, const QTransform& t, const BBox& b,
 {
     const double sp     = std::max(2.0f, g.spacing);
     const double margin = sp;
-    const int i0 = int(std::floor(b.x0 / sp)) - 1, i1 = int(std::ceil(b.x1 / sp)) + 1;
-    const int j0 = int(std::floor(b.y0 / sp)) - 1, j1 = int(std::ceil(b.y1 / sp)) + 1;
+    // Lattice phase anchored on the image centre (a sample always lands
+    // exactly there) instead of the top-left corner — leftover space at the
+    // edges then splits evenly on both sides instead of piling up on one.
+    const double cx = imgW * 0.5, cy = imgH * 0.5;
+    const int i0 = int(std::floor((b.x0 - cx) / sp)) - 1, i1 = int(std::ceil((b.x1 - cx) / sp)) + 1;
+    const int j0 = int(std::floor((b.y0 - cy) / sp)) - 1, j1 = int(std::ceil((b.y1 - cy) / sp)) + 1;
 
     for (int j = j0; j <= j1; ++j) {
-        const double gy = (j + 0.5) * sp;          // cell centre
+        const double gy = cy + j * sp;
         for (int i = i0; i <= i1; ++i) {
-            const double gx = (i + 0.5) * sp;
+            const double gx = cx + i * sp;
             const QPointF p = t.map(QPointF(gx, gy));
             if (p.x() < -margin || p.x() > imgW + margin ||
                 p.y() < -margin || p.y() > imgH + margin) continue;
@@ -87,15 +91,16 @@ void genHex(const GridSettings& g, const QTransform& t, const BBox& b,
     const double sp     = std::max(2.0f, g.spacing);
     const double vstep  = sp * std::sqrt(3.0) / 2.0;
     const double margin = sp;
-    const int j0 = int(std::floor(b.y0 / vstep)) - 1, j1 = int(std::ceil(b.y1 / vstep)) + 1;
+    const double cx = imgW * 0.5, cy = imgH * 0.5;   // phase anchored on the centre
+    const int j0 = int(std::floor((b.y0 - cy) / vstep)) - 1, j1 = int(std::ceil((b.y1 - cy) / vstep)) + 1;
 
     for (int j = j0; j <= j1; ++j) {
-        const double gy   = (j + 0.5) * vstep;
+        const double gy   = cy + j * vstep;
         const double xoff = ((j % 2 + 2) % 2) ? sp * 0.5 : 0.0;
-        const int i0 = int(std::floor((b.x0 - xoff) / sp)) - 1;
-        const int i1 = int(std::ceil ((b.x1 - xoff) / sp)) + 1;
+        const int i0 = int(std::floor((b.x0 - cx - xoff) / sp)) - 1;
+        const int i1 = int(std::ceil ((b.x1 - cx - xoff) / sp)) + 1;
         for (int i = i0; i <= i1; ++i) {
-            const double gx = i * sp + xoff + sp * 0.5;
+            const double gx = cx + i * sp + xoff;
             const QPointF p = t.map(QPointF(gx, gy));
             if (p.x() < -margin || p.x() > imgW + margin ||
                 p.y() < -margin || p.y() > imgH + margin) continue;
@@ -143,15 +148,16 @@ void genBrick(const GridSettings& g, const QTransform& t, const BBox& b,
 {
     const double sp     = std::max(2.0f, g.spacing);
     const double margin = sp;
-    const int j0 = int(std::floor(b.y0 / sp)) - 1, j1 = int(std::ceil(b.y1 / sp)) + 1;
+    const double cx = imgW * 0.5, cy = imgH * 0.5;   // phase anchored on the centre
+    const int j0 = int(std::floor((b.y0 - cy) / sp)) - 1, j1 = int(std::ceil((b.y1 - cy) / sp)) + 1;
 
     for (int j = j0; j <= j1; ++j) {
-        const double gy   = (j + 0.5) * sp;
+        const double gy   = cy + j * sp;
         const double xoff = ((j % 2 + 2) % 2) ? sp * 0.5 : 0.0;
-        const int i0 = int(std::floor((b.x0 - xoff) / sp)) - 1;
-        const int i1 = int(std::ceil ((b.x1 - xoff) / sp)) + 1;
+        const int i0 = int(std::floor((b.x0 - cx - xoff) / sp)) - 1;
+        const int i1 = int(std::ceil ((b.x1 - cx - xoff) / sp)) + 1;
         for (int i = i0; i <= i1; ++i) {
-            const double gx = i * sp + xoff + sp * 0.5;
+            const double gx = cx + i * sp + xoff;
             const QPointF p = t.map(QPointF(gx, gy));
             if (p.x() < -margin || p.x() > imgW + margin ||
                 p.y() < -margin || p.y() > imgH + margin) continue;
@@ -169,13 +175,14 @@ void genWave(const GridSettings& g, const QTransform& t, const BBox& b,
     const double amp    = sp * 0.9;                 // vertical sway
     const double k      = 2.0 * M_PI / (sp * 8.0);  // wavelength = 8 cells
     const double margin = sp + amp;
-    const int i0 = int(std::floor(b.x0 / sp)) - 1,         i1 = int(std::ceil(b.x1 / sp)) + 1;
-    const int j0 = int(std::floor((b.y0 - amp) / sp)) - 1, j1 = int(std::ceil((b.y1 + amp) / sp)) + 1;
+    const double cx = imgW * 0.5, cy = imgH * 0.5;   // phase anchored on the centre
+    const int i0 = int(std::floor((b.x0 - cx) / sp)) - 1,         i1 = int(std::ceil((b.x1 - cx) / sp)) + 1;
+    const int j0 = int(std::floor((b.y0 - amp - cy) / sp)) - 1, j1 = int(std::ceil((b.y1 + amp - cy) / sp)) + 1;
 
     for (int j = j0; j <= j1; ++j) {
-        const double gyBase = (j + 0.5) * sp;
+        const double gyBase = cy + j * sp;
         for (int i = i0; i <= i1; ++i) {
-            const double gx = (i + 0.5) * sp;
+            const double gx = cx + i * sp;
             const double gy = gyBase + amp * std::sin(gx * k);
             const QPointF p = t.map(QPointF(gx, gy));
             if (p.x() < -margin || p.x() > imgW + margin ||

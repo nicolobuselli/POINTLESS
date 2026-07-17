@@ -111,6 +111,8 @@ private:
     QSize          m_frame;
     bool           m_transformable = false;
     TfDrag         m_tfDrag        = TfDrag::None;
+    bool           m_gestureMoved  = false;   // a move/loc/group drag actually moved the mouse
+    QPointF        m_pressPos;         // widget pos at mousePressEvent; jitter tolerance for m_gestureMoved
     LayerTransform m_tfStart;          // transform at drag start
     QPointF        m_grabOffset;       // Move: centre - grab point (frame space)
     double         m_startDist  = 1.0; // Scale: |corner - centre| at start

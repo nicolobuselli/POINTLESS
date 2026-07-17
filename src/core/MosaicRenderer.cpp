@@ -1,8 +1,10 @@
 #include "MosaicRenderer.h"
 #include "ColorMath.h"
+#include "GridGenerator.h"
 
 #include <QFont>
 #include <QFontMetricsF>
+#include <QStaticText>
 #include <cmath>
 #include <vector>
 
@@ -66,11 +68,19 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
 
     const float cellW = qMax(2.0f, params.cellW());
     const float cellH = qMax(2.0f, params.cellH());
-    const int cols = qMax(1, int(std::ceil(w / cellW)));
-    const int rows = qMax(1, int(std::ceil(h / cellH)));
 
-    const float gapX    = qBound(0.0f, params.gapX, 90.0f) / 100.0f;
-    const float gapY    = qBound(0.0f, params.gapY, 90.0f) / 100.0f;
+    // Tile centres come from the same GridGenerator Halftone uses: `gridShape`
+    // picks the lattice (Square/Hex/Brick/Wave/Radial/Phyllotaxis) and
+    // `gridRotation` rotates it as a whole, exactly like Halftone's grid.
+    GridSettings gs;
+    gs.type     = params.gridShape;
+    gs.spacing  = qMax(2.0f, params.spacing);
+    gs.rotation = params.gridRotation;
+    const std::vector<GridSample> samples = GridGenerator::generate(gs, w, h);
+
+    const int cellPxW = qMax(1, qRound(cellW));
+    const int cellPxH = qMax(1, qRound(cellH));
+
     const float radPct  = qBound(0.0f, params.cornerRadius, 100.0f) / 100.0f;
     const float opacity = qBound(0.0f, params.opacity, 1.0f);
 
@@ -78,13 +88,10 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
     const LocField locWidth   = locField(params.loc, LocParam::MsWidthPct,    float(w), float(h));
     const LocField locHeight  = locField(params.loc, LocParam::MsHeightPct,   float(w), float(h));
     const LocField locPad     = locField(params.loc, LocParam::MsTextPadding, float(w), float(h));
-    const LocField locGapX    = locField(params.loc, LocParam::MsGapX,        float(w), float(h));
-    const LocField locGapY    = locField(params.loc, LocParam::MsGapY,        float(w), float(h));
     const LocMask  lmask      = locMask(params.loc, float(w), float(h));
-    const bool tileLocalized = locSpacing.on || locWidth.on || locHeight.on
-                             || locGapX.on || locGapY.on || locPad.on;
+    const bool tileLocalized = locSpacing.on || locWidth.on || locHeight.on || locPad.on;
 
-    const bool  shrunk  = (gapX > 0.001f || gapY > 0.001f || radPct > 0.001f || tileLocalized);
+    const bool  shrunk  = (radPct > 0.001f || tileLocalized);
 
     const TonalSettings& tonal = params.tonal;
     const bool imageColors = (tonal.mode == ToneMode::ImageColors);
@@ -102,9 +109,13 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
         : 2.0f;
 
     // Per-tone text + fitted font, computed once (all tiles share the size).
-    struct ToneText { QString text; QFont font; };
-    const float tileWRef = cellW * (1.0f - gapX);
-    const float tileHRef = cellH * (1.0f - gapY);
+    // staticText caches the shaped glyph run: every non-localized tile of a
+    // tone reuses it instead of re-shaping the same string from scratch —
+    // with dense grids (thousands of tiles) drawText()'s per-call layout cost
+    // otherwise dominates the whole render.
+    struct ToneText { QString text; QFont font; QStaticText staticText; };
+    const float tileWRef = cellW;
+    const float tileHRef = cellH;
     std::vector<ToneText> toneTexts(tonal.tones.size());
     for (size_t i = 0; i < tonal.tones.size(); ++i) {
         if (i < params.texts.size() && !params.texts[i].isEmpty()) {
@@ -112,6 +123,13 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
             if (!tileLocalized) {
                 const float padFrac = qBound(0, params.textPadding, 45) / 100.0f;
                 toneTexts[i].font = fitFont(params, params.texts[i], tileWRef, tileHRef, padFrac);
+                toneTexts[i].staticText.setText(params.texts[i]);
+                toneTexts[i].staticText.setTextFormat(Qt::PlainText);
+                toneTexts[i].staticText.setPerformanceHint(QStaticText::AggressiveCaching);
+                toneTexts[i].staticText.setTextWidth(tileWRef);
+                QTextOption opt(Qt::AlignCenter);
+                toneTexts[i].staticText.setTextOption(opt);
+                toneTexts[i].staticText.prepare(QTransform(), toneTexts[i].font);
             }
         }
     }
@@ -120,89 +138,105 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
     output.setPen(Qt::NoPen);
     output.setRenderHint(QPainter::Antialiasing, shrunk);
 
-    for (int ry = 0; ry < rows; ++ry) {
-        for (int cx = 0; cx < cols; ++cx) {
-            // Integer slot edges shared by neighbours: at gap 0 the tiles butt
-            // exactly, so AA can't leave grey hairline seams between them.
-            const int x0 = qRound(cx * cellW),       y0 = qRound(ry * cellH);
-            const int x1 = qMin(qRound((cx + 1) * cellW), w);
-            const int y1 = qMin(qRound((ry + 1) * cellH), h);
-            const int pw = x1 - x0, ph = y1 - y0;
-            if (pw <= 0 || ph <= 0) continue;
+    for (const GridSample& s : samples) {
+        // Sampling/base-tile window centred on the grid sample point. A
+        // window that would spill off the frame (right/bottom edge samples,
+        // whenever cellPxW/H doesn't evenly divide w/h) is skipped outright
+        // instead of being clipped in place — a clipped tile kept the full
+        // reference-size text (sized off the uncropped cell, not the shrunk
+        // one), which visually overlapped the next tile.
+        const int xIdeal0 = qRound(s.x) - cellPxW / 2;
+        const int yIdeal0 = qRound(s.y) - cellPxH / 2;
+        if (xIdeal0 < 0 || yIdeal0 < 0 || xIdeal0 + cellPxW > w || yIdeal0 + cellPxH > h)
+            continue;
+        const int x0 = xIdeal0, y0 = yIdeal0;
+        const int pw = cellPxW, ph = cellPxH;
 
-            const float cxp = x0 + pw * 0.5f;
-            const float cyp = y0 + ph * 0.5f;
-            const float maskVal = lmask.on ? lmask.mask(cxp, cyp) : 1.0f;
-            if (lmask.on && maskVal <= 0.0f) continue;   // spotlight: nothing outside enabled circles
+        const float cxp = s.x;
+        const float cyp = s.y;
+        const float maskVal = lmask.on ? lmask.mask(cxp, cyp) : 1.0f;
+        if (lmask.on && maskVal <= 0.0f) continue;   // spotlight: nothing outside enabled circles
 
-            const CellAvg avg = cellAverage(rgb, x0, y0, pw, ph);
-            if (avg.lumPerc > paperCut) continue;   // ink-or-paper: paper = nothing
+        const CellAvg avg = cellAverage(rgb, x0, y0, pw, ph);
+        if (avg.lumPerc > paperCut) continue;   // ink-or-paper: paper = nothing
 
-            // Fill colour + the tone index that owns this tile's text.
-            QColor fill;
-            int toneIdx = -1;
-            if (paletteMode && !palette.empty()) {
-                toneIdx = ColorMath::nearestPaletteIndex(
-                    palette, ColorMath::linearToOklab(avg.rLin, avg.gLin, avg.bLin));
-                fill = QColor::fromRgba(palette[size_t(toneIdx)].out);
-            } else if (imageColors || tonal.tones.empty()) {
-                fill = QColor(ColorMath::linearToSrgb8(avg.rLin),
-                              ColorMath::linearToSrgb8(avg.gLin),
-                              ColorMath::linearToSrgb8(avg.bLin));
-                if (!tonal.tones.empty())   // texts still follow the tone bands
-                    toneIdx = pickToneIndex(tonal.tones, avg.lumPerc);
-            } else {
+        // Fill colour + the tone index that owns this tile's text.
+        QColor fill;
+        int toneIdx = -1;
+        if (paletteMode && !palette.empty()) {
+            toneIdx = ColorMath::nearestPaletteIndex(
+                palette, ColorMath::linearToOklab(avg.rLin, avg.gLin, avg.bLin));
+            fill = QColor::fromRgba(palette[size_t(toneIdx)].out);
+        } else if (imageColors || tonal.tones.empty()) {
+            fill = QColor(ColorMath::linearToSrgb8(avg.rLin),
+                          ColorMath::linearToSrgb8(avg.gLin),
+                          ColorMath::linearToSrgb8(avg.bLin));
+            if (!tonal.tones.empty())   // texts still follow the tone bands
                 toneIdx = pickToneIndex(tonal.tones, avg.lumPerc);
-                const ToneEntry& te = tonal.tones[size_t(toneIdx)];
-                fill = te.color;
-                fill.setAlphaF(qBound(0.0f, te.opacity, 1.0f));
-            }
-            fill.setAlphaF(fill.alphaF() * opacity * maskVal);
-
-            // Tile centred in its slot, shrunk by the gaps; mSpacing/mWidth/
-            // mHeight/mGapX/mGapY are 1 unless their loc point is enabled, so
-            // this reduces to the original uniform formula when unlocalized.
-            const float mSpacing = locSpacing.mul(cxp, cyp);
-            const float mWidth   = locWidth.mul(cxp, cyp);
-            const float mHeight  = locHeight.mul(cxp, cyp);
-            const float gxLocal  = qBound(0.0f, gapX * locGapX.mul(cxp, cyp), 0.95f);
-            const float gyLocal  = qBound(0.0f, gapY * locGapY.mul(cxp, cyp), 0.95f);
-            const float tw = pw * (1.0f - gxLocal) * mSpacing * mWidth;
-            const float th = ph * (1.0f - gyLocal) * mSpacing * mHeight;
-            const QRectF r(x0 + (pw - tw) * 0.5f, y0 + (ph - th) * 0.5f, tw, th);
-            if (radPct > 0.001f) {
-                const float rad = radPct * qMin(tw, th) * 0.5f;
-                output.setBrush(fill);
-                output.drawRoundedRect(r, rad, rad);
-                output.setBrush(Qt::NoBrush);
-            } else {
-                output.fillRect(r, fill);
-            }
-
-            if (toneIdx >= 0 && toneIdx < int(toneTexts.size())
-                && !toneTexts[size_t(toneIdx)].text.isEmpty()) {
-                QColor pen;
-                if (toneIdx < int(params.textColors.size())
-                    && params.textColors[size_t(toneIdx)].isValid()) {
-                    pen = params.textColors[size_t(toneIdx)];
-                } else {
-                    // Default: auto black/white by fill contrast.
-                    pen = ColorMath::perceptualLuma(fill.rgb()) > 0.5f
-                        ? QColor(Qt::black) : QColor(Qt::white);
-                }
-                pen.setAlphaF(pen.alphaF() * opacity * maskVal);
-                output.setPen(pen);
-                if (tileLocalized) {
-                    const float padFrac = qBound(0, params.textPadding, 45) / 100.0f
-                                        * locPad.mul(cxp, cyp);
-                    output.setFont(fitFont(params, toneTexts[size_t(toneIdx)].text, tw, th, padFrac));
-                } else {
-                    output.setFont(toneTexts[size_t(toneIdx)].font);
-                }
-                output.drawText(r, Qt::AlignCenter, toneTexts[size_t(toneIdx)].text);
-                output.setPen(Qt::NoPen);
-            }
+        } else {
+            toneIdx = pickToneIndex(tonal.tones, avg.lumPerc);
+            const ToneEntry& te = tonal.tones[size_t(toneIdx)];
+            fill = te.color;
+            fill.setAlphaF(qBound(0.0f, te.opacity, 1.0f));
         }
+        fill.setAlphaF(fill.alphaF() * opacity * maskVal);
+
+        // Tile centred in its slot; mSpacing/mWidth/mHeight are 1 unless their
+        // loc point is enabled, so this reduces to the original uniform
+        // formula when unlocalized.
+        const float mSpacing = locSpacing.mul(cxp, cyp);
+        const float mWidth   = locWidth.mul(cxp, cyp);
+        const float mHeight  = locHeight.mul(cxp, cyp);
+        const float tw = pw * mSpacing * mWidth;
+        const float th = ph * mSpacing * mHeight;
+        const QRectF r(x0 + (pw - tw) * 0.5f, y0 + (ph - th) * 0.5f, tw, th);
+
+        // Tiles turn with the lattice (same rotate() the halftone grid
+        // uses), pivoted on each tile's own centre so tile edges line up
+        // with the grid's oblique direction instead of staying axis-aligned.
+        output.save();
+        output.translate(r.center());
+        output.rotate(params.gridRotation);
+        output.translate(-r.center());
+
+        if (radPct > 0.001f) {
+            const float rad = radPct * qMin(tw, th) * 0.5f;
+            output.setBrush(fill);
+            output.drawRoundedRect(r, rad, rad);
+            output.setBrush(Qt::NoBrush);
+        } else {
+            output.fillRect(r, fill);
+        }
+
+        if (toneIdx >= 0 && toneIdx < int(toneTexts.size())
+            && !toneTexts[size_t(toneIdx)].text.isEmpty()) {
+            QColor pen;
+            if (toneIdx < int(params.textColors.size())
+                && params.textColors[size_t(toneIdx)].isValid()) {
+                pen = params.textColors[size_t(toneIdx)];
+            } else {
+                // Default: auto black/white by fill contrast.
+                pen = ColorMath::perceptualLuma(fill.rgb()) > 0.5f
+                    ? QColor(Qt::black) : QColor(Qt::white);
+            }
+            pen.setAlphaF(pen.alphaF() * opacity * maskVal);
+            output.setPen(pen);
+            if (tileLocalized) {
+                const float padFrac = qBound(0, params.textPadding, 45) / 100.0f
+                                    * locPad.mul(cxp, cyp);
+                output.setFont(fitFont(params, toneTexts[size_t(toneIdx)].text, tw, th, padFrac));
+                output.drawText(r, Qt::AlignCenter, toneTexts[size_t(toneIdx)].text);
+            } else {
+                const ToneText& tt = toneTexts[size_t(toneIdx)];
+                output.setFont(tt.font);
+                const QSizeF sz = tt.staticText.size();
+                const QPointF pos(r.center().x() - tileWRef * 0.5,
+                                   r.center().y() - sz.height() * 0.5);
+                output.drawStaticText(pos, tt.staticText);
+            }
+            output.setPen(Qt::NoPen);
+        }
+        output.restore();
     }
 
     output.restore();

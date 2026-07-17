@@ -30,6 +30,23 @@
 
 namespace {
 
+// A dot lattice's visual pattern repeats before a full 360° turn for grid
+// types with rotational symmetry (a circular dot on a square lattice looks
+// identical every 90°, every 60° on a hex lattice) — clamp the Rotation
+// slider to that true period so every position on it is a genuinely
+// distinct look, instead of silently repeating for 3/4 of the slider's
+// travel. Brick/Wave/Radial/Phyllotaxis keep the full range: their period
+// either isn't a clean small angle or (Radial) rotation has no effect at all,
+// neither of which this table should guess at.
+int rotationPeriodFor(GridType t)
+{
+    switch (t) {
+        case GridType::Square:    return 90;
+        case GridType::Hexagonal: return 60;
+        default:                  return 360;
+    }
+}
+
 // Full-width 1px divider used to bracket section titles (matches the rest
 // of the interface).
 QFrame* bandLine()
@@ -38,6 +55,27 @@ QFrame* bandLine()
     f->setObjectName("bandLine");
     f->setFixedHeight(1);
     return f;
+}
+
+// A title-row icon (the "+"/"−" toggle, "+" add-shape, …) sits next to a
+// bold title label. QLabel's sizeHint is the font's full line height
+// (ascent + descent + leading), taller than the glyphs actually drawn, so
+// centering both by their own bounding rects (Qt::AlignVCenter) leaves the
+// icon looking bottom-aligned against the visually-shorter text. Wrap the
+// icon in a slightly taller box, icon pinned to its top, so centering the
+// *box* nudges the icon up to match the text's optical centre instead.
+QWidget* titleGutterIcon(QWidget* icon)
+{
+    auto* wrap = new QWidget;
+    const int h = icon->height();
+    const int nudge = Ui::px(6);
+    wrap->setFixedSize(icon->width(), h + nudge);
+    auto* wl = new QVBoxLayout(wrap);
+    wl->setContentsMargins(0, 0, 0, 0);
+    wl->setSpacing(0);
+    wl->addWidget(icon);
+    wl->addStretch();
+    return wrap;
 }
 
 // Two boxes side by side, each under its own label, grouped so the
@@ -125,26 +163,15 @@ const BlendItem kBlend[] = {
     { BlendMode::Color, "Color", false }, { BlendMode::Luminosity, "Luminosity", false },
 };
 
-// Photoshop-style group name for the blend mode that starts each group.
-QString blendGroupName(BlendMode m)
-{
-    switch (m) {
-        case BlendMode::Darken:     return "Darken";
-        case BlendMode::Lighten:    return "Lighten";
-        case BlendMode::Overlay:    return "Contrast";
-        case BlendMode::Difference: return "Comparative";
-        case BlendMode::Hue:        return "Component";
-        default:                    return QString();
-    }
-}
-
-// Fusion picker entries, shared by every mode page's Fusion control.
+// Fusion picker entries, shared by every mode page's Fusion control. Groups
+// are separated by a plain divider line (no category names/pills — matches
+// the vertical rule inside the Background swatch that splits colour from
+// opacity), so unlike Dither's Algorithm picker there's no group name to look up.
 QVector<PopupPickerEntry> blendPickerEntries()
 {
     QVector<PopupPickerEntry> out;
     for (const auto& e : kBlend) {
-        if (out.isEmpty()) out.push_back({ QVariant(), QString(), "Normal", QString() });
-        if (e.groupStart)  out.push_back({ QVariant(), QString(), blendGroupName(e.mode), QString() });
+        if (e.groupStart) out.push_back({ QVariant(), QString(), QString(), QString(), true });
         out.push_back({ int(e.mode), QString::fromUtf8(e.name), QString(), QString() });
     }
     return out;
@@ -194,19 +221,34 @@ public:
             m_toggle = new QPushButton;
             m_toggle->setObjectName("iconBtn");
             m_toggle->setCursor(Qt::PointingHandCursor);
-            m_toggle->setFixedSize(Ui::px(26), Ui::px(26));
-            m_toggle->setIconSize(QSize(Ui::px(16), Ui::px(16)));
+            // Icon size derived from the button size, not scaled independently
+            // (see makeIconButton) — keeps the button-minus-icon gap even so
+            // the glyph centres exactly instead of drifting a px to one side.
+            const int btnPx = Ui::px(26);
+            const int pad   = Ui::px(5);
+            m_toggle->setFixedSize(btnPx, btnPx);
+            m_toggle->setIconSize(QSize(btnPx - 2 * pad, btnPx - 2 * pad));
             connect(m_toggle, &QPushButton::clicked, this, [this]() { setOpen(!m_open); });
-            tl->addWidget(m_toggle);
+            tl->addWidget(titleGutterIcon(m_toggle), 0, Qt::AlignVCenter);
         }
         root->addWidget(titleRow);
 
         m_content = new QWidget;
         m_body = new QVBoxLayout(m_content);
+        // Collapsible sections keep the closing gap OUTSIDE m_content (always
+        // visible, added below) so a collapsed title sits as far from the
+        // line below as from the line above; non-collapsible sections never
+        // hide their content, so the bottom margin can just live here.
         m_body->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(Ui::kGapTitleToFirst),
-                                   Ui::px(Ui::kColRight), Ui::px(14));
+                                   Ui::px(Ui::kColRight), collapsible ? 0 : Ui::px(14));
         m_body->setSpacing(Ui::px(Ui::kGapRows));
         root->addWidget(m_content);
+
+        if (collapsible) {
+            auto* closer = new QWidget;
+            closer->setFixedHeight(Ui::px(14));
+            root->addWidget(closer);
+        }
 
         setOpen(startOpen);
     }
@@ -220,10 +262,12 @@ public:
         auto* b = new QPushButton;
         b->setObjectName("iconBtn");
         b->setCursor(Qt::PointingHandCursor);
-        b->setFixedSize(Ui::px(26), Ui::px(26));
+        const int btnPx = Ui::px(26);
+        const int pad   = Ui::px(5);
+        b->setFixedSize(btnPx, btnPx);
         b->setIcon(QIcon(iconRes));
-        b->setIconSize(QSize(Ui::px(16), Ui::px(16)));
-        m_titleLayout->addWidget(b);
+        b->setIconSize(QSize(btnPx - 2 * pad, btnPx - 2 * pad));
+        m_titleLayout->addWidget(titleGutterIcon(b), 0, Qt::AlignVCenter);
         return b;
     }
 
@@ -338,7 +382,7 @@ private:
 
     void position()
     {
-        const int gutter = Ui::px(70);
+        const int gutter = Ui::px(Ui::kColRight);
         for (const Dot& d : m_dots) {
             d.dot->setVisible(d.row->isVisibleTo(m_page));
             const QPoint rowRight =
@@ -389,12 +433,12 @@ public:
         // removes) — same title as Dither/Ascii/Mosaic's first section, for
         // consistency across modes.
         m_shapeSection = new PanelSection("Settings", /*collapsible*/ false, true);
-        // Body extends to the symbol gutter (24); each row (shape combos AND
-        // the Grid combo below) reserves its own 46px on the right so they
-        // all share one width and the "−" buttons line up with the section
-        // toggle icons.
+        // Body extends to the symbol gutter (kColRight − 46); each row (shape
+        // combos AND the Grid combo below) reserves its own 46px on the right
+        // so they all share one width and the "−" buttons line up with the
+        // section toggle icons.
         m_shapeSection->body()->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(Ui::kGapTitleToFirst),
-                                                   Ui::px(24), Ui::px(22));
+                                                   Ui::px(Ui::kColRight - 46), Ui::px(22));
         m_shapeSection->body()->setSpacing(Ui::px(Ui::kGapRows));
         {
             auto* addBtn = m_shapeSection->addHeaderButton(":/icons/plus.svg");
@@ -426,7 +470,10 @@ public:
                 { int(GridType::Phyllotaxis), "Phyllotaxis", QString(), QString() },
             });
             m_gridType->setValue(int(GridType::Square));
-            m_gridType->onSelected = [this](QVariant) { fire(); };
+            m_gridType->onSelected = [this](QVariant v) {
+                m_rotation->setRange(0, rotationPeriodFor(GridType(v.toInt())));
+                fire();
+            };
             grl->addWidget(m_gridType, 1);
             auto* gridGut = new QWidget;   // empty — matches the shape rows' minus-button gutter
             gridGut->setFixedWidth(Ui::px(46));
@@ -441,12 +488,13 @@ public:
         {
             auto* sl = settings->body();
 
-            // Spacing is shown in its real units (px) so the box matches the
-            // rendered grid. The rest run on a unified 0..100 UI scale that
-            // getSettings/setSettings map onto their real range (rotation
-            // 0..360°, gamma 0..5, diameter 0.1..3, jitter 0..1).
+            // Spacing and Rotation are shown in their real units (px / degrees)
+            // so the box matches the rendered grid. The rest run on a unified
+            // 0..100 UI scale that getSettings/setSettings map onto their real
+            // range (gamma 0..5, diameter 0.1..3, jitter 0..1).
             m_spacing      = new SliderRow("Spacing",       2, 200,  50);
-            m_rotation     = new SliderRow("Rotation",      0, 100,   0);
+            m_rotation     = new SliderRow("Rotation",      0, 360,   0);
+            m_rotation->setRange(0, rotationPeriodFor(GridType::Square));   // matches the default Grid above
             m_gamma        = new SliderRow("Gamma",         0, 100,  20);
             m_diameter     = new SliderRow("Diameter",      0, 100,  31);
             m_weight       = new SliderRow("Weight",        0, 100,   0);
@@ -457,33 +505,34 @@ public:
                 sl->addWidget(r);
             }
 
-            // Localization dots: one per localizable slider, floating in the
-            // right gutter, vertically centred on the row. Toggled on/off
-            // here; position/radius/falloff/scale are set on-canvas.
+            // Per-parameter localization dots retired in favour of the single
+            // "Localize" button in Adjustments (masks the whole layer within
+            // its on-canvas circle). LocDots kept wired but with no dots
+            // registered, so nothing floats in the gutter anymore.
             m_locDots = new LocDots(this);
             m_locDots->onToggle = [this](LocParam p) { if (onLocToggle) onLocToggle(p); };
-            m_locDots->add(m_diameter, LocParam::HtDiameter);
-            m_locDots->add(m_gamma,    LocParam::HtGamma);
-            m_locDots->add(m_weight,   LocParam::HtWeight);
-            m_locDots->add(m_jitter,   LocParam::HtJitter);
+        }
+        vl->addWidget(settings);
 
-            // Fusion (blend mode of the active layer) — moved here.
+        // ── Appearance (Fusion + Opacity + Corner radius) ──────
+        auto* appearance = new PanelSection("Appearance", /*collapsible*/ false, true);
+        {
+            auto* al = appearance->body();
             m_fusion = new PopupPicker(1);
             m_fusion->setEntries(blendPickerEntries());
             m_fusion->setValue(int(BlendMode::Normal));
             m_fusion->onSelected = [this](QVariant) {
                 if (!m_updating && onBlendChanged) onBlendChanged();
             };
-            sl->addWidget(makeLabeledGroup("Fusion", m_fusion));
+            al->addWidget(makeLabeledGroup("Fusion", m_fusion));
 
-            // Opacity + Corner radius (two icon boxes side by side).
             m_opacity      = new DragSpinBox(":/icons/opacity.svg",       0, 100, 100, "%");
             m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0, 100,   0, "");
             m_opacity->onValueChanged      = [this](int) { fire(); };
             m_cornerRadius->onValueChanged = [this](int) { fire(); };
-            sl->addWidget(twinBoxGroup("Opacity", m_opacity, "Corner radius", m_cornerRadius));
+            al->addWidget(twinBoxGroup("Opacity", m_opacity, "Corner radius", m_cornerRadius));
         }
-        vl->addWidget(settings);
+        vl->addWidget(appearance);
     }
 
     BlendMode blend() const { return BlendMode(m_fusion->value().toInt()); }
@@ -527,7 +576,7 @@ public:
 
         s.grid.type          = static_cast<GridType>(m_gridType->value().toInt());
         s.grid.spacing       = float(m_spacing->value());   // real px (matches UI)
-        s.grid.rotation      = m_rotation->value() / 100.0f * 360.0f;
+        s.grid.rotation      = float(m_rotation->value());  // real degrees (matches UI)
         s.grid.diameter      = 0.1f + m_diameter->value() / 100.0f * 2.9f;
         // Stretch / stretch-angle removed from the UI: leave grid at identity.
 
@@ -568,7 +617,8 @@ public:
 
         m_gridType->setValue(int(s.grid.type));   // silent
         m_spacing->setValue(qRound(s.grid.spacing));
-        m_rotation->setValue(qRound(s.grid.rotation / 360.0f * 100.0f));
+        m_rotation->setRange(0, rotationPeriodFor(s.grid.type));
+        m_rotation->setValue(qRound(s.grid.rotation));
         m_diameter->setValue(qRound((s.grid.diameter - 0.1f) / 2.9f * 100.0f));
         m_gamma->setValue(qRound(s.gamma / 5.0f * 100.0f));
         m_weight->setValue(qRound(s.weight * 100));
@@ -685,7 +735,7 @@ private:
 
         slot.svgNameBox = new QFrame;
         slot.svgNameBox->setObjectName("dragSpinBox");          // dark box + border
-        slot.svgNameBox->setFixedHeight(Ui::px(48));            // == combos / other boxes
+        slot.svgNameBox->setFixedHeight(Ui::px(Ui::kBoxH));     // == combos / other boxes
         auto* nbl = new QHBoxLayout(slot.svgNameBox);
         nbl->setContentsMargins(Ui::px(10), 0, Ui::px(10), 0);
         nbl->setSpacing(Ui::px(8));
@@ -704,8 +754,8 @@ private:
         slot.svgBtn->setCursor(Qt::PointingHandCursor);
         // Pin the height to match the name box: #accentBtn carries a literal
         // min-height:40px (unscaled) that would otherwise mis-size it.
-        slot.svgBtn->setStyleSheet(QString("min-height:%1px; max-height:%1px;").arg(Ui::px(48)));
-        slot.svgBtn->setFixedHeight(Ui::px(48));
+        slot.svgBtn->setStyleSheet(QString("min-height:%1px; max-height:%1px;").arg(Ui::px(Ui::kBoxH)));
+        slot.svgBtn->setFixedHeight(Ui::px(Ui::kBoxH));
         sr->addWidget(slot.svgBtn, 1);
 
         updateSvgRow(slot);
@@ -888,12 +938,14 @@ public:
                 ml->setContentsMargins(0, 0, 0, 0);
                 ml->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
                 ml->addWidget(makeParamLabel("Matrix size"));
-                m_matrix = new NoWheelComboBox;
-                m_matrix->addItems({ QString::fromUtf8("2\303\2272"),
-                                     QString::fromUtf8("4\303\2274"),
-                                     QString::fromUtf8("8\303\2278"),
-                                     QString::fromUtf8("16\303\22716") });
-                m_matrix->setCurrentIndex(2);
+                m_matrix = new PopupPicker(1);
+                m_matrix->setEntries({
+                    { 0, QString::fromUtf8("2\303\2272"),   QString(), QString() },
+                    { 1, QString::fromUtf8("4\303\2274"),   QString(), QString() },
+                    { 2, QString::fromUtf8("8\303\2278"),   QString(), QString() },
+                    { 3, QString::fromUtf8("16\303\22716"), QString(), QString() },
+                });
+                m_matrix->setValue(2);
                 ml->addWidget(m_matrix);
             }
             m_matrixRow->setVisible(false);
@@ -906,9 +958,12 @@ public:
                 cl->setContentsMargins(0, 0, 0, 0);
                 cl->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
                 cl->addWidget(makeParamLabel("Scan direction"));
-                m_scan = new NoWheelComboBox;
-                m_scan->addItems({ "Serpentine (zig-zag)",
-                                   QString::fromUtf8("Standard (left \342\206\222 right)") });
+                m_scan = new PopupPicker(1);
+                m_scan->setEntries({
+                    { 0, "Serpentine (zig-zag)", QString(), QString() },
+                    { 1, QString::fromUtf8("Standard (left \342\206\222 right)"), QString(), QString() },
+                });
+                m_scan->setValue(0);
                 cl->addWidget(m_scan);
             }
             sl->addWidget(m_scanRow);
@@ -979,10 +1034,8 @@ public:
                 updateDescription();
                 fire();
             };
-            connect(m_matrix, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int) { fire(); });
-            connect(m_scan, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int) { fire(); });
+            m_matrix->onSelected = [this](QVariant) { fire(); };
+            m_scan->onSelected   = [this](QVariant) { fire(); };
 
             updateDescription();
         }
@@ -1011,33 +1064,35 @@ public:
             }
             m_threshold->setVisible(false);   // shown only for the Threshold algorithm
 
-            // Localization dots in the gutter (Pixel size excluded: it is the
-            // structural downscale factor, it cannot vary per pixel).
+            // Per-parameter localization dots retired in favour of the single
+            // "Localize" button in Adjustments. LocDots kept wired but with
+            // no dots registered, so nothing floats in the gutter anymore.
             m_locDots = new LocDots(this);
             m_locDots->onToggle = [this](LocParam p) { if (onLocToggle) onLocToggle(p); };
-            m_locDots->add(m_strength,    LocParam::DiStrength);
-            m_locDots->add(m_threshold,   LocParam::DiThreshold);
-            m_locDots->add(m_levels,      LocParam::DiLevels);
-            m_locDots->add(m_lineAngle,   LocParam::DiLineAngle);
-            m_locDots->add(m_lineSpacing, LocParam::DiLineSpacing);
+        }
+        auto* paramsSec = new PanelSection("Parameters", /*collapsible*/ false, true);
+        paramsSec->body()->addWidget(paramsContent);
+        vl->addWidget(paramsSec);
 
+        // ── Appearance (Fusion + Opacity + Corner radius) ──────
+        auto* appearance = new PanelSection("Appearance", /*collapsible*/ false, true);
+        {
+            auto* al = appearance->body();
             m_fusion = new PopupPicker(1);
             m_fusion->setEntries(blendPickerEntries());
             m_fusion->setValue(int(BlendMode::Normal));
             m_fusion->onSelected = [this](QVariant) {
                 if (!m_updating && onBlendChanged) onBlendChanged();
             };
-            pl->addWidget(makeLabeledGroup("Fusion", m_fusion));
+            al->addWidget(makeLabeledGroup("Fusion", m_fusion));
 
             m_opacity      = new DragSpinBox(":/icons/opacity.svg",       0, 100, 100, "%");
             m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0, 100,   0, "");
             m_opacity->onValueChanged      = [this](int) { fire(); };
             m_cornerRadius->onValueChanged = [this](int) { fire(); };
-            pl->addWidget(twinBoxGroup("Opacity", m_opacity, "Corner radius", m_cornerRadius));
+            al->addWidget(twinBoxGroup("Opacity", m_opacity, "Corner radius", m_cornerRadius));
         }
-        auto* paramsSec = new PanelSection("Parameters", /*collapsible*/ false, true);
-        paramsSec->body()->addWidget(paramsContent);
-        vl->addWidget(paramsSec);
+        vl->addWidget(appearance);
     }
 
     void setAnimatedParams(const QSet<ParamId>& ids)
@@ -1067,14 +1122,14 @@ public:
         DitherSettings s;
         s.algorithm = currentAlgorithm();
         static const int sizes[] = { 2, 4, 8, 16 };
-        s.bayerSize    = sizes[qBound(0, m_matrix->currentIndex(), 3)];
+        s.bayerSize    = sizes[qBound(0, m_matrix->value().toInt(), 3)];
         s.pixelSize    = m_pixelSize->value();
         s.strength     = m_strength->value();
         s.threshold    = m_threshold->value();
         s.opacity      = m_opacity->value() / 100.0f;
         s.cornerRadius = float(m_cornerRadius->value());
         s.levels       = m_levels->value();
-        s.serpentine   = (m_scan->currentIndex() == 0);
+        s.serpentine   = (m_scan->value().toInt() == 0);
         s.lineAngle    = float(m_lineAngle->value());
         s.lineSpacing  = m_lineSpacing->value();
         s.patternPath  = m_patternPath;
@@ -1095,13 +1150,8 @@ public:
         else if (s.bayerSize == 4)  mi = 1;
         else if (s.bayerSize == 8)  mi = 2;
         else if (s.bayerSize == 16) mi = 3;
-        m_matrix->blockSignals(true);
-        m_matrix->setCurrentIndex(mi);
-        m_matrix->blockSignals(false);
-
-        m_scan->blockSignals(true);
-        m_scan->setCurrentIndex(s.serpentine ? 0 : 1);
-        m_scan->blockSignals(false);
+        m_matrix->setValue(mi);   // silent — PopupPicker::setValue never calls onSelected
+        m_scan->setValue(s.serpentine ? 0 : 1);
 
         m_pixelSize->setValue(s.pixelSize);
         m_strength->setValue(s.strength);
@@ -1187,9 +1237,9 @@ private:
     PopupPicker*     m_algorithm  = nullptr;
     QLabel*          m_description = nullptr;
     QWidget*         m_matrixRow  = nullptr;
-    NoWheelComboBox* m_matrix     = nullptr;
+    PopupPicker*     m_matrix     = nullptr;
     QWidget*         m_scanRow    = nullptr;
-    NoWheelComboBox* m_scan       = nullptr;
+    PopupPicker*     m_scan       = nullptr;
     QWidget*         m_lineRow     = nullptr;
     SliderRow*       m_lineAngle   = nullptr;
     SliderRow*       m_lineSpacing = nullptr;
@@ -1255,6 +1305,7 @@ public:
             sl->addWidget(makeLabeledGroup("Charset", m_charset));
 
             m_customEdit = new QLineEdit;
+            m_customEdit->setFixedHeight(Ui::px(Ui::kBoxH));
             m_customEdit->setPlaceholderText("Light → dark characters…");
             m_customEdit->setVisible(false);
             sl->addWidget(m_customEdit);
@@ -1280,16 +1331,32 @@ public:
             }
             m_font->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             m_font->setMinimumWidth(Ui::px(60));
-            m_weight = new NoWheelComboBox;
-            m_weight->addItems({ "Regular", "Medium", "DemiBold", "Bold" });
-            m_weight->setCurrentIndex(2);
-            m_weight->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-            m_weight->setMinimumContentsLength(6);
+            m_weight = new PopupPicker(1);
+            m_weight->setEntries({
+                { 0, "Regular",  QString(), QString() },
+                { 1, "Medium",   QString(), QString() },
+                { 2, "DemiBold", QString(), QString() },
+                { 3, "Bold",     QString(), QString() },
+            });
+            m_weight->setValue(2);
             m_weight->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             m_weight->setMinimumWidth(Ui::px(60));
-            fontRow->addWidget(m_font, 2);
+            fontRow->addWidget(m_font, 1);
             fontRow->addWidget(m_weight, 1);
             sl->addWidget(makeLabeledGroup("Font", fontRow));
+
+            m_gridShape = new PopupPicker(1);
+            m_gridShape->setEntries({
+                { int(GridType::Square),      "Square",      QString(), QString() },
+                { int(GridType::Hexagonal),   "Hexagonal",   QString(), QString() },
+                { int(GridType::Brick),       "Brick",       QString(), QString() },
+                { int(GridType::Wave),        "Wave",        QString(), QString() },
+                { int(GridType::Radial),      "Radial",      QString(), QString() },
+                { int(GridType::Phyllotaxis), "Phyllotaxis", QString(), QString() },
+            });
+            m_gridShape->setValue(int(GridType::Square));
+            m_gridShape->onSelected = [this](QVariant) { updateGridEnabled(); fire(); };
+            sl->addWidget(makeLabeledGroup("Grid", m_gridShape));
 
             m_charset->onSelected = [this](QVariant v) {
                 m_customEdit->setVisible(v.toInt() >= int(asciiCharsetPresets().size()));
@@ -1297,8 +1364,7 @@ public:
             };
             connect(m_customEdit, &QLineEdit::textChanged, this, [this](const QString&) { fire(); });
             m_font->onSelected = [this](QVariant) { fire(); };
-            connect(m_weight, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int) { fire(); });
+            m_weight->onSelected = [this](QVariant) { fire(); };
         }
         auto* settingsSec = new PanelSection("Settings", /*collapsible*/ false, true);
         settingsSec->body()->addWidget(settingsContent);
@@ -1311,7 +1377,7 @@ public:
             pl->setContentsMargins(0, 0, 0, 0);
             pl->setSpacing(Ui::px(Ui::kGapRows));
 
-            m_cellSize = new SliderRow("Cell size", 4, 48, 12);
+            m_cellSize = new SliderRow("Cell size", 4, 100, 12);
             m_gamma    = new SliderRow("Gamma",    10, 500, 100);
             m_edges    = new SliderRow("Edges",     0, 100,  0);
             m_edges->setToolTip("Contour glyphs (- / | \\) on detected edges.\n"
@@ -1330,44 +1396,32 @@ public:
                 pl->addWidget(r);
             }
 
-            // Localization dots in the gutter (Cell size excluded: it is the
-            // structural glyph-grid pitch, it cannot vary per cell).
+            // Per-parameter localization dots retired in favour of the single
+            // "Localize" button in Adjustments. LocDots kept wired but with
+            // no dots registered, so nothing floats in the gutter anymore.
             m_locDots = new LocDots(this);
             m_locDots->onToggle = [this](LocParam p) { if (onLocToggle) onLocToggle(p); };
-            m_locDots->add(m_gamma,    LocParam::AsGamma);
-            m_locDots->add(m_edges,    LocParam::AsEdges);
-            m_locDots->add(m_hatching, LocParam::AsHatching);
-            m_locDots->add(m_stipple,  LocParam::AsStipple);
-            m_locDots->add(m_contour,  LocParam::AsContour);
+        }
+        auto* paramsSec = new PanelSection("Parameters", /*collapsible*/ false, true);
+        paramsSec->body()->addWidget(paramsContent);
+        vl->addWidget(paramsSec);
 
-            m_orderedDither = new QPushButton("Ordered dither");
-            m_orderedDither->setCheckable(true);
-            m_orderedDither->setCursor(Qt::PointingHandCursor);
-            m_orderedDither->setFixedHeight(Ui::px(Ui::kBoxH));
-            m_orderedDither->setToolTip("Bayer-threshold glyph pick instead of nearest-\n"
-                                       "coverage — smoother gradients, no denser charset.");
-            m_orderedDither->setStyleSheet(QString(
-                "QPushButton{background:%1;border:1px solid %2;border-radius:%3px;"
-                "color:%4;font-size:%5px;font-weight:500;}"
-                "QPushButton:hover{border-color:%6;}"
-                "QPushButton:checked{background:%7;border-color:%6;color:%8;}")
-                .arg(Ui::kColBoxBg).arg(Ui::kColBoxBorder).arg(Ui::px(Ui::kBoxRadius))
-                .arg(Ui::kColLabel).arg(Ui::px(Ui::kBoxFontPx))
-                .arg(Ui::kColBoxHover).arg(Ui::kColBoxChecked).arg(Ui::kColText));
-            connect(m_orderedDither, &QPushButton::toggled, this, [this](bool) { fire(); });
-            pl->addWidget(m_orderedDither);
-
+        // ── Appearance (Fusion + Opacity on one row — glyphs aren't rounded
+        // rects, so there's no Corner radius to pair Opacity with instead) ──
+        auto* appearance = new PanelSection("Appearance", /*collapsible*/ false, true);
+        {
+            auto* al = appearance->body();
             m_fusion = new PopupPicker(1);
             m_fusion->setEntries(blendPickerEntries());
             m_fusion->setValue(int(BlendMode::Normal));
             m_fusion->onSelected = [this](QVariant) {
                 if (!m_updating && onBlendChanged) onBlendChanged();
             };
-            pl->addWidget(makeLabeledGroup("Fusion", m_fusion));
+            m_opacity = new DragSpinBox(":/icons/opacity.svg", 0, 100, 100, "%");
+            m_opacity->onValueChanged = [this](int) { fire(); };
+            al->addWidget(twinBoxGroup("Fusion", m_fusion, "Opacity", m_opacity));
         }
-        auto* paramsSec = new PanelSection("Parameters", /*collapsible*/ false, true);
-        paramsSec->body()->addWidget(paramsContent);
-        vl->addWidget(paramsSec);
+        vl->addWidget(appearance);
     }
 
     void setAnimatedParams(const QSet<ParamId>& ids)
@@ -1378,6 +1432,7 @@ public:
         m_hatching->setAnimated(ids.contains(ParamId::AsHatching));
         m_stipple->setAnimated(ids.contains(ParamId::AsStipple));
         m_contour->setAnimated(ids.contains(ParamId::AsContour));
+        m_opacity->setAnimated(ids.contains(ParamId::AsOpacity));
     }
 
     QHash<QWidget*, ParamId> paramWidgets() const
@@ -1389,6 +1444,7 @@ public:
             { m_hatching, ParamId::AsHatching },
             { m_stipple,  ParamId::AsStipple },
             { m_contour,  ParamId::AsContour },
+            { m_opacity,  ParamId::AsOpacity },
         };
     }
 
@@ -1399,14 +1455,15 @@ public:
         s.charsetPreset  = m_charset->value().toInt();
         s.customCharset  = m_customEdit->text();
         s.cellSize       = m_cellSize->value();
+        s.gridShape      = GridType(m_gridShape->value().toInt());
         s.gamma          = m_gamma->value() / 100.0f;
         s.fontFamily     = m_font->value().toString();
-        s.fontWeight     = kWeights[qBound(0, m_weight->currentIndex(), 3)];
+        s.fontWeight     = kWeights[qBound(0, m_weight->value().toInt(), 3)];
         s.edges          = m_edges->value();
         s.hatching       = m_hatching->value();
         s.stipple        = m_stipple->value();
         s.contour        = m_contour->value();
-        s.orderedDither  = m_orderedDither->isChecked();
+        s.opacity        = m_opacity->value() / 100.0f;
         s.loc            = m_loc;   // no sliders; kept in sync via setLocPoint()
         return s;
     }
@@ -1425,18 +1482,16 @@ public:
         m_hatching->setValue(s.hatching);
         m_stipple->setValue(s.stipple);
         m_contour->setValue(s.contour);
-        m_orderedDither->blockSignals(true);
-        m_orderedDither->setChecked(s.orderedDither);
-        m_orderedDither->blockSignals(false);
+        m_opacity->setValue(qRound(s.opacity * 100));
         m_font->setValue(s.fontFamily);
-        m_weight->blockSignals(true);
         int wi = 2;
         if      (s.fontWeight <= 400) wi = 0;
         else if (s.fontWeight <= 500) wi = 1;
         else if (s.fontWeight <= 600) wi = 2;
         else                          wi = 3;
-        m_weight->setCurrentIndex(wi);
-        m_weight->blockSignals(false);
+        m_weight->setValue(wi);   // silent — PopupPicker::setValue never calls onSelected
+        m_gridShape->setValue(int(s.gridShape));
+        updateGridEnabled();
         m_loc = s.loc;
         m_locDots->sync(m_loc);
         m_updating = false;
@@ -1448,20 +1503,32 @@ public:
 private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
+    // Edges/Hatching/Contour need the raster's row/col neighbour grid, only
+    // built for the Square grid shape (see AsciiRenderer) — grey them out
+    // rather than leave sliders that silently do nothing.
+    void updateGridEnabled()
+    {
+        const bool square = GridType(m_gridShape->value().toInt()) == GridType::Square;
+        m_edges->setEnabled(square);
+        m_hatching->setEnabled(square);
+        m_contour->setEnabled(square);
+    }
+
     LocDots*         m_locDots    = nullptr;
     LocMap           m_loc;
     PopupPicker*     m_charset    = nullptr;
     QLineEdit*       m_customEdit = nullptr;
     PopupPicker*     m_font       = nullptr;
-    NoWheelComboBox* m_weight     = nullptr;
+    PopupPicker*     m_weight     = nullptr;
+    PopupPicker*     m_gridShape  = nullptr;
     SliderRow*       m_cellSize   = nullptr;
     SliderRow*       m_gamma      = nullptr;
     SliderRow*       m_edges      = nullptr;
     SliderRow*       m_hatching   = nullptr;
     SliderRow*       m_stipple    = nullptr;
     SliderRow*       m_contour    = nullptr;
-    QPushButton*     m_orderedDither = nullptr;
     PopupPicker*     m_fusion     = nullptr;
+    DragSpinBox*     m_opacity    = nullptr;
     bool m_updating = false;
 };
 
@@ -1481,7 +1548,10 @@ public:
     TextColorSwatch(QWidget* parent = nullptr) : QPushButton(parent)
     {
         setCursor(Qt::PointingHandCursor);
-        setFixedSize(Ui::px(48), Ui::px(48));
+        // Same width as a SliderRow's value cell (kCellW), so a Texts row's
+        // [text | swatch] lines up exactly with the Rotation row's
+        // [slider | value] above it — same right edge, same gap.
+        setFixedSize(Ui::px(Ui::kCellW), Ui::px(Ui::kBoxH));
         connect(this, &QPushButton::clicked, this, [this]() {
             auto* dlg = new ColorPickerDialog(
                 m_color.isValid() ? m_color : QColor(Qt::white), 1.0f,
@@ -1505,10 +1575,12 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
         const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        // Same box language as every other box: transparent fill, @boxStroke
+        // border (kept as a literal here — this is raw QPainter, not QSS).
         const qreal rad = Ui::px(8);
-        p.setPen(QPen(underMouse() ? QColor(0x82, 0x82, 0x82)
-                                   : QColor(0x5D, 0x5D, 0x5D), 1));
-        p.setBrush(QColor(0x3B, 0x3B, 0x3B));
+        p.setPen(QPen(underMouse() ? QColor(0x61, 0x61, 0x61)
+                                   : QColor(0x3D, 0x3D, 0x3D), 1));
+        p.setBrush(Qt::NoBrush);
         p.drawRoundedRect(r, rad, rad);
 
         const QRectF inner = r.adjusted(Ui::px(8), Ui::px(8), -Ui::px(8), -Ui::px(8));
@@ -1550,6 +1622,10 @@ public:
         m_locDots->sync(m_loc);
     }
 
+    // Per-tone text rows + text padding — mounted by ModePanel in its own
+    // "Texts" section (between Fill and Background), not on this page.
+    QWidget* textsBody() const { return m_textsBody; }
+
     MosaicPage(QWidget* parent = nullptr)
         : QWidget(parent)
     {
@@ -1575,14 +1651,45 @@ public:
                 sl->addWidget(r);
             }
 
-            // Localization dots: one per localizable slider, floating in the
-            // right gutter, vertically centred on the row. Toggled on/off
-            // here; position/radius/falloff/scale are set on-canvas.
+            // Per-parameter localization dots retired in favour of the single
+            // "Localize" button in Adjustments. LocDots kept wired but with
+            // no dots registered, so nothing floats in the gutter anymore.
             m_locDots = new LocDots(this);
             m_locDots->onToggle = [this](LocParam p) { if (onLocToggle) onLocToggle(p); };
-            m_locDots->add(m_spacing, LocParam::MsSpacing);
-            m_locDots->add(m_width,   LocParam::MsWidthPct);
-            m_locDots->add(m_height,  LocParam::MsHeightPct);
+
+            m_gridType = new PopupPicker(1);
+            m_gridType->setEntries({
+                { int(GridType::Square),      "Square",      QString(), QString() },
+                { int(GridType::Hexagonal),   "Hexagonal",   QString(), QString() },
+                { int(GridType::Brick),       "Brick",       QString(), QString() },
+                { int(GridType::Wave),        "Wave",        QString(), QString() },
+                { int(GridType::Radial),      "Radial",      QString(), QString() },
+                { int(GridType::Phyllotaxis), "Phyllotaxis", QString(), QString() },
+            });
+            m_gridType->setValue(int(GridType::Square));
+            m_gridType->onSelected = [this](QVariant) { fire(); };
+            sl->addWidget(makeLabeledGroup("Grid", m_gridType));
+
+            m_rotation = new SliderRow("Rotation", 0, 360, 0);
+            m_rotation->setToolTip("Rotates the whole tile grid (like Halftone's\n"
+                                   "Grid rotation) — tiles turn with it, for\n"
+                                   "compositions with oblique lines.");
+            m_rotation->onValueChanged = [this](int) { fire(); };
+            sl->addWidget(m_rotation);
+        }
+        auto* settingsSec = new PanelSection("Settings", /*collapsible*/ false, true);
+        settingsSec->body()->addWidget(settingsContent);
+        vl->addWidget(settingsSec);
+
+        // ── Texts (per-tone label + colour, text padding) ──────
+        // Not mounted on this page's own layout: it lives in ModePanel's own
+        // "Texts" section, placed between Fill (which drives the tone count
+        // via syncToneCount) and Background — see ModePanel's constructor.
+        m_textsBody = new QWidget;
+        {
+            auto* tl = new QVBoxLayout(m_textsBody);
+            tl->setContentsMargins(0, 0, 0, 0);
+            tl->setSpacing(Ui::px(Ui::kGapRows));
 
             auto* fontRow = new QHBoxLayout;
             fontRow->setContentsMargins(0, 0, 0, 0);
@@ -1602,77 +1709,59 @@ public:
             }
             m_font->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             m_font->setMinimumWidth(Ui::px(60));
-            m_weight = new NoWheelComboBox;
-            m_weight->addItems({ "Regular", "Medium", "DemiBold", "Bold" });
-            m_weight->setCurrentIndex(2);
-            m_weight->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-            m_weight->setMinimumContentsLength(6);
+            m_weight = new PopupPicker(1);
+            m_weight->setEntries({
+                { 0, "Regular",  QString(), QString() },
+                { 1, "Medium",   QString(), QString() },
+                { 2, "DemiBold", QString(), QString() },
+                { 3, "Bold",     QString(), QString() },
+            });
+            m_weight->setValue(2);
             m_weight->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             m_weight->setMinimumWidth(Ui::px(60));
-            fontRow->addWidget(m_font, 2);
+            fontRow->addWidget(m_font, 1);
             fontRow->addWidget(m_weight, 1);
-            sl->addWidget(makeLabeledGroup("Font", fontRow));
+            tl->addWidget(makeLabeledGroup("Font", fontRow));
 
             m_font->onSelected = [this](QVariant) { fire(); };
-            connect(m_weight, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                    this, [this](int) { fire(); });
-        }
-        auto* settingsSec = new PanelSection("Settings", /*collapsible*/ false, true);
-        settingsSec->body()->addWidget(settingsContent);
-        vl->addWidget(settingsSec);
-
-        // ── Parameters (padding, gaps, texts, fusion, opacity) ──
-        auto* paramsContent = new QWidget;
-        {
-            auto* pl = new QVBoxLayout(paramsContent);
-            pl->setContentsMargins(0, 0, 0, 0);
-            pl->setSpacing(Ui::px(Ui::kGapRows));
-
-            m_padding = new SliderRow("Text padding", 0, 45, 12);
-            m_padding->setToolTip("Empty border around the text, as % of the\n"
-                                  "tile's shorter side. Text scales to fit.");
-            m_gapX = new SliderRow("Gap X", 0, 90, 0);
-            m_gapX->setToolTip("Horizontal spacing between tiles, as % of the\n"
-                               "cell. The background shows through.");
-            m_gapY = new SliderRow("Gap Y", 0, 90, 0);
-            m_gapY->setToolTip("Vertical spacing between tiles, as % of the cell.");
-            for (SliderRow* r : { m_padding, m_gapX, m_gapY }) {
-                r->onValueChanged = [this](int) { fire(); };
-                pl->addWidget(r);
-            }
-            m_locDots->add(m_padding, LocParam::MsTextPadding);
-            m_locDots->add(m_gapX,    LocParam::MsGapX);
-            m_locDots->add(m_gapY,    LocParam::MsGapY);
+            m_weight->onSelected = [this](QVariant) { fire(); };
 
             auto* textsHost = new QWidget;
             m_textsBox = new QVBoxLayout(textsHost);
             m_textsBox->setContentsMargins(0, 0, 0, 0);
             m_textsBox->setSpacing(Ui::px(8));
-            auto* textsGrp = makeLabeledGroup("Texts", textsHost);
-            textsGrp->setToolTip("One text per Fill tone: every tile of that tone\n"
-                                 "shows this text. Leave empty for plain fills.\n"
-                                 "The box picks the text colour (default: auto).");
-            pl->addWidget(textsGrp);
+            textsHost->setToolTip("One text per Fill tone: every tile of that tone\n"
+                                  "shows this text. Leave empty for plain fills.\n"
+                                  "The box picks the text colour (default: auto).");
+            tl->addWidget(textsHost);
             rebuildTextRows(1);
 
+            m_padding = new SliderRow("Text padding", 0, 45, 12);
+            m_padding->setToolTip("Empty border around the text, as % of the\n"
+                                  "tile's shorter side. Text scales to fit.");
+            m_padding->onValueChanged = [this](int) { fire(); };
+            tl->addWidget(m_padding);
+        }
+
+        // ── Appearance (Fusion + Opacity + Corner radius) ──────
+        auto* appearance = new PanelSection("Appearance", /*collapsible*/ false, true);
+        {
+            auto* al = appearance->body();
             m_fusion = new PopupPicker(1);
             m_fusion->setEntries(blendPickerEntries());
             m_fusion->setValue(int(BlendMode::Normal));
             m_fusion->onSelected = [this](QVariant) {
                 if (!m_updating && onBlendChanged) onBlendChanged();
             };
-            pl->addWidget(makeLabeledGroup("Fusion", m_fusion));
+            al->addWidget(makeLabeledGroup("Fusion", m_fusion));
 
-            // Opacity + Corner radius (two icon boxes side by side).
             m_opacity      = new DragSpinBox(":/icons/opacity.svg",       0, 100, 100, "%");
             m_cornerRadius = new DragSpinBox(":/icons/corner_radius.svg", 0, 100,   0, "");
             m_opacity->onValueChanged      = [this](int) { fire(); };
             m_cornerRadius->onValueChanged = [this](int) { fire(); };
-            pl->addWidget(twinBoxGroup("Opacity", m_opacity, "Corner radius", m_cornerRadius));
+            al->addWidget(twinBoxGroup("Opacity", m_opacity, "Corner radius", m_cornerRadius));
         }
-        auto* paramsSec = new PanelSection("Parameters", /*collapsible*/ false, true);
-        paramsSec->body()->addWidget(paramsContent);
-        vl->addWidget(paramsSec);
+        vl->addWidget(appearance);
     }
 
     // Keep one text row per Fill tone, preserving what's already typed.
@@ -1690,11 +1779,11 @@ public:
         s.spacing      = float(m_spacing->value());
         s.widthPct     = float(m_width->value());
         s.heightPct    = float(m_height->value());
-        s.gapX         = float(m_gapX->value());
-        s.gapY         = float(m_gapY->value());
+        s.gridShape    = GridType(m_gridType->value().toInt());
+        s.gridRotation = float(m_rotation->value());
         s.textPadding  = m_padding->value();
         s.fontFamily   = m_font->value().toString();
-        s.fontWeight   = kWeights[qBound(0, m_weight->currentIndex(), 3)];
+        s.fontWeight   = kWeights[qBound(0, m_weight->value().toInt(), 3)];
         s.opacity      = m_opacity->value() / 100.0f;
         s.cornerRadius = float(m_cornerRadius->value());
         s.texts.clear();
@@ -1711,20 +1800,18 @@ public:
         m_spacing->setValue(qRound(s.spacing));
         m_width->setValue(qRound(s.widthPct));
         m_height->setValue(qRound(s.heightPct));
-        m_gapX->setValue(qRound(s.gapX));
-        m_gapY->setValue(qRound(s.gapY));
+        m_gridType->setValue(int(s.gridShape));
+        m_rotation->setValue(qRound(s.gridRotation));
         m_padding->setValue(s.textPadding);
         m_opacity->setValue(qRound(s.opacity * 100));
         m_cornerRadius->setValue(qRound(s.cornerRadius));
         m_font->setValue(s.fontFamily);
-        m_weight->blockSignals(true);
         int wi = 2;
         if      (s.fontWeight <= 400) wi = 0;
         else if (s.fontWeight <= 500) wi = 1;
         else if (s.fontWeight <= 600) wi = 2;
         else                          wi = 3;
-        m_weight->setCurrentIndex(wi);
-        m_weight->blockSignals(false);
+        m_weight->setValue(wi);   // silent — PopupPicker::setValue never calls onSelected
 
         rebuildTextRows(qBound(1, int(s.tonal.tones.size()), 8), &s.texts, &s.textColors);
         m_loc = s.loc;
@@ -1738,8 +1825,7 @@ public:
         m_width->setAnimated(ids.contains(ParamId::MsWidthPct));
         m_height->setAnimated(ids.contains(ParamId::MsHeightPct));
         m_padding->setAnimated(ids.contains(ParamId::MsTextPadding));
-        m_gapX->setAnimated(ids.contains(ParamId::MsGapX));
-        m_gapY->setAnimated(ids.contains(ParamId::MsGapY));
+        m_rotation->setAnimated(ids.contains(ParamId::MsGridRotation));
     }
 
     QHash<QWidget*, ParamId> paramWidgets() const
@@ -1747,7 +1833,7 @@ public:
         return {
             { m_spacing, ParamId::MsSpacing },     { m_width, ParamId::MsWidthPct },
             { m_height, ParamId::MsHeightPct },    { m_padding, ParamId::MsTextPadding },
-            { m_gapX, ParamId::MsGapX },           { m_gapY, ParamId::MsGapY },
+            { m_rotation, ParamId::MsGridRotation },
         };
     }
 
@@ -1773,9 +1859,16 @@ private:
             auto* rowW = new QWidget;
             auto* rl = new QHBoxLayout(rowW);
             rl->setContentsMargins(0, 0, 0, 0);
-            rl->setSpacing(Ui::px(12));
+            rl->setSpacing(Ui::px(Ui::kGapTwinBoxes));   // match SliderRow's slider↔cell gap
 
             auto* e = new QLineEdit;
+            e->setFrame(false);
+            // Own objectName + QSS rule (no min-height): the generic QLineEdit
+            // rule's `min-height: s(48)px` fights a setFixedHeight() that's
+            // exactly 48 too, and the tie silently clips the border's bottom
+            // edge — same trap #scaleValueEdit and #layerNameEdit work around.
+            e->setObjectName("toneTextEdit");
+            e->setFixedHeight(Ui::px(Ui::kBoxH));   // match the swatch beside it, not the generic (shorter) QLineEdit height
             e->setPlaceholderText(QString("Tone %1 text…").arg(i + 1));
             if (texts && i < int(texts->size()))  e->setText((*texts)[size_t(i)]);
             else if (!texts && i < keepText.size()) e->setText(keepText[i]);
@@ -1798,12 +1891,13 @@ private:
     SliderRow*       m_spacing  = nullptr;
     SliderRow*       m_width    = nullptr;
     SliderRow*       m_height   = nullptr;
+    SliderRow*       m_rotation = nullptr;
     SliderRow*       m_padding  = nullptr;
-    SliderRow*       m_gapX     = nullptr;
-    SliderRow*       m_gapY     = nullptr;
+    PopupPicker*     m_gridType = nullptr;
     PopupPicker*     m_font     = nullptr;
-    NoWheelComboBox* m_weight   = nullptr;
-    QVBoxLayout*     m_textsBox = nullptr;
+    PopupPicker*     m_weight   = nullptr;
+    QVBoxLayout*     m_textsBox  = nullptr;
+    QWidget*         m_textsBody = nullptr;
     QVector<QWidget*>         m_textRows;
     QVector<QLineEdit*>       m_textEdits;
     QVector<TextColorSwatch*> m_textSwatches;
@@ -1823,7 +1917,7 @@ ModePanel::ModePanel(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName("sidePanel");
-    setMinimumWidth(Ui::px(420));
+    setMinimumWidth(Ui::px(370));   // gutter shrank 40→20→60, columns tightened 10px more
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -1833,13 +1927,13 @@ ModePanel::ModePanel(QWidget* parent)
     {
         auto* modeRow = new QWidget;
         auto* tl = new QHBoxLayout(modeRow);
-        // Left 40 = the controls gutter; right 70 = the literal same gutter
-        // constant every other box in the column stops at (Circle, Square,
+        // Left = the controls gutter; right = the same icon-gutter constant
+        // every other box in the column stops at (Circle, Square,
         // value cells...) — the dropdown is guaranteed to end exactly where
         // they do, no hand-balanced spacing/margin arithmetic to keep in
         // sync. The "X" floats past that margin (RightFloat below), lined up
         // with the section header icons instead.
-        tl->setContentsMargins(Ui::px(40), Ui::px(16), Ui::px(70), Ui::px(12));
+        tl->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(16), Ui::px(Ui::kColRight), Ui::px(12));
 
         m_modePick = new PopupPicker(1);
         m_modePick->setEntries({
@@ -1850,6 +1944,7 @@ ModePanel::ModePanel(QWidget* parent)
         });
         m_modePick->setValue(int(RenderMode::Halftone));
         m_modePick->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_modePick->setAccent(true);   // orange/white CTA — must stay unmistakable
         m_modePick->onSelected = [this](QVariant v) {
             if (!m_updating) emit modeSelected(RenderMode(v.toInt()));
         };
@@ -1862,8 +1957,12 @@ ModePanel::ModePanel(QWidget* parent)
         auto* clearBtn = new QPushButton(modeRow);
         clearBtn->setObjectName("iconBtn");
         clearBtn->setCursor(Qt::PointingHandCursor);
-        clearBtn->setFixedSize(Ui::px(26), Ui::px(26));
-        clearBtn->setIconSize(QSize(Ui::px(16), Ui::px(16)));
+        {
+            const int btnPx = Ui::px(26);
+            const int pad   = Ui::px(5);
+            clearBtn->setFixedSize(btnPx, btnPx);
+            clearBtn->setIconSize(QSize(btnPx - 2 * pad, btnPx - 2 * pad));
+        }
         clearBtn->setIcon(QIcon(":/icons/x.svg"));
         clearBtn->setToolTip("Clear mode (show original)");
         connect(clearBtn, &QPushButton::clicked, this, &ModePanel::clearModeRequested);
@@ -1930,10 +2029,10 @@ ModePanel::ModePanel(QWidget* parent)
     // Extend the body to the +/− gutter so the favourite icon can sit in that
     // column; the palette controls compensate with their own right margin.
     // Right margin 24→14 to match the (shifted) header icons; TonalControls'
-    // kGutterComp tracks this so the boxes still stop at the 70px gutter.
-    fill->body()->setContentsMargins(Ui::px(40), Ui::px(2), Ui::px(14), Ui::px(14));
+    // kGutterComp tracks this so the boxes still stop at the kColRight gutter.
+    fill->body()->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(2), Ui::px(14), 0);
     m_tonal = new TonalControlsWidget(
-        TonalSettings{ ToneMode::FixedTones, defaultAccentTones(1) });
+        TonalSettings{ ToneMode::ImageColors, defaultAccentTones(1) });
     m_tonal->onChanged = [this]() {
         if (m_updating) return;
         // Mosaic's per-tone text rows track the Fill palette size live.
@@ -1948,6 +2047,13 @@ ModePanel::ModePanel(QWidget* parent)
         if (!m_updating) emit tonalChanged();
     };
     cl->addWidget(fill);
+
+    // ── Texts (Mosaic only: per-tone text rows + text padding) ─
+    auto* mosaicTexts = new PanelSection("Texts", /*collapsible*/ false, true);
+    m_mosaicTextsSection = mosaicTexts;
+    mosaicTexts->body()->addWidget(m_mosaicPage->textsBody());
+    mosaicTexts->setVisible(false);   // shown only while Mosaic is the active mode
+    cl->addWidget(mosaicTexts);
 
     // ── Background (shared document colour; "−" removes it) ───
     auto* bg = new PanelSection("Background", /*collapsible*/ true, true);
@@ -1980,14 +2086,21 @@ ModePanel::ModePanel(QWidget* parent)
         auto* row = new QHBoxLayout;
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(Ui::px(14));
-        m_format = new NoWheelComboBox;
-        m_format->addItems({ "PNG", "PNG Sequence", "JPG", "MP4", "SVG" });
+        m_format = new PopupPicker(1);
+        m_format->setEntries({
+            { "PNG",          "PNG",          QString(), QString() },
+            { "PNG Sequence", "PNG Sequence", QString(), QString() },
+            { "JPG",          "JPG",          QString(), QString() },
+            { "MP4",          "MP4",          QString(), QString() },
+            { "SVG",          "SVG",          QString(), QString() },
+        });
+        m_format->setValue("PNG");
         m_format->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        m_format->setMinimumWidth(Ui::px(60));   // allow the combo to shrink
+        m_format->setMinimumWidth(Ui::px(60));   // allow the picker to shrink
         row->addWidget(m_format, 1);
 
         auto* btnExport = new QPushButton("Export");
-        btnExport->setObjectName("accentBtn");
+        btnExport->setObjectName("exportBtn");
         btnExport->setFixedHeight(Ui::px(Ui::kBoxH));
         btnExport->setMinimumWidth(Ui::px(110));
         btnExport->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
@@ -2055,7 +2168,7 @@ DitherSettings   ModePanel::ditherSettings()   const { return m_ditherPage->sett
 AsciiSettings    ModePanel::asciiSettings()    const { return m_asciiPage->settings(); }
 MosaicSettings   ModePanel::mosaicSettings()   const { return m_mosaicPage->settings(); }
 
-QString ModePanel::outputFormat()   const { return m_format->currentText(); }
+QString ModePanel::outputFormat()   const { return m_format->value().toString(); }
 
 void ModePanel::setMode(RenderMode m)
 {
@@ -2064,6 +2177,7 @@ void ModePanel::setMode(RenderMode m)
     m_ditherPage->setVisible(m == RenderMode::Dither);
     m_asciiPage->setVisible(m == RenderMode::Ascii);
     m_mosaicPage->setVisible(m == RenderMode::Mosaic);
+    m_mosaicTextsSection->setVisible(m == RenderMode::Mosaic);
     m_modePick->setValue(int(m));
 }
 
@@ -2103,12 +2217,12 @@ void ModePanel::setFromLayer(const Layer& layer)
     else {
         // No mode: the picker shows a neutral label (no entry matches -1,
         // so the text is set by hand) and every page hides.
-        m_modePick->setValue(-1);
-        m_modePick->setText("Select mode…");
+        m_modePick->setPlaceholder("Select mode…");
         m_halftonePage->setVisible(false);
         m_ditherPage->setVisible(false);
         m_asciiPage->setVisible(false);
         m_mosaicPage->setVisible(false);
+        m_mosaicTextsSection->setVisible(false);
     }
     m_fillSection->setVisible(hasMode);
 

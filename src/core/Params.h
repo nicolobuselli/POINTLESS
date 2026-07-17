@@ -313,10 +313,10 @@ inline bool operator==(const LocPoint& a, const LocPoint& b) {
 // is grouped by layer kind — locParamKind() relies on the grouping, and the
 // animation system appends one ParamId quartet per entry in this exact order.
 enum class LocParam {
-    HtDiameter, HtGamma, HtWeight, HtJitter,
-    DiStrength, DiThreshold, DiLevels, DiLineAngle, DiLineSpacing,
-    AsGamma, AsEdges, AsHatching, AsStipple, AsContour,
-    MsSpacing, MsWidthPct, MsHeightPct, MsTextPadding, MsGapX, MsGapY,
+    HtDiameter, HtGamma, HtWeight, HtJitter, HtMask,
+    DiStrength, DiThreshold, DiLevels, DiLineAngle, DiLineSpacing, DiMask,
+    AsGamma, AsEdges, AsHatching, AsStipple, AsContour, AsMask,
+    MsSpacing, MsWidthPct, MsHeightPct, MsTextPadding, MsMask,
     Count
 };
 
@@ -330,9 +330,9 @@ inline LocPoint locPointOr(const LocMap& m, LocParam p)
 
 inline LayerKind locParamKind(LocParam p)
 {
-    if (p <= LocParam::HtJitter)      return LayerKind::Halftone;
-    if (p <= LocParam::DiLineSpacing) return LayerKind::Dither;
-    if (p <= LocParam::AsContour)     return LayerKind::Ascii;
+    if (p <= LocParam::HtMask)        return LayerKind::Halftone;
+    if (p <= LocParam::DiMask)        return LayerKind::Dither;
+    if (p <= LocParam::AsMask)        return LayerKind::Ascii;
     return LayerKind::Mosaic;
 }
 
@@ -412,7 +412,7 @@ struct HalftoneSettings {
     float cornerRadius = 0.0f;
     LocMap loc;   // per-parameter localization points (Ht* keys)
 
-    TonalSettings tonal { ToneMode::FixedTones, defaultAccentTones(1) };
+    TonalSettings tonal { ToneMode::ImageColors, defaultAccentTones(1) };
 };
 
 inline bool operator==(const HalftoneSettings& a, const HalftoneSettings& b) {
@@ -470,7 +470,7 @@ struct DitherSettings {
     QString         patternPath;          // CustomPattern threshold image
     LocMap          loc;                  // per-parameter localization points (Di* keys)
 
-    TonalSettings tonal { ToneMode::FixedTones, defaultAccentTones(1) };
+    TonalSettings tonal { ToneMode::ImageColors, defaultAccentTones(1) };
 };
 
 inline bool operator==(const DitherSettings& a, const DitherSettings& b) {
@@ -514,7 +514,8 @@ inline int asciiBraillePreset() { return int(asciiCharsetPresets().size()) - 1; 
 struct AsciiSettings {
     int     charsetPreset = 0;        // index into presets; == size() → custom
     QString customCharset;
-    int     cellSize      = 12;       // 4..48 px
+    int     cellSize      = 12;       // 4..100 px
+    GridType gridShape    = GridType::Square;   // glyph lattice layout (Square/Hex/Brick/Wave/Radial/Phyllotaxis)
     float   gamma         = 1.0f;
     QString fontFamily    = QStringLiteral("Consolas");
     int     fontWeight    = 600;      // QFont::Weight (400/500/600/700)
@@ -523,9 +524,10 @@ struct AsciiSettings {
     bool    orderedDither = false;    // Bayer-threshold glyph pick instead of nearest-coverage
     int     contour       = 0;        // 0..100 — isoline-only mask (topographic look); 0 = off
     int     hatching      = 0;        // 0..100 — directional engraving strokes shading shadows; 0 = off
+    float   opacity       = 1.0f;     // 0..1 — no corner radius: glyphs aren't rounded rects
     LocMap  loc;                      // per-parameter localization points (As* keys)
 
-    TonalSettings tonal { ToneMode::FixedTones,
+    TonalSettings tonal { ToneMode::ImageColors,
                           { ToneEntry{ QColor(0xC0, 0xC0, 0xC0), 0 } } };
 
     bool isBraille() const { return charsetPreset == asciiBraillePreset(); }
@@ -541,11 +543,12 @@ struct AsciiSettings {
 
 inline bool operator==(const AsciiSettings& a, const AsciiSettings& b) {
     return a.charsetPreset == b.charsetPreset && a.customCharset == b.customCharset
-        && a.cellSize == b.cellSize && a.gamma == b.gamma
+        && a.cellSize == b.cellSize && a.gridShape == b.gridShape && a.gamma == b.gamma
         && a.fontFamily == b.fontFamily && a.fontWeight == b.fontWeight
         && a.edges == b.edges && a.stipple == b.stipple
         && a.orderedDither == b.orderedDither
         && a.contour == b.contour && a.hatching == b.hatching
+        && a.opacity == b.opacity
         && a.loc == b.loc
         && a.tonal == b.tonal;
 }
@@ -562,8 +565,8 @@ struct MosaicSettings {
     float   spacing     = 40.0f;   // 2..200 — base cell size (frame px), like halftone
     float   widthPct    = 100.0f;  // 10..300 — cell width  = spacing × widthPct/100
     float   heightPct   = 100.0f;  // 10..300 — cell height = spacing × heightPct/100
-    float   gapX        = 0.0f;    // 0..90 — % of the slot left empty horizontally
-    float   gapY        = 0.0f;    // 0..90 — % vertically
+    GridType gridShape    = GridType::Square;   // tile lattice layout, like Halftone's grid
+    float    gridRotation = 0.0f;               // 0..360 deg — rotates the lattice
     int     textPadding = 12;      // 0..45  — % of the tile's shorter side
     QString fontFamily  = QStringLiteral("Funnel Display");
     int     fontWeight  = 600;     // QFont::Weight (400/500/600/700)
@@ -572,7 +575,7 @@ struct MosaicSettings {
     std::vector<QString> texts;      // per-tone label, index-aligned with tonal.tones
     std::vector<QColor>  textColors; // per-tone text colour; invalid = auto contrast
 
-    TonalSettings tonal { ToneMode::FixedTones, defaultTones(4) };
+    TonalSettings tonal { ToneMode::ImageColors, defaultTones(4) };
     LocMap loc;
 
     float cellW() const { return qBound(2.0f, spacing, 600.0f) * qBound(10.0f, widthPct, 300.0f)  / 100.0f; }
@@ -581,7 +584,8 @@ struct MosaicSettings {
 
 inline bool operator==(const MosaicSettings& a, const MosaicSettings& b) {
     return a.spacing == b.spacing && a.widthPct == b.widthPct
-        && a.heightPct == b.heightPct && a.gapX == b.gapX && a.gapY == b.gapY
+        && a.heightPct == b.heightPct
+        && a.gridShape == b.gridShape && a.gridRotation == b.gridRotation
         && a.textPadding == b.textPadding
         && a.fontFamily == b.fontFamily && a.fontWeight == b.fontWeight
         && a.opacity == b.opacity && a.cornerRadius == b.cornerRadius

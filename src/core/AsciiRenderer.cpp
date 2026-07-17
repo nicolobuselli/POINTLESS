@@ -1,5 +1,6 @@
 #include "AsciiRenderer.h"
 #include "ColorMath.h"
+#include "GridGenerator.h"
 
 #include <QFont>
 #include <QFontMetricsF>
@@ -201,6 +202,7 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
     const int rows  = (imgH + cellH - 1) / cellH;
 
     const ToneCtx tc = ToneCtx::make(params.tonal);
+    const float opacity  = qBound(0.0f, params.opacity, 1.0f);
     const float invGamma = 1.0f / qMax(0.01f, params.gamma);
     const LocField locGam = locField(params.loc, LocParam::AsGamma, imgW, imgH);
     const LocMask  lmask  = locMask(params.loc, imgW, imgH);
@@ -256,6 +258,7 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
             const float lumPerc = ColorMath::linearToSrgb8(lumLin) / 255.0f;
             QColor pen          = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
             if (lm < 1.0f) pen.setAlphaF(pen.alphaF() * lm);   // fade band
+            pen.setAlphaF(pen.alphaF() * opacity);
             drawCell(output, QRectF(cx, cy, cellW, cellH), glyph, pen);
         }
     }
@@ -297,6 +300,7 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
     const int rows  = (imgH + cellH - 1) / cellH;
 
     const ToneCtx tc = ToneCtx::make(params.tonal);
+    const float opacity  = qBound(0.0f, params.opacity, 1.0f);
     const float invGamma = 1.0f / qMax(0.01f, params.gamma);
 
     // Per-parameter localization fields, sampled at each cell's centre.
@@ -321,6 +325,91 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
     for (int i = 0; i < nChars; ++i) byCoverage[size_t(i)] = i;
     std::sort(byCoverage.begin(), byCoverage.end(),
               [&](int a, int b) { return coverage[size_t(a)] < coverage[size_t(b)]; });
+
+    // Picks the glyph whose measured ink coverage matches `darkness`, either
+    // by nearest match or (Ordered dither) by bracketing the two closest
+    // glyphs and choosing between them with a Bayer threshold — shared by
+    // the raster (square grid) and point-sampled (other grid shapes) paths.
+    auto chooseGlyph = [&](float darkness, int col, int row) -> QChar {
+        if (params.orderedDither) {
+            int lo = 0, hi = nChars - 1;
+            while (lo < hi - 1) {
+                const int mid = (lo + hi) / 2;
+                if (coverage[size_t(byCoverage[size_t(mid)])] <= darkness) lo = mid;
+                else hi = mid;
+            }
+            const float covLo = coverage[size_t(byCoverage[size_t(lo)])];
+            const float covHi = coverage[size_t(byCoverage[size_t(hi)])];
+            const float span  = covHi - covLo;
+            const float frac  = span > 1e-4f ? qBound(0.0f, (darkness - covLo) / span, 1.0f) : 0.0f;
+            const int   idx   = (frac > bayerThreshold(col, row)) ? byCoverage[size_t(hi)]
+                                                                   : byCoverage[size_t(lo)];
+            return charset.at(idx);
+        }
+        int   idx  = 0;
+        float best = 2.0f;
+        for (int i = 0; i < nChars; ++i) {
+            const float d = std::fabs(coverage[size_t(i)] - darkness);
+            if (d < best) { best = d; idx = i; }
+        }
+        return charset.at(idx);
+    };
+
+    if (params.gridShape != GridType::Square) {
+        // ponytail: non-square lattices (hex/brick/wave/radial/phyllotaxis) place
+        // one glyph per GridGenerator sample instead of the row/col raster below,
+        // so they don't have a regular neighbour grid — Edges/Hatching/Contour
+        // (which need one for the Sobel/isoline passes) are skipped here. Upgrade
+        // path if that's ever wanted: bucket samples by `structure` (row-like
+        // index) and sort by x within each, like Halftone's shape rendering does.
+        GridSettings gs;
+        gs.type    = params.gridShape;
+        gs.spacing = float(cellH);
+        const std::vector<GridSample> samples = GridGenerator::generate(gs, imgW, imgH);
+        const float halfW = cellW * 0.5f;
+        const float halfH = cellH * 0.5f;
+
+        output.save();
+        output.setClipRect(0, 0, imgW, imgH);
+        output.setFont(font);
+        output.setRenderHint(QPainter::Antialiasing, true);
+        output.setRenderHint(QPainter::TextAntialiasing, true);
+
+        for (const GridSample& gsm : samples) {
+            const float lm = lmask.mask(gsm.x, gsm.y);
+            if (lm <= 0.02f) continue;
+
+            const int cx = qBound(0, qRound(gsm.x - halfW), imgW - 1);
+            const int cy = qBound(0, qRound(gsm.y - halfH), imgH - 1);
+            const int cw = qMin(imgW - cx, cellW);
+            const int ch = qMin(imgH - cy, cellH);
+
+            const float lumLin  = cellLuminosity(rgb, cx, cy, cw, ch);
+            const float lumPerc = ColorMath::linearToSrgb8(lumLin) / 255.0f;
+            float darkness      = 1.0f - lumLin;
+            const float invG    = locGam.on
+                ? 1.0f / qMax(0.01f, params.gamma * locGam.mul(gsm.x, gsm.y)) : invGamma;
+            darkness = std::pow(qBound(0.0f, darkness, 1.0f), invG);
+
+            const int col = int(gsm.x / qMax(1.0f, float(cellW)));
+            const int row = int(gsm.y / qMax(1.0f, float(cellH)));
+            const float stippleAmt = qBound(0.0f, params.stipple * locStp.mul(gsm.x, gsm.y), 100.0f)
+                                    / 100.0f * 0.5f;
+            if (stippleAmt > 0.0f)
+                darkness = qBound(0.0f, darkness + (cellNoise(col, row) - 0.5f) * stippleAmt, 1.0f);
+
+            const QChar c = chooseGlyph(darkness, col, row);
+            if (c == QChar(' ')) continue;
+
+            QColor pen = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
+            if (lm < 1.0f) pen.setAlphaF(pen.alphaF() * lm);
+            pen.setAlphaF(pen.alphaF() * opacity);
+            drawCell(output, QRectF(gsm.x - halfW, gsm.y - halfH, cellW, cellH), c, pen);
+        }
+
+        output.restore();
+        return;
+    }
 
     // Pass 1 — per-cell perceptual luminosity grid (also feeds the Sobel
     // pass, which needs neighbour cells).
@@ -463,42 +552,13 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
                 isEdge = true;   // reuses the "glyph already chosen" skip below
             }
 
-            if (!isEdge) {
-                if (params.orderedDither) {
-                    // Bracket the two ramp glyphs whose coverage straddles the
-                    // target darkness, then dither between them with a Bayer
-                    // threshold instead of always snapping to the nearest —
-                    // smoother gradients without a denser charset.
-                    int lo = 0, hi = nChars - 1;
-                    while (lo < hi - 1) {
-                        const int mid = (lo + hi) / 2;
-                        if (coverage[size_t(byCoverage[size_t(mid)])] <= darkness) lo = mid;
-                        else hi = mid;
-                    }
-                    const float covLo = coverage[size_t(byCoverage[size_t(lo)])];
-                    const float covHi = coverage[size_t(byCoverage[size_t(hi)])];
-                    const float span  = covHi - covLo;
-                    const float frac  = span > 1e-4f ? qBound(0.0f, (darkness - covLo) / span, 1.0f) : 0.0f;
-                    const int   idx   = (frac > bayerThreshold(col, row)) ? byCoverage[size_t(hi)]
-                                                                          : byCoverage[size_t(lo)];
-                    c = charset.at(idx);
-                } else {
-                    // Pick the glyph whose measured ink coverage best matches the
-                    // target darkness (handles non-linear glyph weights).
-                    int   idx  = 0;
-                    float best = 2.0f;
-                    for (int i = 0; i < nChars; ++i) {
-                        const float d = std::fabs(coverage[size_t(i)] - darkness);
-                        if (d < best) { best = d; idx = i; }
-                    }
-                    c = charset.at(idx);
-                }
-            }
+            if (!isEdge) c = chooseGlyph(darkness, col, row);
 
             if (c == QChar(' ')) continue;
 
             QColor pen = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
             if (lm < 1.0f) pen.setAlphaF(pen.alphaF() * lm);   // fade band
+            pen.setAlphaF(pen.alphaF() * opacity);
             drawCell(output, QRectF(cx, cy, cellW, cellH), c, pen);
         }
     }

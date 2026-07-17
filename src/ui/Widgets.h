@@ -15,6 +15,8 @@
 #include <functional>
 #include <array>
 
+class QResizeEvent;
+
 // ============================================================
 //  Shared custom widgets for ULTRA_Ditherer panels.
 //  Callback style (std::function) — no extra signals/moc needed.
@@ -52,7 +54,7 @@ public:
 
     int  value() const { return m_value; }
     void setValue(int v);
-    void setCompact();   // half-height variant with smaller font
+    void setRange(int minVal, int maxVal);    // re-clamps the current value
     void setTextLabel(const QString& text);   // bold letter (e.g. "W") instead of an icon
 
     // Tints the box's stroke to flag "this parameter has a keyframe track".
@@ -73,7 +75,6 @@ private:
     QLineEdit* m_valueEdit = nullptr;
     int        m_min, m_max, m_value;
     QString    m_suffix;
-    bool       m_compact      = false;
     bool       m_dragging     = false;
     QPoint     m_dragStart;
     int        m_dragStartVal = 0;
@@ -146,6 +147,7 @@ public:
 
     int  value() const;
     void setValue(int v);                 // silent (no callback)
+    void setRange(int minVal, int maxVal); // silent; re-clamps the current value
 
     // Tints the value box's stroke to flag "this parameter has a keyframe
     // track" (timeline auto-key orange).
@@ -193,6 +195,8 @@ protected:
     void paintEvent(QPaintEvent*) override;
     void resizeEvent(QResizeEvent*) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
+    void enterEvent(QEnterEvent*) override;
+    void leaveEvent(QEvent*) override;
 
 private:
     int  dividerX() const;
@@ -282,10 +286,11 @@ private:
 // narrow column. Scrolls internally if the entry list doesn't fit on screen.
 
 struct PopupPickerEntry {
-    QVariant value;    // selectable value; ignored for headers
-    QString  label;    // cell text; empty marks this entry as a header
-    QString  header;   // header pill text (used when label is empty)
-    QString  tooltip;  // optional per-cell tooltip
+    QVariant value;      // selectable value; ignored for headers
+    QString  label;      // cell text; empty marks this entry as a header
+    QString  header;     // header pill text (used when label is empty and !lineHeader)
+    QString  tooltip;    // optional per-cell tooltip
+    bool     lineHeader = false;   // header renders as a plain divider line, no text/pill
 };
 
 class PopupPicker : public QPushButton {
@@ -297,15 +302,27 @@ public:
     void setEntries(const QVector<PopupPickerEntry>& entries);
     QVariant value() const { return m_value; }
     void setValue(const QVariant& v);   // silent — no onSelected
+    void setPlaceholder(const QString& text);   // no entry selected (value matches nothing)
+
+    // Orange/white CTA look (same chrome as #accentBtn) instead of the
+    // standard dark box — used for the mode picker, which must stay
+    // unmistakable at a glance.
+    void setAccent(bool on);
+
+protected:
+    void resizeEvent(QResizeEvent* e) override;
 
 private:
     void setArrowOpen(bool open);
     void openPopup();
+    void updateElide();
 
     int                        m_columns;
     QVector<PopupPickerEntry>  m_entries;
     QVariant                   m_value;
     QLabel*                    m_arrow = nullptr;
+    QLabel*                    m_label = nullptr;
+    QString                    m_fullText;
     QElapsedTimer              m_lastCloseTimer;
 };
 

@@ -1,6 +1,7 @@
 #include "LayersPanel.h"
 #include "Widgets.h"
 #include "UiScale.h"
+#include "Theme.h"
 #include "../core/ImageAdjuster.h"
 #include "../workers/RenderWorker.h"
 
@@ -26,8 +27,8 @@
 
 namespace {
 
-constexpr int  kPanelWidth = 240;
-constexpr int  kMargin     = 12;
+constexpr int  kPanelWidth = 240;  // figma px — wrap in Ui::px() at each use site
+constexpr int  kMargin     = 12;   // figma px — wrap in Ui::px() at each use site
 const char*    kLayerMime  = "application/x-ultraditherer-layer";
 const char*    kParentMime = "application/x-ultraditherer-parent";
 
@@ -135,6 +136,11 @@ public:
         setObjectName("layerRowOuter");
         setCursor(Qt::PointingHandCursor);
         setFixedHeight(Ui::px(52));
+        // Click-focusable so MainWindow's Ctrl+C/Ctrl+V shortcuts can tell "a
+        // layer row is the active context" (focusWidget inside the panel) apart
+        // from the app's other Ctrl+C (copy rendered image) / Ctrl+V (paste
+        // timeline keys) uses.
+        setFocusPolicy(Qt::ClickFocus);
 
         auto* hl = new QHBoxLayout(this);
         hl->setContentsMargins(0, Ui::px(2), 0, Ui::px(2));
@@ -186,10 +192,10 @@ public:
         m_eye->setCursor(Qt::PointingHandCursor);
         m_eye->setIconSize(QSize(Ui::px(20), Ui::px(20)));
 
-        // The eye lives centred in the right gutter (≈70px), detached from
-        // the pill, lined up with the parameters' icon gutter.
+        // The eye lives centred in the right gutter, detached from the pill,
+        // lined up with the parameters' icon gutter.
         auto* eyeWrap = new QWidget(this);
-        eyeWrap->setFixedWidth(Ui::px(70));
+        eyeWrap->setFixedWidth(Ui::px(Ui::kColRight));
         auto* ew = new QHBoxLayout(eyeWrap);
         ew->setContentsMargins(0, 0, 0, 0);
         ew->addWidget(m_eye, 0, Qt::AlignCenter);
@@ -262,8 +268,8 @@ protected:
     {
         QFrame::resizeEvent(e);
         // Overlay the lock on the pill's right edge (pill = row minus the
-        // 70px eye gutter), vertically centred.
-        const int x = width() - Ui::px(70) - Ui::px(12) - m_lock->width();
+        // eye gutter), vertically centred.
+        const int x = width() - Ui::px(Ui::kColRight) - Ui::px(12) - m_lock->width();
         m_lock->move(qMax(0, x), (height() - m_lock->height()) / 2);
         m_lock->raise();
     }
@@ -272,6 +278,7 @@ protected:
     {
         if (e->button() == Qt::LeftButton && !m_editingName) {
             m_pressPos = e->pos();
+            setFocus(Qt::MouseFocusReason);
             if ((e->modifiers() & Qt::ShiftModifier) && onShiftSelected) onShiftSelected();
             else if ((e->modifiers() & Qt::ControlModifier) && onCtrlSelected) onCtrlSelected();
             else if (onSelected) onSelected();
@@ -622,7 +629,7 @@ public:
         : QFrame(parent), m_mediaId(mediaId)
     {
         // Outer row is transparent; the bordered "box" wraps chevron+thumb+name
-        // and stops before the eye, which sits in a 70px gutter (like child rows).
+        // and stops before the eye, which sits in the icon gutter (like child rows).
         setObjectName("parentRowOuter");
         setCursor(Qt::PointingHandCursor);
         setFixedHeight(Ui::px(52));
@@ -681,7 +688,7 @@ public:
         m_eye->setCursor(Qt::PointingHandCursor);
         m_eye->setIconSize(QSize(Ui::px(20), Ui::px(20)));
         auto* eyeWrap = new QWidget(this);
-        eyeWrap->setFixedWidth(Ui::px(70));
+        eyeWrap->setFixedWidth(Ui::px(Ui::kColRight));
         auto* ew = new QHBoxLayout(eyeWrap);
         ew->setContentsMargins(0, 0, 0, 0);
         ew->addWidget(m_eye, 0, Qt::AlignCenter);
@@ -704,6 +711,12 @@ public:
     {
         m_visible = on;
         m_eye->setIcon(QIcon(on ? ":/icons/eye_open.svg" : ":/icons/eye_closed.svg"));
+    }
+    void setSelected(bool sel)
+    {
+        if (m_box->property("selected").toBool() == sel) return;
+        m_box->setProperty("selected", sel);
+        repolish(m_box);
     }
 
 protected:
@@ -803,10 +816,10 @@ public:
         : QPushButton(parent)
     {
         setObjectName("trashBtn");
-        setFixedSize(30, 30);
+        setFixedSize(Ui::px(30), Ui::px(30));
         setCursor(Qt::PointingHandCursor);
         setIcon(QIcon(":/icons/trash.svg"));
-        setIconSize(QSize(16, 16));
+        setIconSize(QSize(Ui::px(16), Ui::px(16)));
         setAcceptDrops(true);
         setToolTip("Delete layer (click or drop a layer here)");
     }
@@ -897,18 +910,18 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
     m_expandedBox = new QWidget;
     m_expandedBox->setObjectName("layersPanel");
     m_expandedBox->setAttribute(Qt::WA_StyledBackground, true);
-    m_expandedBox->setFixedWidth(kPanelWidth);
+    m_expandedBox->setFixedWidth(Ui::px(kPanelWidth));
     {
         auto* vl = new QVBoxLayout(m_expandedBox);
-        vl->setContentsMargins(12, 10, 12, 12);
-        vl->setSpacing(10);
+        vl->setContentsMargins(Ui::px(12), Ui::px(10), Ui::px(12), Ui::px(12));
+        vl->setSpacing(Ui::px(10));
 
         m_headerWidget = new QWidget;
         m_headerWidget->setObjectName("layersHeader");
         m_headerWidget->setCursor(Qt::OpenHandCursor);
         auto* header = new QHBoxLayout(m_headerWidget);
         header->setContentsMargins(0, 0, 0, 0);
-        header->setSpacing(6);
+        header->setSpacing(Ui::px(6));
         header->addWidget(makeSectionTitle("Layers"), 1, Qt::AlignVCenter);
 
         auto* addBtn = makeIconButton(":/icons/plus.svg");
@@ -931,7 +944,7 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
 
         auto* footer = new QHBoxLayout;
         footer->setContentsMargins(0, 0, 0, 0);
-        footer->setSpacing(6);
+        footer->setSpacing(Ui::px(6));
 
         m_blendCombo = new NoWheelComboBox;
         m_blendCombo->setObjectName("blendCombo");
@@ -963,10 +976,10 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
     // ── Collapsed button ─────────────────────────────────────
     m_collapsedBtn = new QPushButton;
     m_collapsedBtn->setObjectName("layersToggleBtn");
-    m_collapsedBtn->setFixedSize(38, 38);
+    m_collapsedBtn->setFixedSize(Ui::px(38), Ui::px(38));
     m_collapsedBtn->setCursor(Qt::PointingHandCursor);
     m_collapsedBtn->setIcon(QIcon(":/icons/layers.svg"));
-    m_collapsedBtn->setIconSize(QSize(19, 19));
+    m_collapsedBtn->setIconSize(QSize(Ui::px(19), Ui::px(19)));
     m_collapsedBtn->setToolTip("Layers");
     connect(m_collapsedBtn, &QPushButton::clicked, this, [this]() { setExpandedUi(true); });
     root->addWidget(m_collapsedBtn);
@@ -1015,7 +1028,27 @@ void LayersPanel::setSelection(const QSet<int>& sel)
 {
     m_selSet = sel;
     for (LayerRow* r : m_rows)
-        r->setSelected(r->layerId() == m_activeId || m_selSet.contains(r->layerId()));
+        r->setSelected(m_selectedParentMediaId < 0
+                        && (r->layerId() == m_activeId || m_selSet.contains(r->layerId())));
+}
+
+void LayersPanel::setActiveSelection(int activeId, const QSet<int>& sel)
+{
+    m_activeId = activeId;
+    m_selSet   = sel;
+    for (LayerRow* r : m_rows)
+        r->setSelected(m_selectedParentMediaId < 0
+                        && (r->layerId() == m_activeId || m_selSet.contains(r->layerId())));
+}
+
+void LayersPanel::setSelectedParent(int mediaId)
+{
+    m_selectedParentMediaId = mediaId;
+    for (ParentRow* r : m_parentRows)
+        r->setSelected(r->mediaId() == mediaId);
+    for (LayerRow* r : m_rows)
+        r->setSelected(m_selectedParentMediaId < 0
+                        && (r->layerId() == m_activeId || m_selSet.contains(r->layerId())));
 }
 
 void LayersPanel::setLayers(const std::vector<Layer>& layers, int activeId)
@@ -1102,7 +1135,8 @@ void LayersPanel::buildTree()
         row->setThumb(thumbFor(layer));
         row->setLayerVisible(layer.visible);
         row->setLocked(layer.locked);
-        row->setSelected(layer.id == m_activeId || m_selSet.contains(layer.id));
+        row->setSelected(m_selectedParentMediaId < 0
+                          && (layer.id == m_activeId || m_selSet.contains(layer.id)));
         row->setIndent(tree::indent());
         row->setHasEdits(layer.kind != LayerKind::Original);
         const int id = layer.id;
@@ -1131,7 +1165,9 @@ void LayersPanel::buildTree()
             prow->setThumb(parentThumb(g.mediaId));
             prow->setCollapsed(g.collapsed);
             prow->setGroupVisible(g.groupVisible);
+            prow->setSelected(g.mediaId == m_selectedParentMediaId);
             const int mid = g.mediaId;
+            prow->onSelected     = [this, mid]()        { emit parentSelected(mid); };
             prow->onCollapse     = [this, mid](bool c)  { emit collapseToggled(mid, c); };
             prow->onGroupVisible = [this, mid](bool v)  { emit groupVisibilityToggled(mid, v); };
             prow->onAddChild     = [this, mid]()        { emit addChildRequested(mid); };
@@ -1162,7 +1198,8 @@ void LayersPanel::updateRowsInPlace()
         row->setThumb(thumbFor(layer));
         row->setLayerVisible(layer.visible);
         row->setLocked(layer.locked);
-        row->setSelected(layer.id == m_activeId || m_selSet.contains(layer.id));
+        row->setSelected(m_selectedParentMediaId < 0
+                          && (layer.id == m_activeId || m_selSet.contains(layer.id)));
         // Mode switches don't change treeSignature() (same layer ids/structure),
         // so this in-place path runs on every mode change too — must refresh
         // "has edits" here, or the context menu keeps whatever kind was current
@@ -1182,6 +1219,7 @@ void LayersPanel::updateRowsInPlace()
         m_parentRows[i]->setName(m_parents[i].name);
         m_parentRows[i]->setThumb(parentThumb(m_parents[i].mediaId));
         m_parentRows[i]->setGroupVisible(m_parents[i].groupVisible);
+        m_parentRows[i]->setSelected(m_parents[i].mediaId == m_selectedParentMediaId);
     }
 }
 
@@ -1213,7 +1251,7 @@ void LayersPanel::reposition()
     if (m_embedded) return;   // laid out by the column, never self-positioned
     QWidget* p = parentWidget();
     if (!p) return;
-    move(p->width() - width() - kMargin, kMargin);
+    move(p->width() - width() - Ui::px(kMargin), Ui::px(kMargin));
     raise();
 }
 

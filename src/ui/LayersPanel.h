@@ -49,6 +49,10 @@ public:
                  const QHash<int, QImage>& mediaImages);
     void setLayers(const std::vector<Layer>& layers, int activeId);   // legacy flat
     void setSelection(const QSet<int>& sel);   // multi-select highlight (shift-range)
+    void setSelectedParent(int mediaId);       // -1 = none; highlights the parent row instead
+    // Cheap highlight-only update for a pure selection change (no content edit):
+    // skips setTree()'s per-row thumbnail re-render, unlike setTree()/setLayers().
+    void setActiveSelection(int activeId, const QSet<int>& sel);
     void setSourceImage(const QImage& source);
     void setBackground(const QColor& background, float opacity);
     void requestAddLayer();   // external "+" trigger (embedded header lives in ControlsPanel)
@@ -58,6 +62,7 @@ signals:
     void visibilityToggled(int layerId, bool visible);
     void lockToggled(int layerId, bool locked);   // padlock: canvas ignores the layer
     void layerSelected(int layerId);
+    void parentSelected(int mediaId);   // click on a parent (group) row
     void layerRangeRequested(int layerId);   // shift-click: select anchor→here
     void layerToggleRequested(int layerId);  // ctrl-click: toggle in/out of selection
     void layerRenamed(int layerId, const QString& name);
@@ -98,6 +103,7 @@ private:
     std::vector<ParentGroup> m_parents;
     QHash<int, QImage>       m_mediaImages;   // mediaId → small source for thumbs
     int                m_activeId = -1;
+    int                m_selectedParentMediaId = -1;   // parent row selected instead of a child
     QSet<int>          m_selSet;          // extra highlighted rows (range selection)
     QImage             m_smallSource;   // downscaled source for row thumbs (legacy)
     QColor             m_background    = QColor(0x0A,0x0A,0x0A);

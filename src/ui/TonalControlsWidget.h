@@ -90,7 +90,7 @@ private:
     qint64         m_lastPopupClose = 0;
 
     // Color count + random generator (shared row)
-    NoWheelComboBox* m_modeCombo   = nullptr;
+    PopupPicker*     m_modeCombo   = nullptr;
     QPushButton*     m_generateBtn = nullptr;
     // Gaps around the combo in the palette row; resized in Image-colors mode so
     // the combo (which then spans the row) still lines up with the 70px gutter.

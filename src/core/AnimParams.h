@@ -36,9 +36,9 @@ enum class ParamId {
     DiPixelSize, DiStrength, DiOpacity, DiCornerRadius, DiThreshold,
     DiLevels, DiLineAngle, DiLineSpacing,
     // Ascii
-    AsCellSize, AsGamma, AsEdges, AsHatching, AsStipple, AsContour,
+    AsCellSize, AsGamma, AsEdges, AsHatching, AsStipple, AsContour, AsOpacity,
     // Mosaic
-    MsSpacing, MsWidthPct, MsHeightPct, MsTextPadding, MsGapX, MsGapY,
+    MsSpacing, MsWidthPct, MsHeightPct, MsTextPadding, MsGridRotation,
     // Tonal — per-colour threshold of the active effect's palette (only the
     // first N are animatable, N = current tone count). MUST stay contiguous.
     ToneLevel1, ToneLevel2, ToneLevel3, ToneLevel4,

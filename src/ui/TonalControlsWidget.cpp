@@ -269,11 +269,11 @@ private:
         auto* row = new QFrame;
         row->setObjectName("paletteConfirm");
         row->setAttribute(Qt::WA_StyledBackground, true);
-        row->setFixedHeight(34);
+        row->setFixedHeight(Ui::px(34));
 
         auto* hl = new QHBoxLayout(row);
-        hl->setContentsMargins(10, 0, 6, 0);
-        hl->setSpacing(6);
+        hl->setContentsMargins(Ui::px(10), 0, Ui::px(6), 0);
+        hl->setSpacing(Ui::px(6));
 
         auto* lbl = new QLabel("Delete?");
         lbl->setStyleSheet("background:transparent; color:#E3E3E3; font-size:9pt;");
@@ -281,12 +281,12 @@ private:
         auto* cancel = new QPushButton("Cancel");
         cancel->setObjectName("ghostMini");
         cancel->setCursor(Qt::PointingHandCursor);
-        cancel->setFixedHeight(24);
+        cancel->setFixedHeight(Ui::px(24));
 
         auto* del = new QPushButton("Delete");
         del->setObjectName("dangerMini");
         del->setCursor(Qt::PointingHandCursor);
-        del->setFixedHeight(24);
+        del->setFixedHeight(Ui::px(24));
 
         hl->addWidget(lbl);
         hl->addStretch(1);
@@ -423,10 +423,10 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
     vl->setSpacing(Ui::px(Ui::kGapRows));
 
     // The body extends to the +/− gutter (24px). The favourite sits in that
-    // gutter; every other control stops kGutterComp earlier (the 70px box
+    // gutter; every other control stops kGutterComp earlier (the kColRight box
     // gutter), so all box right-edges line up exactly.
     const int kFavW       = 24;           // match iconBtn (toggles) width
-    const int kGutterComp = Ui::px(56);   // 70 − 14 (Fill body right margin)
+    const int kGutterComp = Ui::px(Ui::kColRight - 14);   // kColRight − 14 (Fill body right margin)
 
     // ── Palette selector + colour count + favourite(save) ───────
     m_paletteSection = new QWidget;
@@ -467,10 +467,15 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
         m_leadGap = new QSpacerItem(Ui::px(8), 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
         row->addItem(m_leadGap);   // gap between palette and count
 
-        m_modeCombo = new NoWheelComboBox;
-        m_modeCombo->addItem("Image colors");
-        for (int n = 1; n <= kMaxTones; ++n)
-            m_modeCombo->addItem(QString::number(n) + (n == 1 ? " color" : " colors"));
+        m_modeCombo = new PopupPicker(1);
+        {
+            QVector<PopupPickerEntry> entries;
+            entries.push_back({ 0, "Image colors", QString(), QString() });
+            for (int n = 1; n <= kMaxTones; ++n)
+                entries.push_back({ n, QString::number(n) + (n == 1 ? " color" : " colors"), QString(), QString() });
+            m_modeCombo->setEntries(entries);
+        }
+        m_modeCombo->setValue(0);
         m_modeCombo->setFixedWidth(Ui::px(150));
         row->addWidget(m_modeCombo);
 
@@ -483,7 +488,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
         m_favBtn = new QPushButton;
         m_favBtn->setObjectName("favBtn");
         m_favBtn->setCursor(Qt::PointingHandCursor);
-        m_favBtn->setFixedSize(kFavW, Ui::px(48));
+        m_favBtn->setFixedSize(kFavW, Ui::px(Ui::kBoxH));
         m_favBtn->setIcon(QIcon(":/icons/favorite.svg"));
         m_favBtn->setIconSize(QSize(Ui::px(17), Ui::px(22)));
         m_favBtn->setToolTip("Save palette");
@@ -510,6 +515,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
     // ── Generate random (full width) ────────────────────────────
     m_generateBtn = new QPushButton("generate random");
     m_generateBtn->setObjectName("exportBtn");
+    m_generateBtn->setFixedHeight(Ui::px(Ui::kBoxH));
     m_generateBtn->setCursor(Qt::PointingHandCursor);
     connect(m_generateBtn, &QPushButton::clicked, this, [this]() { generateRandom(); });
     {
@@ -537,9 +543,9 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
     };
 
     // ── Signals ─────────────────────────────────────────────────
-    connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int idx) {
+    m_modeCombo->onSelected = [this](QVariant v) {
         if (m_updating) return;
+        const int idx = v.toInt();
         if (idx == 0) {
             m_settings.mode = ToneMode::ImageColors;
         } else {
@@ -555,7 +561,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
         rebuildRows();
         markCustom();
         emitChanged();
-    });
+    };
 
     syncModeCombo();
     rebuildRows();
@@ -587,9 +593,9 @@ void TonalControlsWidget::syncModeCombo()
     const bool prev = m_updating;
     m_updating = true;
     if (m_settings.mode == ToneMode::ImageColors)
-        m_modeCombo->setCurrentIndex(0);
+        m_modeCombo->setValue(0);
     else
-        m_modeCombo->setCurrentIndex(qBound(1, int(m_settings.tones.size()), kMaxTones));
+        m_modeCombo->setValue(qBound(1, int(m_settings.tones.size()), kMaxTones));
     m_updating = prev;
 }
 
@@ -626,19 +632,28 @@ void TonalControlsWidget::rebuildRows()
     if (m_favBtn)        m_favBtn->setVisible(!imageColors);
     // With the header + favourite hidden, the combo spans the row. Drop the
     // leading gap and widen the trailing one by the (now absent) favourite width
-    // so the combo's right edge still lands on the 70px gutter.
-    const int kFavW = 24, kGutterComp = Ui::px(56);   // 70 − 14 (Fill body margin)
+    // so the combo's right edge still lands on the kColRight gutter.
+    const int kFavW = 24, kGutterComp = Ui::px(Ui::kColRight - 14);   // kColRight − 14 (Fill body margin)
     if (imageColors) {
         m_modeCombo->setMinimumWidth(Ui::px(150));
         m_modeCombo->setMaximumWidth(QWIDGETSIZE_MAX);
         m_modeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         if (m_leadGap) m_leadGap->changeSize(0, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
         if (m_favGap)  m_favGap->changeSize(kGutterComp, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+        // paletteHeader (the row's only other stretch=1 item) is hidden in this
+        // mode; a hidden widget still holds its stretch registration, so the
+        // combo needs its own explicit stretch to actually claim the row's
+        // leftover width instead of just sizing to its minimum.
+        if (m_paletteRow) m_paletteRow->setStretchFactor(m_modeCombo, 1);
     } else {
-        m_modeCombo->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-        m_modeCombo->setFixedWidth(Ui::px(150));
-        if (m_leadGap) m_leadGap->changeSize(Ui::px(8), 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+        // Equal width with the palette header (both stretch=1) instead of a
+        // fixed 150px — the two boxes now match like every other twin-box row.
+        m_modeCombo->setMinimumWidth(Ui::px(150));
+        m_modeCombo->setMaximumWidth(QWIDGETSIZE_MAX);
+        m_modeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        if (m_leadGap) m_leadGap->changeSize(Ui::px(Ui::kGapTwinBoxes), 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
         if (m_favGap)  m_favGap->changeSize(kGutterComp - kFavW, 0, QSizePolicy::Fixed, QSizePolicy::Minimum);
+        if (m_paletteRow) m_paletteRow->setStretchFactor(m_modeCombo, 1);
     }
     if (m_paletteRow) m_paletteRow->invalidate();
     m_rowsContainer->setVisible(tonesActive);
@@ -826,7 +841,7 @@ void TonalControlsWidget::generateRandom()
 {
     // Use the count chosen in the shared dropdown (fall back to a small
     // palette when "Image colors" is selected).
-    int n = m_modeCombo->currentIndex();   // 0 = Image colors, else N
+    int n = m_modeCombo->value().toInt();   // 0 = Image colors, else N
     if (n < 1) n = 3;
     // Sticky: keep palette-match on if it's already active.
     applyPalette(PaletteStore::randomColors(n), "Custom",

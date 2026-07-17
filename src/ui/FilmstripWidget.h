@@ -5,17 +5,23 @@
 #include <QList>
 
 class QScrollArea;
-class QHBoxLayout;
+class QGridLayout;
+class QResizeEvent;
 class FilmstripThumb;
-class ChevronButton;
+class AddImageButton;
 
 /**
  * FilmstripWidget (bottom bar) — the source LIBRARY.
  *
- * Orange "add" button + horizontally scrollable thumbnails, one per library
- * source (identified by a media id). Single click selects, double click adds
- * it as a layer, dragging a thumbnail onto the Layers panel / canvas adds it
- * as a layer, hover ✕ removes it from the library. Accepts image file drops.
+ * Orange "add" button (sized to match a thumbnail cell, always visible above
+ * the grid — never scrolls) + a square grid of thumbnails, one per library
+ * source (identified by a media id): images cover-fill their cell regardless
+ * of source aspect ratio, wrap to a new row once the column count is full,
+ * and scroll vertically once rows overflow the visible height. The column
+ * count grows on wide windows instead of letting cells balloon past
+ * kMaxCellFigmaPx. Single click selects, double click adds it as a layer,
+ * dragging a thumbnail onto the Layers panel / canvas adds it as a layer,
+ * hover ✕ removes it from the library. Accepts image file drops.
  */
 class FilmstripWidget : public QWidget
 {
@@ -39,14 +45,23 @@ signals:
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
 private:
-    void scrollBy(int dx);
+    static constexpr int kMinColumns      = 6;     // floor, even on a narrow window
+    static constexpr int kMaxCellFigmaPx  = 150;    // cap on a cell's side; wide windows add columns instead
+
+    int  hMargins() const;         // hl's own left+right content margins
+    int  computeColumns() const;   // column count for the current viewport width
+    void relayoutGrid();           // re-seats every thumb at its row/col + resizes them
+    void applyCellSizes();         // resize only; falls back to relayoutGrid if the column count changed
+    void applyCellSizesOnly();     // resize every thumb + the add button to the current column count
 
     QScrollArea*           m_scroll      = nullptr;
     QWidget*               m_thumbRow    = nullptr;
-    QHBoxLayout*           m_thumbLayout = nullptr;
-    ChevronButton*         m_leftBtn     = nullptr;
-    ChevronButton*         m_rightBtn    = nullptr;
+    QGridLayout*           m_thumbLayout = nullptr;
+    AddImageButton*        m_addBtn      = nullptr;
     QList<FilmstripThumb*> m_thumbs;
+    int                    m_columns     = kMinColumns;
 };

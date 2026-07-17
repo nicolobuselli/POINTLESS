@@ -66,7 +66,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName("sidePanel");
-    setMinimumWidth(Ui::px(420));
+    setMinimumWidth(Ui::px(370));   // gutter shrank 40→20→60, columns tightened 10px more
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -76,7 +76,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
     {
         auto* nameRow = new QWidget;
         auto* nl = new QHBoxLayout(nameRow);
-        nl->setContentsMargins(Ui::px(40), Ui::px(14), Ui::px(20), Ui::px(14));   // aligned with "Layers"
+        nl->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(14), Ui::px(20), Ui::px(14));   // aligned with "Layers"
         nl->setSpacing(0);
 
         m_fileTitle = new QLineEdit;
@@ -119,23 +119,43 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             // (stretch) absorb the slack — otherwise the header floats mid-pane.
             hdr->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
             auto* hl = new QHBoxLayout(hdr);
-            hl->setContentsMargins(Ui::px(40), Ui::px(12), 0, Ui::px(12));
+            hl->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(12), 0, Ui::px(12));
             hl->setSpacing(0);
             hl->addWidget(makeSectionTitle("Layers"), 1, Qt::AlignVCenter);
-            // "+" centred in a 70px gutter so it lines up with the layer eyes.
+            // "+" centred in the icon gutter so it lines up with the layer eyes.
             auto* gut = new QWidget;
-            gut->setFixedWidth(Ui::px(70));
+            gut->setFixedWidth(Ui::px(Ui::kColRight));
             auto* gl = new QHBoxLayout(gut);
             gl->setContentsMargins(0, 0, 0, 0);
             auto* add = new QPushButton;
             add->setObjectName("iconBtn");
             add->setCursor(Qt::PointingHandCursor);
-            add->setFixedSize(Ui::px(26), Ui::px(26));
+            // Icon size derived from the button size, not scaled independently
+            // (see makeIconButton) — keeps the button-minus-icon gap even so
+            // the glyph centres exactly instead of drifting a px to one side.
+            {
+                const int btnPx = Ui::px(26);
+                const int pad   = Ui::px(5);
+                add->setFixedSize(btnPx, btnPx);
+                add->setIconSize(QSize(btnPx - 2 * pad, btnPx - 2 * pad));
+            }
             add->setIcon(QIcon(":/icons/plus.svg"));
-            add->setIconSize(QSize(Ui::px(16), Ui::px(16)));
             add->setToolTip("Add layer");
             connect(add, &QPushButton::clicked, this, [this]() { m_layers->requestAddLayer(); });
-            gl->addWidget(add, 0, Qt::AlignCenter);
+            // QLabel's sizeHint is the font's full line height (ascent + descent
+            // + leading), taller than the glyphs it draws, so centering the icon
+            // against the title's own bounding rect leaves it looking
+            // bottom-aligned. Wrap it a touch taller, icon pinned to the top, so
+            // centering the wrapper nudges the icon up to the title's optical
+            // centre instead (same trick as PanelSection's titleGutterIcon).
+            auto* addWrap = new QWidget;
+            addWrap->setFixedSize(add->width(), add->height() + Ui::px(6));
+            auto* addWrapL = new QVBoxLayout(addWrap);
+            addWrapL->setContentsMargins(0, 0, 0, 0);
+            addWrapL->setSpacing(0);
+            addWrapL->addWidget(add);
+            addWrapL->addStretch();
+            gl->addWidget(addWrap, 0, Qt::AlignCenter);
             m_addLayerBtn = add;
             hl->addWidget(gut);
             ll->addWidget(hdr);
@@ -172,22 +192,21 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         ll->addWidget(frameBox);
     }
 
-    // ── Transform pane (Frame dimensions + active-layer placement) ───
-    auto* transformPane = new QWidget;
+    // ── Transform box (Position/Rotation/Scale) — prepended into
+    // AdjustmentsPanel's own scrolling viewport below, so it scrolls together
+    // with Brightness/Contrast/… as one list under a single fixed "Transform"
+    // header (same pattern as the Layers header above its scrolling list),
+    // instead of staying pinned above an independently-scrolling Adjustments
+    // viewport. ─────────────────────────────────────────────────
+    QWidget* box = nullptr;
     {
-        auto* tp = new QVBoxLayout(transformPane);
-        tp->setContentsMargins(0, 0, 0, 0);
-        tp->setSpacing(0);
-        tp->addWidget(bandLine());            // line above the title
-        tp->addWidget(titleBand("Transform"));
-
-        auto* box = new QWidget;
+        box = new QWidget;
         auto* bl = new QVBoxLayout(box);
-        // Match the Parameters rows exactly: 40px left, 70px right gutter, so
-        // every functional row in the column has the same width; standard
-        // title→first-control gap and row rhythm (Theme.h).
-        bl->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(Ui::kGapTitleToFirst),
-                               Ui::px(Ui::kColRight), Ui::px(16));
+        // No left/right/top margins of its own: it becomes the first child of
+        // AdjustmentsPanel's own content layout, which already supplies the
+        // 40px left / 70px right gutter and the title→first-control gap for
+        // every row (Theme.h) — so Position lines up exactly with Brightness.
+        bl->setContentsMargins(0, 0, 0, 0);
         bl->setSpacing(Ui::px(Ui::kGapRows));
 
         auto emitTf = [this](int) { if (!m_updating) emitTransform(); };
@@ -227,27 +246,28 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             m_tfRot->onValueChanged = emitTf;
             rotRow->addWidget(m_tfRot, 1);
 
-            // Quick-transform box: rotate 90°, mirror-x, mirror-y — icons spread
-            // evenly across the box so it fills the row's right half.
+            // Quick-transform box: rotate 90°, mirror-x, mirror-y — three equal
+            // segments filling the box edge-to-edge, like a segmented control,
+            // so each button's hover rect reaches the segment's own border
+            // instead of floating as a small square in a sea of empty stretch.
             auto* quick = new QFrame;
             quick->setObjectName("dragSpinBox");
             quick->setFixedHeight(Ui::px(Ui::kBoxH));
             auto* ql = new QHBoxLayout(quick);
-            ql->setContentsMargins(Ui::px(8), 0, Ui::px(8), 0);
-            ql->setSpacing(0);
+            ql->setContentsMargins(Ui::px(4), Ui::px(4), Ui::px(4), Ui::px(4));
+            ql->setSpacing(Ui::px(4));
 
             auto makeQuickBtn = [&](const QString& icon, const QString& tip, bool checkable) {
                 auto* b = new QPushButton(quick);
-                b->setObjectName("iconBtn");
+                b->setObjectName("quickIconBtn");   // own rule: no 24×24 clamp, unlike #iconBtn
                 b->setCheckable(checkable);
                 b->setCursor(Qt::PointingHandCursor);
-                b->setFixedSize(Ui::px(34), Ui::px(34));
+                b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+                b->setMinimumSize(Ui::px(34), Ui::px(34));
                 b->setIcon(QIcon(icon));
-                b->setIconSize(QSize(Ui::px(18), Ui::px(18)));
+                b->setIconSize(QSize(Ui::px(22), Ui::px(22)));
                 b->setToolTip(tip);
-                ql->addStretch(1);
-                ql->addWidget(b);
-                ql->addStretch(1);
+                ql->addWidget(b, 1);
                 return b;
             };
 
@@ -260,8 +280,8 @@ ControlsPanel::ControlsPanel(QWidget* parent)
                 m_updating = true; m_tfRot->setValue(r); m_updating = false;
                 emitTransform();
             });
-            m_flipH = makeQuickBtn(":/icons/mirror_x.svg", "Mirror (y axis)", true);
-            m_flipV = makeQuickBtn(":/icons/mirror_y.svg", "Mirror (x axis)", true);
+            m_flipH = makeQuickBtn(":/icons/mirror_y.svg", "Mirror (y axis)", true);
+            m_flipV = makeQuickBtn(":/icons/mirror_x.svg", "Mirror (x axis)", true);
             connect(m_flipH, &QPushButton::toggled, this, [this](bool) { if (!m_updating) emitTransform(); });
             connect(m_flipV, &QPushButton::toggled, this, [this](bool) { if (!m_updating) emitTransform(); });
 
@@ -290,15 +310,9 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             leftCol->addWidget(m_tfScaleSlider);
 
             m_tfScaleEdit = new QLineEdit("1");
-            m_tfScaleEdit->setObjectName("dragSpinBox");   // box bg/border/hover
+            m_tfScaleEdit->setObjectName("scaleValueEdit");   // QSS: box + value text together
             m_tfScaleEdit->setAlignment(Qt::AlignCenter);
             m_tfScaleEdit->setFixedSize(Ui::px(Ui::kCellW), Ui::px(Ui::kBoxH));   // == Parameters cell
-            // Match the DragSpinBox value text and pin the height so the generic
-            // QLineEdit rule (different colour/size + min-height) can't reshape it.
-            m_tfScaleEdit->setStyleSheet(QString(
-                "color:%1; font-size:%2px; font-weight:500; padding:0;"
-                " min-height:%3px; max-height:%3px;")
-                .arg(Ui::kColValue).arg(Ui::px(Ui::kBoxFontPx)).arg(Ui::px(Ui::kBoxH)));
             auto* val = new QDoubleValidator(0.001, 1000.0, 3, m_tfScaleEdit);
             val->setNotation(QDoubleValidator::StandardNotation);
             m_tfScaleEdit->setValidator(val);
@@ -327,29 +341,29 @@ ControlsPanel::ControlsPanel(QWidget* parent)
                 emitTransform();
             });
         }
-        tp->addWidget(box);
     }
 
-    // ── Parameters pane (header + scrollable adjustments) ────────
+    // ── Parameters pane (fixed "Transform" header + one scrolling list) ──
     auto* paramsPane = new QWidget;
     {
         auto* pp = new QVBoxLayout(paramsPane);
         pp->setContentsMargins(0, 0, 0, 0);
         pp->setSpacing(0);
-        // Transform sits at the top of this pane so it stays glued to Parameters
-        // (a single splitter handle separates them from Layers).
-        pp->addWidget(transformPane);
-        pp->addWidget(bandLine());            // line above the title
-        pp->addWidget(titleBand("Adjustments"));
+        // Fixed header — stays visible while the whole Position/Rotation/
+        // Scale + Brightness/Contrast/… list scrolls beneath it as one unit
+        // (same pattern as the Layers header above its scrolling list).
+        pp->addWidget(bandLine());
+        pp->addWidget(titleBand("Transform"));
+
         m_adjust = new AdjustmentsPanel;
         connect(m_adjust, &AdjustmentsPanel::adjustmentsChanged,
                 this, &ControlsPanel::adjustmentsChanged);
         connect(m_adjust, &AdjustmentsPanel::resetRequested,
                 this, &ControlsPanel::resetRequested);
+        connect(m_adjust, &AdjustmentsPanel::localizeToggleRequested,
+                this, &ControlsPanel::localizeToggleRequested);
+        m_adjust->prependWidget(box);   // Position/Rotation/Scale → first rows
         pp->addWidget(m_adjust, 1);
-        // Let the Parameters scroll shrink, but never the Transform block above
-        // it: the pane's minimum then = Transform (fixed) + this floor, so
-        // dragging the divider down can't squash the Transform boxes.
         m_adjust->setMinimumHeight(Ui::px(90));
     }
 
@@ -471,3 +485,4 @@ void ControlsPanel::emitTransform()
 Adjustments ControlsPanel::adjustments() const          { return m_adjust->adjustments(); }
 void ControlsPanel::setAdjustments(const Adjustments& a) { m_adjust->setAdjustments(a); }
 void ControlsPanel::setSourceImage(const QImage& img)    { m_adjust->setSourceImage(img); }
+void ControlsPanel::setLocalizeChecked(bool on)          { m_adjust->setLocalizeChecked(on); }

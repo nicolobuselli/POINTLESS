@@ -600,7 +600,13 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
                 return hasInk && cellRgb(col, row) == inkRgb;
             };
 
-            QImage finalOut(input.size(), QImage::Format_ARGB32);
+            // Drawn at exact cell resolution (ow*ps × oh*ps), which is ≤
+            // input.size() when ps doesn't divide it evenly — the plain
+            // (non-rounded) branch below absorbs that remainder by scaling
+            // up to input.size(), so mirror that here or content stays
+            // anchored top-left and the frame's right/bottom edge goes
+            // blank, reading as a leftward/upward shift.
+            QImage finalOut(ow * ps, oh * ps, QImage::Format_ARGB32);
             finalOut.fill(Qt::transparent);
             QPainter painter(&finalOut);
             painter.setRenderHint(QPainter::Antialiasing);
@@ -630,7 +636,7 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
                 painter.drawPath(roundCorners(inkUnion.simplified(), cr));
             }
             painter.end();
-            out = finalOut;
+            out = finalOut.scaled(input.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
         } else {
             out = out.scaled(input.size(), Qt::IgnoreAspectRatio, Qt::FastTransformation);
         }

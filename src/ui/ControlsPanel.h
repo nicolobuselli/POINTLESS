@@ -39,6 +39,7 @@ public:
     Adjustments adjustments() const;
     void        setAdjustments(const Adjustments& a);   // silent
     void        setSourceImage(const QImage& img);
+    void        setLocalizeChecked(bool on);            // silent
 
     // Hide the "+" (add layer) when there's no image to add a layer to.
     void setAddLayerVisible(bool on);
@@ -58,6 +59,7 @@ public:
 signals:
     void adjustmentsChanged();
     void resetRequested();
+    void localizeToggleRequested();
     void fileRenamed(const QString& name);
     void frameSizeChanged(int w, int h);
     void transformChanged(const LayerTransform& t);

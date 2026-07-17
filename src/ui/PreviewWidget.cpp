@@ -16,6 +16,7 @@
 #include <QLineF>
 #include <QPainterPath>
 #include <QKeyEvent>
+#include <QApplication>
 
 namespace {
 
@@ -415,6 +416,8 @@ void PreviewWidget::wheelEvent(QWheelEvent* event)
 void PreviewWidget::mousePressEvent(QMouseEvent* event)
 {
     m_snapped = false;   // cleared here; Move drags re-derive it every move
+    m_gestureMoved = false;   // set true once the mouse clears the jitter threshold below
+    m_pressPos = event->position();
     const bool leftPan = m_panMode && event->button() == Qt::LeftButton;
     const bool middlePan = event->button() == Qt::MiddleButton;
     if (!m_scaled.isNull() && (leftPan || middlePan)) {
@@ -622,6 +625,20 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
 
 void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
 {
+    if (!m_gestureMoved) {
+        // A physical mouse/trackpad click always has some jitter between press
+        // and release — well past a couple of pixels. Without a real tolerance
+        // that jitter alone still counts as a drag and fires the expensive
+        // end-of-gesture full-quality render for a click that changed nothing;
+        // barely visible on cheap modes, a noticeable stutter on slow ones
+        // (Mosaic with many tiles). Qt's own click-vs-drag distance is the
+        // right threshold — it's what every other Qt drag gesture uses.
+        const double thr = qMax(1, QApplication::startDragDistance());
+        const QPointF d = event->position() - m_pressPos;
+        if (QPointF::dotProduct(d, d) > thr * thr)
+            m_gestureMoved = true;
+    }
+
     if (m_locDrag != LocDrag::None && m_locActive >= 0 && m_locActive < m_locPts.size()) {
         const QPointF framePt = widgetToFrame(event->position());
         LocPoint& lp = m_locPts[m_locActive].pt;
@@ -807,7 +824,9 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
     m_snapped = false;
     if (m_locDrag != LocDrag::None && event->button() == Qt::LeftButton) {
         m_locDrag = LocDrag::None;
-        emit localizationEditFinished();
+        // A plain click that activates a dot (no actual drag) still hits this
+        // branch — only a real move needs the render/undo-key it triggers.
+        if (m_gestureMoved) emit localizationEditFinished();
         event->accept();
         return;
     }
@@ -816,7 +835,7 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
         m_groupDrag = false;
         m_groupMode = TfDrag::None;
         setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
-        emit transformEditFinished();
+        if (m_gestureMoved) emit transformEditFinished();
         event->accept();
         return;
     }
@@ -824,7 +843,10 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
     if (m_tfDrag != TfDrag::None && event->button() == Qt::LeftButton) {
         m_tfDrag = TfDrag::None;
         setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
-        emit transformEditFinished();   // gesture over → MainWindow does a full render
+        // Selecting a layer with a plain click (no drag) also arms Move above
+        // (mousePressEvent) — without this guard every click fired a full
+        // re-render for zero actual change.
+        if (m_gestureMoved) emit transformEditFinished();   // gesture over → MainWindow does a full render
         event->accept();
         return;
     }
