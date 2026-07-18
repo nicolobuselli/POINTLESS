@@ -10,17 +10,18 @@
 #include <QHash>
 #include <functional>
 
-class HalftonePage;
+class DotGridPage;
 class DitherPage;
 class AsciiPage;
 class MosaicPage;
+class HalftonePage;
 class TonalControlsWidget;
 class FillSwatch;
 
 /**
  * ModePanel (right column)
  *
- * Rectangle tab row (Halftone / Dither / Ascii) on top, then the active
+ * Mode picker (Dot Grid / Dither / Ascii / Mosaic / Halftone) on top, then the active
  * mode's sections (Shape, Settings) followed by the shared Fill (palette),
  * Background and Export sections.
  *
@@ -35,10 +36,11 @@ public:
     explicit ModePanel(QWidget* parent = nullptr);
 
     RenderMode       mode() const { return m_mode; }
-    HalftoneSettings halftoneSettings() const;
+    DotGridSettings  dotGridSettings()  const;
     DitherSettings   ditherSettings()   const;
     AsciiSettings    asciiSettings()    const;
     MosaicSettings   mosaicSettings()   const;
+    HalftoneSettings halftoneSettings() const;
 
     // Fill (tonal palette) — moved here from the left column.
     TonalSettings tonalSettings() const;
@@ -54,6 +56,7 @@ public:
     QString outputFormat()   const;
 
     void setFromLayer(const Layer& layer);   // silent
+    void setMode(RenderMode m);              // silent: updates picker + visible page
 
     // Localization points: kept in sync with the Layer so the settings()
     // getters round-trip them faithfully (they are edited on-canvas).
@@ -77,16 +80,16 @@ signals:
     void localizationToggleRequested(LocParam p);   // a gutter loc dot was clicked
 
 private:
-    void setMode(RenderMode m);   // silent: updates tabs + visible page
 
     QWidget*     m_fillSection = nullptr;   // Fill section (per-mode tonal)
     QWidget*     m_mosaicTextsSection = nullptr;   // Texts section (Mosaic only, between Fill and Background)
     PopupPicker* m_modePick = nullptr;   // mode dropdown (replaced the tab row)
 
-    HalftonePage* m_halftonePage = nullptr;
+    DotGridPage*  m_dotGridPage  = nullptr;
     DitherPage*   m_ditherPage   = nullptr;
     AsciiPage*    m_asciiPage    = nullptr;
     MosaicPage*   m_mosaicPage   = nullptr;
+    HalftonePage* m_halftonePage = nullptr;
 
     TonalControlsWidget* m_tonal       = nullptr; // Fill
     bool                 m_fillEnabled = true;    // Fill section open = fill present
@@ -97,6 +100,6 @@ private:
 
     PopupPicker* m_format     = nullptr;
 
-    RenderMode m_mode     = RenderMode::Halftone;
+    RenderMode m_mode     = RenderMode::DotGrid;
     bool       m_updating = false;
 };

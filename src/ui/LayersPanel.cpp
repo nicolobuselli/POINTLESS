@@ -160,7 +160,7 @@ public:
         m_thumb->setAttribute(Qt::WA_TransparentForMouseEvents);
         pl->addWidget(m_thumb);
 
-        m_name = new QLabel;
+        m_name = new ElidedLabel;
         m_name->setObjectName("layerName");
         m_name->setTextInteractionFlags(Qt::NoTextInteraction);
         m_name->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -226,7 +226,7 @@ public:
     int layerId() const { return m_id; }
 
     void setThumb(const QPixmap& px) { m_thumb->setPixmap(px); }
-    void setName(const QString& n)   { m_name->setText(n); }
+    void setName(const QString& n)   { m_name->setFullText(n); }
 
     void setLayerVisible(bool on)
     {
@@ -337,7 +337,7 @@ private:
     {
         if (m_editingName) return;
         m_editingName = true;
-        m_nameEdit->setText(m_name->text());
+        m_nameEdit->setText(m_name->fullText());
         m_name->hide();
         m_nameEdit->show();
         m_nameEdit->setFocus(Qt::MouseFocusReason);
@@ -349,7 +349,7 @@ private:
         if (!m_editingName) return;
         m_editingName = false;
         const QString text = m_nameEdit->text().trimmed();
-        if (!text.isEmpty() && text != m_name->text()) {
+        if (!text.isEmpty() && text != m_name->fullText()) {
             setName(text);
             if (onRenamed) onRenamed(text);
         }
@@ -374,7 +374,7 @@ private:
     bool         m_hasEdits  = false;
     QFrame*      m_pill    = nullptr;
     QLabel*      m_thumb   = nullptr;
-    QLabel*      m_name    = nullptr;
+    ElidedLabel* m_name    = nullptr;
     QLineEdit*   m_nameEdit = nullptr;
     QPushButton* m_eye     = nullptr;
     QPushButton* m_lock    = nullptr;
@@ -664,7 +664,7 @@ public:
         m_thumb->setAttribute(Qt::WA_TransparentForMouseEvents);
         bl->addWidget(m_thumb);
 
-        m_name = new QLabel;
+        m_name = new ElidedLabel;
         m_name->setObjectName("layerName");
         m_name->setAttribute(Qt::WA_TransparentForMouseEvents);
         bl->addWidget(m_name, 1);
@@ -701,7 +701,7 @@ public:
 
     int  mediaId() const { return m_mediaId; }
     void setThumb(const QPixmap& px) { m_thumb->setPixmap(px); }
-    void setName(const QString& n)   { m_name->setText(n); }
+    void setName(const QString& n)   { m_name->setFullText(n); }
     void setCollapsed(bool c)
     {
         m_collapsed = c;
@@ -771,7 +771,7 @@ private:
     {
         if (m_editing) return;
         m_editing = true;
-        m_nameEdit->setText(m_name->text());
+        m_nameEdit->setText(m_name->fullText());
         m_name->hide();
         m_nameEdit->show();
         m_nameEdit->setFocus(Qt::MouseFocusReason);
@@ -782,7 +782,7 @@ private:
         if (!m_editing) return;
         m_editing = false;
         const QString text = m_nameEdit->text().trimmed();
-        if (!text.isEmpty() && text != m_name->text()) {
+        if (!text.isEmpty() && text != m_name->fullText()) {
             setName(text);
             if (onRenamed) onRenamed(text);
         }
@@ -797,7 +797,7 @@ private:
     QFrame*        m_box       = nullptr;
     ChevronButton* m_chevron   = nullptr;
     QLabel*        m_thumb     = nullptr;
-    QLabel*        m_name      = nullptr;
+    ElidedLabel*   m_name      = nullptr;
     QLineEdit*     m_nameEdit  = nullptr;
     QPushButton*   m_eye       = nullptr;
     QPoint         m_pressPos;

@@ -9,6 +9,7 @@
 #include "LayersPanel.h"
 #include "Widgets.h"
 #include "../workers/RenderWorker.h"
+#include "GpuCanvasWidget.h"
 #include "../core/ImageAdjuster.h"
 #include "../core/ProjectIO.h"
 #include "../core/VideoIO.h"
@@ -24,6 +25,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPainter>
+#include <QTransform>
 #include <QPushButton>
 #include <QShortcut>
 #include <QSplitter>
@@ -49,7 +51,7 @@ LocParam maskParamFor(LayerKind kind)
         case LayerKind::Dither: return LocParam::DiMask;
         case LayerKind::Ascii:  return LocParam::AsMask;
         case LayerKind::Mosaic: return LocParam::MsMask;
-        default:                return LocParam::HtMask;
+        default:                return LocParam::DgMask;
     }
 }
 
@@ -77,6 +79,30 @@ bool looksLikeSequence(const QStringList& paths)
         else if (base != stem) return false;
     }
     return true;
+}
+
+QImage placeOnFramePreview(const QImage& layerImg, const LayerTransform& tf, QSize frame)
+{
+    QImage placed(frame, QImage::Format_ARGB32_Premultiplied);
+    placed.fill(Qt::transparent);
+    if (layerImg.isNull() || frame.isEmpty()) return placed;
+
+    QPainter p(&placed);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const double s  = qMax(0.0001, double(tf.scalePct) / 100.0);
+    const double cx = frame.width()  * 0.5 + double(tf.xPct) * frame.width();
+    const double cy = frame.height() * 0.5 + double(tf.yPct) * frame.height();
+
+    QTransform m;
+    m.translate(cx, cy);
+    m.rotate(tf.rotation);
+    m.scale(s * (tf.flipH ? -1.0 : 1.0), s * (tf.flipV ? -1.0 : 1.0));
+    m.translate(-layerImg.width() * 0.5, -layerImg.height() * 0.5);
+    p.setTransform(m);
+    p.drawImage(0, 0, layerImg);
+    return placed;
 }
 } // namespace
 
@@ -376,7 +402,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_preview, &PreviewWidget::localizationDeleteRequested, this, [this](LocParam p) {
         Layer* l = activeLayer();
         if (!l || l->kind != locParamKind(p)) return;
-        LocMap& m = (l->kind == LayerKind::Halftone) ? l->halftone.loc
+        LocMap& m = (l->kind == LayerKind::DotGrid) ? l->dotGrid.loc
                   : (l->kind == LayerKind::Dither)   ? l->dither.loc
                   : (l->kind == LayerKind::Mosaic)   ? l->mosaic.loc
                                                      : l->ascii.loc;
@@ -472,6 +498,23 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_layersPanel, &LayersPanel::parentRenamed,           this, &MainWindow::onParentRenamed);
 
     connect(m_worker, &RenderWorker::renderComplete, this, &MainWindow::onRenderComplete);
+    connect(m_worker, &RenderWorker::layersComplete, this, &MainWindow::onLayersComplete);
+
+    // ── GPU compositor probe (Phase 1) ───────────────────────
+    // Mount the QRhi canvas optimistically (it blits the CPU frames from the
+    // start), then after it has had a chance to initialize decide whether the
+    // worker should switch to per-layer GPU packages or stay CPU-flattened.
+    m_preview->initGpu();
+    QTimer::singleShot(700, this, [this]() {
+        const bool ok = m_preview->gpuCanvas() && m_preview->gpuCanvas()->isInitialized();
+        m_gpuMode = ok;
+        if (ok) {
+            m_worker->setGpuPackages(true);
+            scheduleRender();
+        } else {
+            m_preview->setGpuActive(false);   // CPU painting, exactly as before
+        }
+    });
 
     // ── Undo debounce ────────────────────────────────────────
     m_undoTimer.setSingleShot(true);
@@ -496,7 +539,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_zoomRenderTimer, &QTimer::timeout, this, [this]() {
         // Nothing to gain (zoomed out, or a dither layer that mustn't re-process)
         // and a full frame is already shown → keep it, don't re-render.
-        if (zoomQualityScale() <= 1.01f && !m_lastRender.isNull()) return;
+        if (zoomQualityScale() <= 1.01f
+            && (!m_lastRender.isNull() || m_lastPkgRender.valid)) return;
         scheduleRender(/*previewOnly=*/false, /*qualityOnly=*/true);
     });
     connect(m_preview, &PreviewWidget::zoomChanged, this,
@@ -754,13 +798,26 @@ void MainWindow::updateDisplayedPreview()
         const QImage adjustedOnly = ImageAdjuster::apply(
             m_images[m_current].source,
             l ? l->adjustments : Adjustments{});
-        m_preview->setOriginalImage(adjustedOnly);
-        m_preview->setShowOriginal(true);
-        m_preview->setImage(adjustedOnly);
+        const QSize frameSize = (m_images[m_current].state.frameW > 0 && m_images[m_current].state.frameH > 0)
+                              ? QSize(m_images[m_current].state.frameW, m_images[m_current].state.frameH)
+                              : adjustedOnly.size();
+        const QImage originalPlaced = placeOnFramePreview(
+            adjustedOnly,
+            l ? l->transform : LayerTransform{},
+            frameSize);
+        m_preview->setShowOriginal(false);
+        m_preview->setImage(originalPlaced);
         return;
     }
 
     m_preview->setShowOriginal(false);
+
+    // GPU compositing: prefer the per-layer packages (full over preview),
+    // mirroring the flattened-image priority below.
+    if (m_gpuMode) {
+        if (m_lastPkgRender.valid)  { m_preview->setGpuPackage(m_lastPkgRender);  return; }
+        if (m_lastPkgPreview.valid) { m_preview->setGpuPackage(m_lastPkgPreview); return; }
+    }
 
     if (!m_lastRender.isNull()) {
         m_preview->setImage(m_lastRender);
@@ -775,14 +832,6 @@ void MainWindow::updateDisplayedPreview()
 void MainWindow::updatePreviewInteractionState()
 {
     const bool capsLockActive = m_capsLockActive;
-
-    if (m_current >= 0) {
-        const Layer* l = activeLayer();
-        const QImage adjustedOnly = ImageAdjuster::apply(
-            m_images[m_current].source,
-            l ? l->adjustments : Adjustments{});
-        m_preview->setOriginalImage(adjustedOnly);
-    }
 
     m_preview->setPanMode(m_spaceDown && !capsLockActive);
     updateDisplayedPreview();
@@ -946,10 +995,11 @@ SessionParams MainWindow::collectParams() const
         // render struct of the active layer's kind.
         const TonalSettings tonal = m_right->tonalSettings();
         switch (l.kind) {
-            case LayerKind::Halftone: l.halftone = m_right->halftoneSettings(); l.halftone.tonal = tonal; break;
+            case LayerKind::DotGrid: l.dotGrid = m_right->dotGridSettings(); l.dotGrid.tonal = tonal; break;
             case LayerKind::Dither:   l.dither   = m_right->ditherSettings();   l.dither.tonal   = tonal; break;
             case LayerKind::Ascii:    l.ascii    = m_right->asciiSettings();    l.ascii.tonal    = tonal; break;
             case LayerKind::Mosaic:   l.mosaic   = m_right->mosaicSettings();   l.mosaic.tonal   = tonal; break;
+            case LayerKind::Halftone: l.halftone = m_right->halftoneSettings(); l.halftone.tonal = tonal; break;
             case LayerKind::Original: break;   // only adjustments apply
         }
     }
@@ -986,7 +1036,7 @@ void MainWindow::applyParams(const SessionParams& p)
         case LayerKind::Dither: maskMap = &l.dither.loc; break;
         case LayerKind::Ascii:  maskMap = &l.ascii.loc;  break;
         case LayerKind::Mosaic: maskMap = &l.mosaic.loc; break;
-        default:                maskMap = &l.halftone.loc; break;
+        default:                maskMap = &l.dotGrid.loc; break;
     }
     m_left->setLocalizeChecked(locPointOr(*maskMap, maskParamFor(l.kind)).enabled);
 
@@ -1002,6 +1052,10 @@ void MainWindow::syncLayersPanel()
     auto& st = board.state;
     if (findLayerById(st.layers, st.activeLayerId) < 0 && !st.layers.empty())
         st.activeLayerId = st.layers[0].id;
+
+    // Nothing to add a layer to once the last one's gone (e.g. its source
+    // was removed from the library) — hide the "+" until one exists again.
+    m_left->setAddLayerVisible(!st.layers.empty());
 
     // Small source per media for parent + child thumbnails.
     QHash<int, QImage> mediaImages;
@@ -1325,7 +1379,12 @@ QString MainWindow::uniqueLayerName(const SessionParams& p, LayerKind kind, int 
 
 void MainWindow::onModeSelected(RenderMode m)
 {
-    if (m_current < 0) return;
+    // No active layer to retarget (no image loaded, or the board has none
+    // right now): still remember the pick on the panel itself, since
+    // addLayerFromMedia() reads m_right->mode() for whatever layer comes
+    // next. Without this, clicking a mode with nothing active looked like
+    // it did nothing (page shown / next new layer's kind stayed stale).
+    if (m_current < 0) { m_right->setMode(m); return; }
     auto& st = m_images[m_current].state;
     const LayerKind kind = layerKindForMode(m);
 
@@ -1333,7 +1392,7 @@ void MainWindow::onModeSelected(RenderMode m)
     // parent (mediaId), transform and adjustments. The layer carries a settings
     // struct for every kind, so switching just picks which one renders.
     Layer* act = activeLayer();
-    if (!act) return;
+    if (!act) { m_right->setMode(m); return; }
     if (act->kind == kind) { applyParams(st); return; }
 
     // Each mode keeps its own `tonal` field, but re-doing the Fill setup after
@@ -1343,10 +1402,11 @@ void MainWindow::onModeSelected(RenderMode m)
     act->kind = kind;
     act->name = uniqueLayerName(st, kind, act->mediaId);   // name follows the mode
     switch (kind) {
-        case LayerKind::Halftone: act->halftone.tonal = tonal; break;
+        case LayerKind::DotGrid: act->dotGrid.tonal = tonal; break;
         case LayerKind::Dither:   act->dither.tonal   = tonal; break;
         case LayerKind::Ascii:    act->ascii.tonal    = tonal; break;
         case LayerKind::Mosaic:   act->mosaic.tonal   = tonal; break;
+        case LayerKind::Halftone: act->halftone.tonal = tonal; break;
         case LayerKind::Original: break;
     }
 
@@ -1537,7 +1597,7 @@ static LocMap& layerLocMap(Layer& l, LocParam p)
         case LayerKind::Dither: return l.dither.loc;
         case LayerKind::Ascii:  return l.ascii.loc;
         case LayerKind::Mosaic: return l.mosaic.loc;
-        default:                return l.halftone.loc;
+        default:                return l.dotGrid.loc;
     }
 }
 
@@ -1684,7 +1744,7 @@ void MainWindow::pushPreviewTransform()
     if (l) {
         const LocMap* m = nullptr;
         switch (l->kind) {
-            case LayerKind::Halftone: m = &l->halftone.loc; break;
+            case LayerKind::DotGrid: m = &l->dotGrid.loc; break;
             case LayerKind::Dither:   m = &l->dither.loc;   break;
             case LayerKind::Ascii:    m = &l->ascii.loc;    break;
             case LayerKind::Mosaic:   m = &l->mosaic.loc;   break;
@@ -2019,6 +2079,8 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
         bgFrame.fill(bg);
         m_lastRender = bgFrame;
         m_lastPreviewFrame = {};
+        m_lastPkgRender = {};
+        m_lastPkgPreview = {};
         m_selection.clear();
         m_preview->setImage(bgFrame);
         pushPreviewTransform();
@@ -2031,7 +2093,7 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
     // Exception: a zoom re-render (qualityOnly) keeps the current frame on screen
     // and just upscales it, then swaps in the sharper render when it's ready — so
     // scrolling the zoom doesn't flash back to a low-res preview on every tick.
-    if (!qualityOnly) m_lastRender = {};
+    if (!qualityOnly) { m_lastRender = {}; m_lastPkgRender = {}; }
 
     const SessionImage& img = m_images[m_current];
 
@@ -2118,6 +2180,27 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
     // A full render landed: clear whatever hint/confirmation text ("Drop
     // images here…", "Layer copied", …) was on screen — there's now an
     // actual result to look at instead.
+    if (!isPreview) m_preview->setStatus(QString());
+}
+
+// GPU-package twin of onRenderComplete: same bookkeeping, but the frame
+// reaches the screen as per-layer textures composited by GpuCanvasWidget.
+void MainWindow::onLayersComplete(GpuFramePackage pkg, bool isPreview)
+{
+    if (m_current >= 0 && m_images[m_current].state.layers.empty()) return;
+    if (!pkg.valid) return;
+
+    if (isPreview) m_lastPkgPreview = pkg;
+    else           m_lastPkgRender  = pkg;
+
+    if (!isPreview && m_current >= 0 && !m_playing) {
+        const Layer* l = activeLayer();
+        m_preview->setOriginalImage(ImageAdjuster::apply(
+            m_images[m_current].source,
+            l ? l->adjustments : Adjustments{}));
+    }
+    updateDisplayedPreview();
+    pushPreviewTransform();
     if (!isPreview) m_preview->setStatus(QString());
 }
 
@@ -2217,6 +2300,16 @@ void MainWindow::copyToClipboard()
     if (!m_lastRender.isNull()) {
         QApplication::clipboard()->setImage(m_lastRender);
         m_preview->setStatus("Copied to clipboard");
+    } else if (m_gpuMode && m_lastPkgRender.valid && m_current >= 0) {
+        // GPU mode keeps no flattened frame around — compose one on demand
+        // through the untouched CPU path (rare operation, exact output).
+        const SessionImage& img = m_images[m_current];
+        const QImage flat = RenderWorker::renderDocument(
+            img.source, img.state, layerSourcesAt(img, img.anim.playhead));
+        if (!flat.isNull()) {
+            QApplication::clipboard()->setImage(flat);
+            m_preview->setStatus("Copied to clipboard");
+        }
     }
 }
 
@@ -2542,6 +2635,8 @@ void MainWindow::switchToImage(int index)
         m_current = -1;
         m_lastRender = {};
         m_lastPreviewFrame = {};
+        m_lastPkgRender = {};
+        m_lastPkgPreview = {};
         m_capsLockActive = false;
         m_spaceDown = false;
         m_preview->setPanMode(false);
@@ -2550,6 +2645,7 @@ void MainWindow::switchToImage(int index)
         m_preview->setImage({});
         m_filmstrip->setActive(-1);
         m_left->setSourceImage({});
+        m_left->setAdjustments(Adjustments{});   // else Levels keep showing the last image's points
         m_right->setSourceImage({});
         m_left->setFileName(QString());
         m_playTimer.stop();
@@ -2575,6 +2671,8 @@ void MainWindow::switchToImage(int index)
     syncLayersPanel();
     m_lastRender = {};
     m_lastPreviewFrame = {};
+    m_lastPkgRender = {};
+    m_lastPkgPreview = {};
     m_spaceDown = false;
     m_capsLockActive = false;
     m_preview->setPanMode(false);

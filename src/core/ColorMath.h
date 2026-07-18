@@ -83,6 +83,24 @@ inline float perceptualLumaFromLinear(float rLin, float gLin, float bLin)
 }
 
 // ============================================================
+//  CMYK — naive under-colour-removal separation from linear RGB,
+//  for the canonical AM halftone screen. Inputs 0..1 linear.
+// ============================================================
+
+struct Cmyk { float c, m, y, k; };
+
+inline Cmyk rgbToCmyk(float rLin, float gLin, float bLin)
+{
+    const float k = 1.0f - std::max(rLin, std::max(gLin, bLin));
+    if (k >= 0.9999f) return { 0.0f, 0.0f, 0.0f, 1.0f };
+    const float inv = 1.0f / (1.0f - k);
+    return { (1.0f - rLin - k) * inv,
+             (1.0f - gLin - k) * inv,
+             (1.0f - bLin - k) * inv,
+             k };
+}
+
+// ============================================================
 //  OkLab — perceptually-uniform colour space, for nearest-colour
 //  palette matching. Input is linear-light RGB (0..1).
 // ============================================================

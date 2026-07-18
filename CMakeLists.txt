@@ -12,7 +12,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # ── Find Qt6 ────────────────────────────────────────────────────────────────
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg Concurrent ShaderTools)
 
 # ── Sources ──────────────────────────────────────────────────────────────────
 set(SOURCES
@@ -28,6 +28,8 @@ set(SOURCES
     src/core/Animation.h
     src/core/ImageAdjuster.cpp
     src/core/ImageAdjuster.h
+    src/core/DotGridRenderer.cpp
+    src/core/DotGridRenderer.h
     src/core/HalftoneRenderer.cpp
     src/core/HalftoneRenderer.h
     src/core/GridGenerator.cpp
@@ -51,9 +53,14 @@ set(SOURCES
     src/workers/RenderWorker.cpp
     src/workers/RenderWorker.h
 
+    # GPU
+    src/gpu/GpuFramePackage.h
+
     # UI
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
+    src/ui/GpuCanvasWidget.cpp
+    src/ui/GpuCanvasWidget.h
     src/ui/PreviewWidget.cpp
     src/ui/PreviewWidget.h
     src/ui/Widgets.cpp
@@ -85,6 +92,24 @@ else()
     add_executable(ULTRATOOL ${SOURCES})
 endif()
 
+# ── GPU shaders (baked to portable .qsb via Qt ShaderTools) ─────────────────
+# GLSL floor raised to 300es/330: dot.vert folds a uint constant ≥ 2^31
+# (PCG hash increment) that the default 100es/120 targets cannot express.
+qt_add_shaders(ULTRATOOL "ultratool_shaders"
+    PREFIX "/shaders"
+    BASE "src/gpu/shaders"
+    GLSL "300es,330"
+    FILES
+        src/gpu/shaders/blit.vert
+        src/gpu/shaders/blit.frag
+        src/gpu/shaders/composite.vert
+        src/gpu/shaders/composite.frag
+        src/gpu/shaders/dot.vert
+        src/gpu/shaders/dot.frag
+        src/gpu/shaders/halftone.vert
+        src/gpu/shaders/halftone.frag
+)
+
 # ── Link Qt ──────────────────────────────────────────────────────────────────
 target_link_libraries(ULTRATOOL
     PRIVATE
@@ -102,6 +127,15 @@ endif()
 
 # ── Include paths ────────────────────────────────────────────────────────────
 target_include_directories(ULTRATOOL PRIVATE src)
+
+# QRhi "semi-public" headers (rhi/qrhi.h) live in QtGui's versioned private
+# include dirs; this kit exports neither a Qt6::GuiPrivate target nor a
+# populated Qt6Gui_PRIVATE_INCLUDE_DIRS, so derive the paths from Qt6_DIR.
+get_filename_component(_qt_include_root "${Qt6_DIR}/../../../include" ABSOLUTE)
+target_include_directories(ULTRATOOL PRIVATE
+    "${_qt_include_root}/QtGui/${Qt6_VERSION}"
+    "${_qt_include_root}/QtGui/${Qt6_VERSION}/QtGui"
+)
 
 # ── Windows: deploy Qt DLLs after build ──────────────────────────────────────
 if(WIN32)

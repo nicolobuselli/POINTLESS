@@ -16,7 +16,7 @@
 //  display conversions); ranges below are in those raw units.
 // ============================================================
 
-enum class ParamScope { AllLayers, Halftone, Dither, Ascii, Mosaic, Tonal, Document };
+enum class ParamScope { AllLayers, DotGrid, Dither, Ascii, Mosaic, Halftone, Tonal, Document };
 
 // Max animatable per-colour thresholds (matches the tonal UI's kMaxTones).
 constexpr int kMaxToneLevels = 8;
@@ -28,10 +28,10 @@ enum class ParamId {
     AdjEdgeEnhancement, AdjBlur, AdjGrain, AdjPosterize, AdjThreshold,
     // Transform (every layer)
     TfX, TfY, TfScale, TfRotation,
-    // Halftone (grid + own)
-    HtGridSpacing, HtGridPointSpacing, HtGridRotation, HtGridDiameter,
-    HtGridStretchFactor, HtGridStretchAngle, HtInputDpi, HtMultiThreshold,
-    HtGamma, HtWeight, HtJitter, HtOpacity, HtCornerRadius,
+    // Dot Grid (grid + own)
+    DgGridSpacing, DgGridPointSpacing, DgGridRotation, DgGridDiameter,
+    DgGridStretchFactor, DgGridStretchAngle, DgInputDpi, DgMultiThreshold,
+    DgGamma, DgWeight, DgJitter, DgOpacity, DgCornerRadius,
     // Dither
     DiPixelSize, DiStrength, DiOpacity, DiCornerRadius, DiThreshold,
     DiLevels, DiLineAngle, DiLineSpacing,
@@ -45,6 +45,12 @@ enum class ParamId {
     ToneLevel5, ToneLevel6, ToneLevel7, ToneLevel8,
     // Document
     BackgroundOpacity,
+
+    // Halftone (canonical CMYK screen). Placed here — not inside the per-mode
+    // groups above — so the serialized ordinals of every pre-existing ParamId
+    // stay stable (Track::param is saved as a plain int); only the loc
+    // quartets below shift.
+    HfSpacing, HfAngleC, HfAngleM, HfAngleY, HfAngleK, HfGamma, HfOpacity,
 
     // Localization quartets — one (posX, posY, rotation, scale) block per
     // LocParam, in LocParam order. Addressed via locParamId(), no named

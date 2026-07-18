@@ -13,6 +13,7 @@
 #include <QCloseEvent>
 #include "../core/Params.h"
 #include "../core/Animation.h"
+#include "../gpu/GpuFramePackage.h"
 
 class PreviewWidget;
 class ControlsPanel;
@@ -48,6 +49,7 @@ public:
 private slots:
     void onParamsChanged();
     void onRenderComplete(QImage result, bool isPreview);
+    void onLayersComplete(GpuFramePackage pkg, bool isPreview);
     void onExport();
     void onAddRequested();
     void onFilesDropped(const QStringList& paths);
@@ -196,6 +198,9 @@ private:
 
     QImage m_lastRender;
     QImage m_lastPreviewFrame;
+    GpuFramePackage m_lastPkgRender;    // GPU-composited counterparts of the two above
+    GpuFramePackage m_lastPkgPreview;
+    bool   m_gpuMode = false;           // GPU compositor confirmed working
     bool   m_capsLockActive = false;
     bool   m_spaceDown = false;
     bool   m_transformDragging = false;   // live on-canvas drag → cheap preview only

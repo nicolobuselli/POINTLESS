@@ -8,6 +8,7 @@
 #include <QMutex>
 #include <QFutureWatcher>
 #include "../core/Params.h"
+#include "../gpu/GpuFramePackage.h"
 
 /**
  * RenderWorker
@@ -41,6 +42,12 @@ public:
     // so the on-screen frame isn't replaced by a low-res preview on every scroll.
     void requestFullRender(const QImage& source, const SessionParams& params,
                            const QHash<int, QImage>& layerSrc = {});
+
+    // GPU compositing mode: the fast/full passes stop flattening on the CPU
+    // and emit layersComplete(GpuFramePackage) instead — per-layer rendered
+    // rasters (same per-layer cache) + placement matrices + blend modes,
+    // composited by GpuCanvasWidget. Export/playback paths are unaffected.
+    void setGpuPackages(bool on) { m_gpuPackages = on; }
 
     // Live drag preview resolution, set by the UI to the preview widget's
     // on-screen pixel size — so the fast pass already looks like the final
@@ -107,12 +114,15 @@ public:
 
 signals:
     void renderComplete(QImage result, bool isPreview);
+    void layersComplete(GpuFramePackage pkg, bool isPreview);
     void renderStarted(bool isPreview);
 
 private slots:
     void onFullTimerTimeout();
     void onFastRenderFinished();
     void onFullRenderFinished();
+    void onFastPackageFinished();
+    void onFullPackageFinished();
 
 private:
     static SessionParams scaledForPreview(const SessionParams& params, float scale);
@@ -130,6 +140,10 @@ private:
         QSize       srcSize;
         const void* srcBits = nullptr; // identity check only, never dereferenced
         QImage      rendered;
+        // GPU halftone/Dot Grid entries only: spacing multiplier the bake
+        // applied (compensateSymbolScale + prerenderAtFrameRes), needed to
+        // build UBO settings on cache hits.
+        float       spacingScale = 1.0f;
     };
     static QImage renderDocumentImpl(const QImage& source, const SessionParams& params,
                                      const QHash<int, QImage>& layerSrc,
@@ -154,13 +168,31 @@ private:
     const void* m_cachedSmallSrcOrigBits = nullptr;
     float       m_cachedSmallSrcK        = -1.0f;
 
+    // Same fix for per-layer media (scaledLayerSrc): without it every
+    // interactive frame re-scales every layer's media into a fresh buffer,
+    // whose new address busts the layer-render cache on every tick.
+    struct ScaledSrcEntry { const void* bits = nullptr; float k = -1.0f; QImage img; };
+    QHash<int, ScaledSrcEntry> m_scaledLayerSrcCache;
+    QHash<int, QImage> scaledLayerSrcCached(const QHash<int, QImage>& src, float scale);
+
     int   m_interactivePx     = INTERACTIVE_MAX_PX;
     float m_fullQualityScale  = 1.0f;   // zoom-driven supersample for the full pass
 
     QFutureWatcher<QImage> m_fastWatcher;
     QFutureWatcher<QImage> m_fullWatcher;
+    QFutureWatcher<GpuFramePackage> m_fastPkgWatcher;
+    QFutureWatcher<GpuFramePackage> m_fullPkgWatcher;
     bool m_fastPending = false;
     bool m_fullPending = false;
+    bool m_gpuPackages = false;
+
+    bool fastBusy() const { return m_fastWatcher.isRunning() || m_fastPkgWatcher.isRunning(); }
+    bool fullBusy() const { return m_fullWatcher.isRunning() || m_fullPkgWatcher.isRunning(); }
+
+    // Per-layer render (cached) without CPU placement/compositing — the GPU
+    // compositor does those. Mirrors renderDocumentImpl's cache semantics.
+    GpuFramePackage renderLayersPackage(const QImage& source, const SessionParams& params,
+                                        const QHash<int, QImage>& layerSrc);
 
     void launchFast();
     void launchFull();

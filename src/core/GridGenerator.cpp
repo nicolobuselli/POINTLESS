@@ -254,3 +254,64 @@ std::vector<GridSample> GridGenerator::generate(const GridSettings& g, int imgW,
     s_cache = std::move(out);
     return s_cache;
 }
+
+GridGpuLayout GridGenerator::computeGpuLayout(const GridSettings& g, int imgW, int imgH)
+{
+    GridGpuLayout L;
+    if (imgW <= 0 || imgH <= 0) return L;
+
+    const QTransform t = buildTransform(g, imgW, imgH);
+    const BBox b = gridBounds(t.inverted(), imgW, imgH);
+    const double sp = std::max(2.0f, g.spacing);
+    const double cx = imgW * 0.5, cy = imgH * 0.5;
+
+    L.m11 = float(t.m11()); L.m12 = float(t.m12());
+    L.m21 = float(t.m21()); L.m22 = float(t.m22());
+    L.dx  = float(t.dx());  L.dy  = float(t.dy());
+    L.type = int(g.type);
+
+    double maxR = 0.0;
+    const double corners[4][2] = {{b.x0,b.y0},{b.x1,b.y0},{b.x1,b.y1},{b.x0,b.y1}};
+    for (auto& c : corners)
+        maxR = std::max(maxR, std::hypot(c[0] - cx, c[1] - cy));
+
+    switch (g.type) {
+        case GridType::Square: {
+            L.i0   = int(std::floor((b.x0 - cx) / sp)) - 1;
+            L.cols = int(std::ceil ((b.x1 - cx) / sp)) + 1 - L.i0 + 1;
+            L.j0   = int(std::floor((b.y0 - cy) / sp)) - 1;
+            L.rows = int(std::ceil ((b.y1 - cy) / sp)) + 1 - L.j0 + 1;
+            break; }
+        case GridType::Hexagonal:
+        case GridType::Brick: {
+            const double vstep = (g.type == GridType::Hexagonal)
+                               ? sp * std::sqrt(3.0) / 2.0 : sp;
+            // i-range widened by the odd-row half-cell offset.
+            L.i0   = int(std::floor((b.x0 - cx - sp * 0.5) / sp)) - 1;
+            L.cols = int(std::ceil ((b.x1 - cx) / sp)) + 1 - L.i0 + 1;
+            L.j0   = int(std::floor((b.y0 - cy) / vstep)) - 1;
+            L.rows = int(std::ceil ((b.y1 - cy) / vstep)) + 1 - L.j0 + 1;
+            break; }
+        case GridType::Wave: {
+            const double amp = sp * 0.9;
+            L.i0   = int(std::floor((b.x0 - cx) / sp)) - 1;
+            L.cols = int(std::ceil ((b.x1 - cx) / sp)) + 1 - L.i0 + 1;
+            L.j0   = int(std::floor((b.y0 - amp - cy) / sp)) - 1;
+            L.rows = int(std::ceil ((b.y1 + amp - cy) / sp)) + 1 - L.j0 + 1;
+            break; }
+        case GridType::Radial: {
+            // genRadial: rings r = 1 .. while r·sp ≤ maxR+sp; per-ring count
+            // round(2π·ringR/ps) = round(2π·r) since ps == sp.
+            L.rows  = int(std::floor((maxR + sp) / sp));
+            L.ringN = std::max(1, int(std::round(2.0 * M_PI * double(L.rows))));
+            L.count = 1 + L.rows * L.ringN;
+            return L; }
+        case GridType::Phyllotaxis: {
+            const double c = sp * 0.8;
+            L.count = int(std::min(2000000L,
+                                   long(std::pow((maxR + c) / c, 2.0)) + 1));
+            return L; }
+    }
+    L.count = L.cols * L.rows;
+    return L;
+}

@@ -69,9 +69,9 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
     const float cellW = qMax(2.0f, params.cellW());
     const float cellH = qMax(2.0f, params.cellH());
 
-    // Tile centres come from the same GridGenerator Halftone uses: `gridShape`
+    // Tile centres come from the same GridGenerator Dot Grid uses: `gridShape`
     // picks the lattice (Square/Hex/Brick/Wave/Radial/Phyllotaxis) and
-    // `gridRotation` rotates it as a whole, exactly like Halftone's grid.
+    // `gridRotation` rotates it as a whole, exactly like Dot Grid's grid.
     GridSettings gs;
     gs.type     = params.gridShape;
     gs.spacing  = qMax(2.0f, params.spacing);
@@ -141,23 +141,25 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
     for (const GridSample& s : samples) {
         // Sampling/base-tile window centred on the grid sample point. A
         // window that would spill off the frame (right/bottom edge samples,
-        // whenever cellPxW/H doesn't evenly divide w/h) is skipped outright
-        // instead of being clipped in place — a clipped tile kept the full
-        // reference-size text (sized off the uncropped cell, not the shrunk
-        // one), which visually overlapped the next tile.
+        // whenever cellPxW/H doesn't evenly divide w/h) is still rendered,
+        // but its colour sampling is clamped to the in-frame pixels only.
+        // That keeps the edge tiles reaching the frame border instead of
+        // disappearing entirely when the grid is rotated.
         const int xIdeal0 = qRound(s.x) - cellPxW / 2;
         const int yIdeal0 = qRound(s.y) - cellPxH / 2;
-        if (xIdeal0 < 0 || yIdeal0 < 0 || xIdeal0 + cellPxW > w || yIdeal0 + cellPxH > h)
-            continue;
         const int x0 = xIdeal0, y0 = yIdeal0;
         const int pw = cellPxW, ph = cellPxH;
+
+        const QRect cellRect(x0, y0, pw, ph);
+        const QRect sampleRect = cellRect.intersected(QRect(0, 0, w, h));
+        if (sampleRect.isEmpty()) continue;
 
         const float cxp = s.x;
         const float cyp = s.y;
         const float maskVal = lmask.on ? lmask.mask(cxp, cyp) : 1.0f;
         if (lmask.on && maskVal <= 0.0f) continue;   // spotlight: nothing outside enabled circles
 
-        const CellAvg avg = cellAverage(rgb, x0, y0, pw, ph);
+        const CellAvg avg = cellAverage(rgb, sampleRect.x(), sampleRect.y(), sampleRect.width(), sampleRect.height());
         if (avg.lumPerc > paperCut) continue;   // ink-or-paper: paper = nothing
 
         // Fill colour + the tone index that owns this tile's text.

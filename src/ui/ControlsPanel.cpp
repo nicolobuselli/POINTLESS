@@ -148,6 +148,12 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             // bottom-aligned. Wrap it a touch taller, icon pinned to the top, so
             // centering the wrapper nudges the icon up to the title's optical
             // centre instead (same trick as PanelSection's titleGutterIcon).
+            // Force the stylesheet polish now: #iconBtn's QSS clamps to a
+            // literal 24×24 regardless of the setFixedSize() above (see
+            // CLAUDE.md §9). Reading add->width()/height() before that
+            // clamp lands captures the pre-clamp size, so addWrap ends up
+            // the wrong size and the icon sits off-centre inside it.
+            add->ensurePolished();
             auto* addWrap = new QWidget;
             addWrap->setFixedSize(add->width(), add->height() + Ui::px(6));
             auto* addWrapL = new QVBoxLayout(addWrap);
@@ -194,7 +200,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
 
     // ── Transform box (Position/Rotation/Scale) — prepended into
     // AdjustmentsPanel's own scrolling viewport below, so it scrolls together
-    // with Brightness/Contrast/… as one list under a single fixed "Transform"
+    // with Brightness/Contrast/… as one list under a single fixed "Image Adjustments"
     // header (same pattern as the Layers header above its scrolling list),
     // instead of staying pinned above an independently-scrolling Adjustments
     // viewport. ─────────────────────────────────────────────────
@@ -343,7 +349,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         }
     }
 
-    // ── Parameters pane (fixed "Transform" header + one scrolling list) ──
+    // ── Parameters pane (fixed "Image Adjustments" header + one scrolling list) ──
     auto* paramsPane = new QWidget;
     {
         auto* pp = new QVBoxLayout(paramsPane);
@@ -353,7 +359,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         // Scale + Brightness/Contrast/… list scrolls beneath it as one unit
         // (same pattern as the Layers header above its scrolling list).
         pp->addWidget(bandLine());
-        pp->addWidget(titleBand("Transform"));
+        pp->addWidget(titleBand("Image Adjustments"));
 
         m_adjust = new AdjustmentsPanel;
         connect(m_adjust, &AdjustmentsPanel::adjustmentsChanged,
@@ -372,7 +378,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
     split->setStretchFactor(0, 0);
     split->setStretchFactor(1, 1);
     // Default: room for ~4 rows — halves the empty gap below the startup layers
-    // (parent + one child) before Transform; the user can still drag the divider.
+    // (parent + one child) before Image Adjustments; the user can still drag the divider.
     split->setSizes({ Ui::px(4 * 52 + 3 * 6 + 90), Ui::px(760) });
     outer->addWidget(split, 1);
 }

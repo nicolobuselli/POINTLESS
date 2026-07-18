@@ -8,6 +8,7 @@
 #include <QRegularExpression>
 #include <QHash>
 #include "ui/MainWindow.h"
+#include "ui/GpuCanvasWidget.h"
 #include "ui/UiScale.h"
 
 #ifdef Q_OS_WIN
@@ -171,6 +172,17 @@ int main(int argc, char* argv[])
 
     MainWindow w;
     w.showMaximized();
+
+    // Phase-0 GPU spike (see gpu plan): ULTRA_GPU_SPIKE=1 opens a floating
+    // QRhi canvas that blits a test texture and logs the backend to
+    // gpu_spike.log. Temporary — removed once the real GPU compositor lands.
+    if (qEnvironmentVariableIsSet("ULTRA_GPU_SPIKE")) {
+        auto* spike = new GpuCanvasWidget;
+        spike->setAttribute(Qt::WA_DeleteOnClose);
+        spike->setWindowTitle("ULTRA GPU spike");
+        spike->resize(480, 360);
+        spike->show();
+    }
 
     // Double-clicking a .ultra file (once registerFileAssociation() has run
     // at least once) launches us with its path as argv[1]. Deferred to the

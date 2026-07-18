@@ -82,7 +82,7 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     m_vlay = vlay;
     // Left edge aligns with the section titles (40px); the right keeps a 70px
     // gutter free for the +/−/favourite icon column; standard title→first gap
-    // and row rhythm (Theme.h). ControlsPanel prepends the Transform
+    // and row rhythm (Theme.h). ControlsPanel prepends the Image Adjustments
     // (Position/Rotation/Scale) rows above Brightness at index 0, so this is
     // the "title band → first control" gap for the whole merged section, and
     // everything below scrolls together as one list.

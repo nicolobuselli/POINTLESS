@@ -10,8 +10,10 @@
 #include <QHash>
 #include <QVector>
 #include "../core/Params.h"
+#include "../gpu/GpuFramePackage.h"
 
 class QKeyEvent;
+class GpuCanvasWidget;
 
 /**
  * PreviewWidget
@@ -30,6 +32,18 @@ public:
     void setImage(const QImage& img);
     void setOriginalImage(const QImage& img);
     void setStatus(const QString& text);
+
+    // ── GPU canvas (Phase 1) ──────────────────────────────────
+    // initGpu() mounts a GpuCanvasWidget child under a transparent overlay
+    // child: the canvas draws the image (flattened blit or GPU-composited
+    // package), the overlay draws the handles/status QPainter chrome, and
+    // this widget keeps ALL the event handling. setGpuActive(false) tears
+    // the pair down visually and falls back to today's CPU painting.
+    void initGpu();
+    void setGpuActive(bool on);
+    bool gpuActive() const { return m_gpuActive; }
+    GpuCanvasWidget* gpuCanvas() const { return m_canvas; }
+    void setGpuPackage(const GpuFramePackage& pkg);
     void resetZoom();
     void setShowOriginal(bool show);
     void setPanMode(bool enabled);
@@ -88,9 +102,23 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
+    friend class PreviewOverlay;
+
     QImage  m_image;
     QImage  m_originalImage;
     QString m_status;
+
+    // ── GPU canvas plumbing ───────────────────────────────────
+    GpuCanvasWidget* m_canvas  = nullptr;   // child, bottom: draws the image
+    QWidget*         m_overlay = nullptr;   // child, top: QPainter chrome
+    bool             m_gpuActive = false;
+    QSize            m_viewSrcSize;         // size of what the canvas displays
+    GpuFramePackage  m_lastPkg;
+    bool             m_lastWasPackage = false;
+    QSize viewSizePx() const;      // on-screen image size (CPU: m_scaled; GPU: analytic)
+    void  rerouteGpu();            // pick what the canvas shows (original/pkg/image)
+    void  pushViewRect();          // keep the canvas blit rect in overlay lockstep
+    void  paintOverlays(QPainter& p);   // selection/handles/loc/box/status chrome
 
     // Cached scaled image to avoid re-scaling on every paint
     QImage  m_scaled;
@@ -143,6 +171,7 @@ private:
     QPolygonF layerQuadFrame() const;  // active layer: 4 corners in frame space
     QPolygonF quadFrame(const LayerTransform& tf, QSize native) const;  // any layer
     QPolygonF quadWidget(const LayerTransform& tf, QSize native) const;
+    bool      widgetInsideFrame(QPointF widgetPos) const;
     bool      handlesVisible() const;  // single selected, transformable, editable
     int       hitTest(QPointF widgetPos) const;   // top-most layer id under point, -1
     const CanvasLayer* layerById(int id) const;

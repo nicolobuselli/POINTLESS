@@ -362,7 +362,7 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
         // so they don't have a regular neighbour grid — Edges/Hatching/Contour
         // (which need one for the Sobel/isoline passes) are skipped here. Upgrade
         // path if that's ever wanted: bucket samples by `structure` (row-like
-        // index) and sort by x within each, like Halftone's shape rendering does.
+        // index) and sort by x within each, like Dot Grid's shape rendering does.
         GridSettings gs;
         gs.type    = params.gridShape;
         gs.spacing = float(cellH);

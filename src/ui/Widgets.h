@@ -375,6 +375,27 @@ private:
     QElapsedTimer              m_lastCloseTimer;
 };
 
+// ── ElidedLabel ──────────────────────────────────────────────
+// QLabel that shows its text elided with "…" to fit the available width,
+// and never forces the row wider (Ignored h-policy) — so a long name
+// can't push neighbours (e.g. a gutter icon) past the column edge, the
+// way a plain QLabel's full-text sizeHint would.
+
+class ElidedLabel : public QLabel
+{
+public:
+    explicit ElidedLabel(QWidget* parent = nullptr);
+    void setFullText(const QString& t);
+    QString fullText() const { return m_full; }
+
+protected:
+    void resizeEvent(QResizeEvent* e) override;
+
+private:
+    void updateElide();
+    QString m_full;
+};
+
 // ── Small helpers ────────────────────────────────────────────
 
 QLabel*      makeParamLabel(const QString& text);

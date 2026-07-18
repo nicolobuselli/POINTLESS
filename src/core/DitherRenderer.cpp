@@ -58,6 +58,36 @@ void linearBuffers(const QImage& work, std::vector<float>& fr,
     });
 }
 
+// Fill float channel buffers in GAMMA (sRGB-encoded, perceptual) space —
+// source composited over white directly in the encoded domain, no
+// linear round-trip. This is what the ink/paper threshold and error
+// diffusion need to match traditional dither tools (Photoshop etc.):
+// a 50%-grey pixel should land at ~0.5, not at its linear-light value
+// (~0.216). Used for FixedTones mode; Palette/ImageColors keep
+// linearBuffers() (OkLab matching and channel posterization both need
+// linear light).
+void gammaBuffers(const QImage& work, std::vector<float>& fr,
+                  std::vector<float>& fg, std::vector<float>& fb)
+{
+    const int w = work.width(), h = work.height();
+    fr.resize(size_t(w) * h);
+    fg.resize(size_t(w) * h);
+    fb.resize(size_t(w) * h);
+    parallelRows(h, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
+            const QRgb* line = reinterpret_cast<const QRgb*>(work.constScanLine(y));
+            for (int x = 0; x < w; ++x) {
+                const QRgb p = line[x];
+                const float a = qAlpha(p) / 255.0f;
+                const size_t i = size_t(y) * w + x;
+                fr[i] = (qRed(p)   / 255.0f) * a + (1.0f - a);
+                fg[i] = (qGreen(p) / 255.0f) * a + (1.0f - a);
+                fb[i] = (qBlue(p)  / 255.0f) * a + (1.0f - a);
+            }
+        }
+    });
+}
+
 // ============================================================
 //  "Color levels" tone expansion: with levels > 2, (levels-2)
 //  interpolated tones — linear-light colour lerp, evenly spaced
@@ -100,14 +130,18 @@ std::vector<ToneEntry> expandTones(std::vector<ToneEntry> tones, int levels)
 }
 
 // ============================================================
-//  Single-pixel quantisation in LINEAR light (shared by error
-//  diffusion and dot diffusion).
+//  Single-pixel quantisation (shared by error diffusion and dot
+//  diffusion).
 //
-//  r,g,b are linear-light channels (0..1), already composited over
-//  white. The chosen colour is written to outPx in sRGB; its *linear*
-//  channels are returned in cr,cg,cb so the caller can diffuse the
-//  residual error in linear light. Tone selection uses perceptual
-//  luma so the 0..255 level sliders keep their meaning.
+//  Palette/ImageColors callers pass LINEAR-light r,g,b (paired with
+//  linearBuffers()): OkLab palette matching and per-channel
+//  posterization both need linear light, and cr,cg,cb come back
+//  linear too so the residual diffuses in linear light.
+//
+//  FixedTones callers (nTones<=1 ink/paper, and multi-tone) pass
+//  GAMMA-encoded r,g,b (paired with gammaBuffers()), so the ink/paper
+//  threshold and tone selection match traditional dither tools; cr,cg,cb
+//  come back gamma-encoded too, for the caller to diffuse in gamma space.
 // ============================================================
 
 inline void quantizePixel(
@@ -137,9 +171,9 @@ inline void quantizePixel(
         const bool  ink = std::fabs(lum - inkLumLin) <= std::fabs(lum - 1.0f);
         if (ink) {
             const QColor& c = tones.empty() ? QColor(Qt::black) : tones[0].color;
-            cr = srgbToLinear(c.red());
-            cg = srgbToLinear(c.green());
-            cb = srgbToLinear(c.blue());
+            cr = c.red()   / 255.0f;
+            cg = c.green() / 255.0f;
+            cb = c.blue()  / 255.0f;
             const int a = tones.empty() ? 255 : toneAlpha(tones[0]);
             outPx = qRgba(c.red(), c.green(), c.blue(), a);
         } else {
@@ -147,12 +181,12 @@ inline void quantizePixel(
             outPx = qRgba(0, 0, 0, 0);
         }
     } else {
-        const float pl  = perceptualLumaFromLinear(r, g, b);
+        const float pl  = 0.2126f * r + 0.7152f * g + 0.0722f * b;
         const int   idx = pickToneIndex(tones, pl);
         const QColor& c = tones[idx].color;
-        cr = srgbToLinear(c.red());
-        cg = srgbToLinear(c.green());
-        cb = srgbToLinear(c.blue());
+        cr = c.red()   / 255.0f;
+        cg = c.green() / 255.0f;
+        cb = c.blue()  / 255.0f;
         outPx = qRgba(c.red(), c.green(), c.blue(), toneAlpha(tones[idx]));
     }
 }
@@ -171,7 +205,7 @@ struct QuantCtx {
     std::vector<ColorMath::PaletteEntry> palette;
     int   nTones    = 0;
     int   L         = 2;
-    float inkLumLin = 0.0f;
+    float inkLumLin = 0.0f;   // gamma-space perceptual luma for FixedTones single-tone ink/paper
 
     const std::vector<ColorMath::PaletteEntry>* pal() const {
         return palette.empty() ? nullptr : &palette;
@@ -197,7 +231,7 @@ struct QuantTable {
             c.L      = L;
             if (paletteMode) c.palette = ColorMath::buildPalette(c.tones);
             if (!imageColors && !paletteMode && c.nTones == 1)
-                c.inkLumLin = ColorMath::linearLuminance(c.tones[0].color.rgb());
+                c.inkLumLin = ColorMath::perceptualLuma(c.tones[0].color.rgb());
             return c;
         };
         if (loc.on)
@@ -790,11 +824,13 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
 
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
+    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
     const QuantTable qt(s, w, h);
     const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
     std::vector<float> fr, fg, fb;
-    linearBuffers(work, fr, fg, fb);
+    if (imageColors || paletteMode) linearBuffers(work, fr, fg, fb);
+    else                            gammaBuffers (work, fr, fg, fb);
 
     // Raster scan: serpentine (zig-zag) by default, left→right when disabled.
     for (int row = 0; row < h; ++row) {
@@ -823,9 +859,9 @@ void DitherRenderer::renderDiffusion(const QImage& work, QImage& out,
                 const int nr = row + taps[t].db;
                 if (nc < 0 || nc >= w || nr < 0 || nr >= h) continue;
                 const size_t ni = size_t(nr) * w + nc;
-                fr[ni] += er * taps[t].w;
-                fg[ni] += eg * taps[t].w;
-                fb[ni] += eb * taps[t].w;
+                fr[ni] = qBound(0.0f, fr[ni] + er * taps[t].w, 1.0f);
+                fg[ni] = qBound(0.0f, fg[ni] + eg * taps[t].w, 1.0f);
+                fb[ni] = qBound(0.0f, fb[ni] + eb * taps[t].w, 1.0f);
             }
         }
     }
@@ -846,11 +882,13 @@ void DitherRenderer::renderVarErrDiff(const QImage& work, QImage& out,
 
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
+    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
     const QuantTable qt(s, w, h);
     const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
     std::vector<float> fr, fg, fb;
-    linearBuffers(work, fr, fg, fb);
+    if (imageColors || paletteMode) linearBuffers(work, fr, fg, fb);
+    else                            gammaBuffers (work, fr, fg, fb);
 
     // Ostromoukhov neighbours (forward): (+1,0), (-1,+1), (0,+1); x mirrored on
     // reverse rows. Per-pixel weights come from the tone-indexed coefficient table.
@@ -875,7 +913,11 @@ void DitherRenderer::renderVarErrDiff(const QImage& work, QImage& out,
             const float eb = (fb[i] - cb) * str;
             if (er == 0.0f && eg == 0.0f && eb == 0.0f) continue;
 
-            const float luma = ColorMath::perceptualLumaFromLinear(fr[i], fg[i], fb[i]);
+            // Ostromoukhov's coefficient table is indexed by gamma/perceptual
+            // grey level; re-encode only when the working buffer is linear.
+            const float luma = (imageColors || paletteMode)
+                ? ColorMath::perceptualLumaFromLinear(fr[i], fg[i], fb[i])
+                : (0.2126f * fr[i] + 0.7152f * fg[i] + 0.0722f * fb[i]);
             const int   idx  = qBound(0, int(luma * 255.0f + 0.5f), 255);
             const int   div  = ostro::divs[idx];
             if (div <= 0) continue;
@@ -887,7 +929,9 @@ void DitherRenderer::renderVarErrDiff(const QImage& work, QImage& out,
                 if (nc < 0 || nc >= w || nr < 0 || nr >= h) continue;
                 const float wgt = float(cf[t]) / float(div);
                 const size_t ni = size_t(nr) * w + nc;
-                fr[ni] += er * wgt; fg[ni] += eg * wgt; fb[ni] += eb * wgt;
+                fr[ni] = qBound(0.0f, fr[ni] + er * wgt, 1.0f);
+                fg[ni] = qBound(0.0f, fg[ni] + eg * wgt, 1.0f);
+                fb[ni] = qBound(0.0f, fb[ni] + eb * wgt, 1.0f);
             }
         }
     }
@@ -925,11 +969,13 @@ void DitherRenderer::renderRiemersma(const QImage& work, QImage& out,
 
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
+    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
     const QuantTable qt(s, w, h);
     const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
     std::vector<float> fr, fg, fb;
-    linearBuffers(work, fr, fg, fb);
+    if (imageColors || paletteMode) linearBuffers(work, fr, fg, fb);
+    else                            gammaBuffers (work, fr, fg, fb);
 
     // Geometric error weights 1..max (oldest..newest); decision adds err/max.
     constexpr int errLen = 16; constexpr double maxW = 16.0;
@@ -978,6 +1024,11 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
 
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
+    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
+    // FixedTones thresholds against gamma-encoded (perceptual) channels, to
+    // match how traditional dither tools read the matrix (50%-grey ≈ 0.5,
+    // not its ~0.216 linear-light value). Palette/ImageColors keep linear.
+    const bool  useGamma    = !imageColors && !paletteMode;
     const QuantTable qt(s, w, h);
     const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
@@ -1069,10 +1120,18 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
         for (int x = 0; x < w; ++x) {
             const QRgb p = in[x];
             const float alpha = qAlpha(p) / 255.0f;
-            // Linear-light channels, composited over white.
-            const float r  = ColorMath::srgbToLinear(qRed(p))   * alpha + (1.0f - alpha);
-            const float g  = ColorMath::srgbToLinear(qGreen(p)) * alpha + (1.0f - alpha);
-            const float bl = ColorMath::srgbToLinear(qBlue(p))  * alpha + (1.0f - alpha);
+            // Composited over white, in gamma space for FixedTones (matches
+            // traditional dither tools) or linear light for Palette/ImageColors.
+            float r, g, bl;
+            if (useGamma) {
+                r  = qRed(p)   / 255.0f * alpha + (1.0f - alpha);
+                g  = qGreen(p) / 255.0f * alpha + (1.0f - alpha);
+                bl = qBlue(p)  / 255.0f * alpha + (1.0f - alpha);
+            } else {
+                r  = ColorMath::srgbToLinear(qRed(p))   * alpha + (1.0f - alpha);
+                g  = ColorMath::srgbToLinear(qGreen(p)) * alpha + (1.0f - alpha);
+                bl = ColorMath::srgbToLinear(qBlue(p))  * alpha + (1.0f - alpha);
+            }
 
             const QuantCtx& q = qt.at(x, y);
             const auto* pal   = q.pal();
@@ -1105,8 +1164,8 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
                 dst[x] = qRgba(quant(r), quant(g), quant(bl), 255);
 
             } else if (nTones <= 1) {
-                const float lumLin = 0.2126f * r + 0.7152f * g + 0.0722f * bl;
-                if (lumLin < t) {
+                const float lum = 0.2126f * r + 0.7152f * g + 0.0722f * bl;
+                if (lum < t) {
                     const QColor& c = tones.empty() ? QColor(Qt::black) : tones[0].color;
                     const int a = tones.empty() ? 255 : toneAlpha(tones[0]);
                     dst[x] = qRgba(c.red(), c.green(), c.blue(), a);
@@ -1114,8 +1173,10 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
                     dst[x] = qRgba(0, 0, 0, 0);
                 }
             } else {
-                // Tone selection stays perceptual so the level sliders hold.
-                const float lum = ColorMath::perceptualLumaFromLinear(r, g, bl) * 255.0f;
+                // Tone selection stays perceptual so the level sliders hold;
+                // r,g,bl are already gamma-encoded here (useGamma == true
+                // whenever nTones > 1 is reachable, i.e. FixedTones mode).
+                const float lum = (0.2126f * r + 0.7152f * g + 0.0722f * bl) * 255.0f;
                 int seg = 0;
                 while (seg < nTones - 2 && lum > float(tones[seg + 1].level)) ++seg;
                 const float l0   = float(tones[seg].level);
@@ -1160,11 +1221,13 @@ void DitherRenderer::renderDotDiffusion(const QImage& work, QImage& out,
 
     const float strength    = qBound(0, s.strength, 100) / 100.0f;
     const bool  imageColors = (s.tonal.mode == ToneMode::ImageColors);
+    const bool  paletteMode = (s.tonal.mode == ToneMode::Palette);
     const QuantTable qt(s, w, h);
     const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
     std::vector<float> fr, fg, fb;
-    linearBuffers(work, fr, fg, fb);
+    if (imageColors || paletteMode) linearBuffers(work, fr, fg, fb);
+    else                            gammaBuffers (work, fr, fg, fb);
 
     static const int dx8[8] = { -1, 0, 1, -1, 1, -1, 0, 1 };
     static const int dy8[8] = { -1,-1,-1,  0, 0,  1, 1, 1 };
@@ -1203,9 +1266,9 @@ void DitherRenderer::renderDotDiffusion(const QImage& work, QImage& out,
                 if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
                 if (kClass[(ny % 3) * 3 + (nx % 3)] > cls) {
                     const size_t ni = size_t(ny) * w + nx;
-                    fr[ni] += er * we;
-                    fg[ni] += eg * we;
-                    fb[ni] += eb * we;
+                    fr[ni] = qBound(0.0f, fr[ni] + er * we, 1.0f);
+                    fg[ni] = qBound(0.0f, fg[ni] + eg * we, 1.0f);
+                    fb[ni] = qBound(0.0f, fb[ni] + eb * we, 1.0f);
                 }
             }
         }

@@ -1,4 +1,5 @@
 #include "PreviewWidget.h"
+#include "GpuCanvasWidget.h"
 #include "Widgets.h"
 #include "../core/AnimParams.h"   // locParamLabel
 
@@ -52,6 +53,28 @@ QPointF rotationHandleWidget(const QPolygonF& q, QPointF centre)
 
 } // namespace
 
+// Transparent child painted ABOVE the GPU canvas: all the QPainter chrome
+// (selection outlines, transform handles, loc dots, rubber band, status).
+// Mouse-transparent — PreviewWidget keeps every event exactly as before.
+class PreviewOverlay : public QWidget
+{
+public:
+    explicit PreviewOverlay(PreviewWidget* owner)
+        : QWidget(owner), m_owner(owner)
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+    }
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        m_owner->paintOverlays(p);
+    }
+private:
+    PreviewWidget* m_owner;
+};
+
 PreviewWidget::PreviewWidget(QWidget* parent)
     : QWidget(parent)
 {
@@ -60,6 +83,78 @@ PreviewWidget::PreviewWidget(QWidget* parent)
     setAttribute(Qt::WA_OpaquePaintEvent);
     setFocusPolicy(Qt::StrongFocus);   // needed for Backspace to delete a selected loc dot
     setMouseTracking(true);            // hover-grow the passive loc dot without a button held
+}
+
+void PreviewWidget::initGpu()
+{
+    if (m_canvas) return;
+    m_canvas  = new GpuCanvasWidget(this);   // created first → stacked below…
+    m_overlay = new PreviewOverlay(this);    // …the chrome overlay
+    m_canvas->setGeometry(rect());
+    m_overlay->setGeometry(rect());
+    m_canvas->show();
+    m_overlay->show();
+    m_gpuActive = true;
+    updateScaled();
+    rerouteGpu();
+    update();
+}
+
+void PreviewWidget::setGpuActive(bool on)
+{
+    if (m_gpuActive == on) return;
+    m_gpuActive = on;
+    if (m_canvas)  m_canvas->setVisible(on);
+    if (m_overlay) m_overlay->setVisible(on);
+    updateScaled();
+    if (on) rerouteGpu();
+    update();
+}
+
+void PreviewWidget::setGpuPackage(const GpuFramePackage& pkg)
+{
+    m_lastPkg = pkg;
+    m_lastWasPackage = true;
+    if (m_gpuActive) rerouteGpu();
+}
+
+// Decide what the canvas displays and keep the fit math in sync.
+void PreviewWidget::rerouteGpu()
+{
+    if (!m_gpuActive || !m_canvas) return;
+    if (m_showOriginal && !m_originalImage.isNull()) {
+        m_viewSrcSize = m_originalImage.size();
+        m_canvas->showImage(m_originalImage);
+    } else if (m_lastWasPackage && m_lastPkg.valid) {
+        m_viewSrcSize = m_lastPkg.frame;
+        m_canvas->showPackage(m_lastPkg);
+    } else if (!m_image.isNull()) {
+        m_viewSrcSize = m_image.size();
+        m_canvas->showImage(m_image);
+    } else {
+        m_viewSrcSize = {};
+        m_canvas->showImage(QImage());
+    }
+    pushViewRect();
+    if (m_overlay) m_overlay->update();
+}
+
+QSize PreviewWidget::viewSizePx() const
+{
+    if (!m_gpuActive)
+        return m_scaled.size();
+    if (m_viewSrcSize.isEmpty()) return {};
+    const QSize target(qMax(1, int(size().width()  * m_zoomFactor)),
+                       qMax(1, int(size().height() * m_zoomFactor)));
+    return m_viewSrcSize.scaled(target, Qt::KeepAspectRatio);
+}
+
+void PreviewWidget::pushViewRect()
+{
+    if (!m_canvas) return;
+    const QSize vs = viewSizePx();
+    if (vs.isEmpty()) { m_canvas->setViewRect(QRectF()); return; }
+    m_canvas->setViewRect(QRectF(imageOrigin(), QSizeF(vs)));
 }
 
 void PreviewWidget::setLocPoints(const QVector<LocEntry>& pts, QSize frame)
@@ -113,7 +208,9 @@ double PreviewWidget::locInnerFramePx(const LocPoint& pt) const
 void PreviewWidget::setImage(const QImage& img)
 {
     m_image = img;
+    m_lastWasPackage = false;   // a flattened frame supersedes the last package
     updateScaled();
+    if (m_gpuActive) rerouteGpu();
     update();
 }
 
@@ -122,6 +219,7 @@ void PreviewWidget::setOriginalImage(const QImage& img)
     m_originalImage = img;
     if (m_showOriginal) {
         updateScaled();
+        if (m_gpuActive) rerouteGpu();
         update();
     }
 }
@@ -147,6 +245,7 @@ void PreviewWidget::setShowOriginal(bool show)
     if (m_showOriginal == show) return;
     m_showOriginal = show;
     updateScaled();
+    if (m_gpuActive) rerouteGpu();
     update();
 }
 
@@ -190,14 +289,16 @@ void PreviewWidget::setSelection(const QSet<int>& selected, int activeId)
 
 double PreviewWidget::imageScale() const
 {
-    if (m_scaled.isNull() || m_frame.width() <= 0) return 0.0;
-    return double(m_scaled.width()) / m_frame.width();
+    const QSize vs = viewSizePx();
+    if (vs.isEmpty() || m_frame.width() <= 0) return 0.0;
+    return double(vs.width()) / m_frame.width();
 }
 
 QPointF PreviewWidget::imageOrigin() const
 {
-    return QPointF((width()  - m_scaled.width())  / 2.0 + m_panOffset.x(),
-                   (height() - m_scaled.height()) / 2.0 + m_panOffset.y());
+    const QSize vs = viewSizePx();
+    return QPointF((width()  - vs.width())  / 2.0 + m_panOffset.x(),
+                   (height() - vs.height()) / 2.0 + m_panOffset.y());
 }
 
 QPointF PreviewWidget::frameToWidget(QPointF f) const
@@ -246,6 +347,12 @@ QPolygonF PreviewWidget::quadWidget(const LayerTransform& tf, QSize native) cons
     QPolygonF qw;
     for (const QPointF& f : quadFrame(tf, native)) qw << frameToWidget(f);
     return qw;
+}
+
+bool PreviewWidget::widgetInsideFrame(QPointF widgetPos) const
+{
+    if (m_frame.isEmpty()) return false;
+    return QRectF(QPointF(0.0, 0.0), QSizeF(m_frame)).contains(widgetToFrame(widgetPos));
 }
 
 bool PreviewWidget::handlesVisible() const
@@ -332,6 +439,7 @@ const PreviewWidget::CanvasLayer* PreviewWidget::layerById(int id) const
 
 int PreviewWidget::hitTest(QPointF widgetPos) const
 {
+    if (!widgetInsideFrame(widgetPos)) return -1;
     // m_canvasLayers is top-first → first match is the top-most layer.
     for (const CanvasLayer& cl : m_canvasLayers)
         if (!cl.locked
@@ -348,6 +456,7 @@ const QImage& PreviewWidget::currentSource() const
 
 void PreviewWidget::updateScaled()
 {
+    if (m_gpuActive) { m_scaled = {}; return; }   // GPU blits; no CPU rescale
     const QImage& source = currentSource();
     if (source.isNull()) { m_scaled = {}; return; }
     // Upscaling: nearest-neighbor preserves crisp symbol edges.
@@ -363,7 +472,10 @@ void PreviewWidget::updateScaled()
 void PreviewWidget::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+    if (m_canvas)  m_canvas->setGeometry(rect());
+    if (m_overlay) m_overlay->setGeometry(rect());
     updateScaled();
+    if (m_gpuActive) pushViewRect();
 }
 
 void PreviewWidget::wheelEvent(QWheelEvent* event)
@@ -419,11 +531,20 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
     m_pressPos = event->position();
     const bool leftPan = m_panMode && event->button() == Qt::LeftButton;
     const bool middlePan = event->button() == Qt::MiddleButton;
-    if (!m_scaled.isNull() && (leftPan || middlePan)) {
+    if (imageScale() > 0.0 && (leftPan || middlePan)) {
         m_dragging = true;
         m_dragButton = event->button();
         m_lastDragPos = event->pos();
         setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
+    }
+
+    if (event->button() == Qt::LeftButton && !m_panMode && !m_showOriginal
+        && imageScale() > 0.0 && !widgetInsideFrame(event->position())) {
+        m_boxSelecting = true;
+        m_boxAdditive  = (event->modifiers() & Qt::ShiftModifier);
+        m_boxStart = m_boxCur = event->pos();
         event->accept();
         return;
     }
@@ -1009,29 +1130,12 @@ void PreviewWidget::paintGroupHandles(QPainter& p)
     p.drawEllipse(rot, 4.5, 4.5);
 }
 
-void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
+// Everything drawn ON TOP of the image: selection chrome, handles, loc dots,
+// rubber band, status caption. Shared by the CPU paintEvent and (in GPU mode)
+// the transparent overlay child, so both paths render identical chrome.
+void PreviewWidget::paintOverlays(QPainter& p)
 {
-    QPainter p(this);
-    p.fillRect(rect(), QColor("#1E1E1E"));
-
-    if (!m_scaled.isNull()) {
-        const int x = (width()  - m_scaled.width())  / 2 + m_panOffset.x();
-        const int y = (height() - m_scaled.height()) / 2 + m_panOffset.y();
-
-        // Checkerboard under transparent output
-        if (m_scaled.hasAlphaChannel()) {
-            const int cs = 8;
-            const QRect imgRect(x, y, m_scaled.width(), m_scaled.height());
-            for (int yy = 0; yy < imgRect.height(); yy += cs)
-                for (int xx = 0; xx < imgRect.width(); xx += cs)
-                    p.fillRect(x + xx, y + yy,
-                               qMin(cs, imgRect.width() - xx),
-                               qMin(cs, imgRect.height() - yy),
-                               ((xx / cs + yy / cs) % 2) ? QColor("#2A2A2A") : QColor("#242424"));
-        }
-
-        p.drawImage(x, y, m_scaled);
-
+    if (!viewSizePx().isEmpty()) {
         if (!m_showOriginal && !m_panMode) {
             const bool single = handlesVisible();
             // Selection outlines for every selected layer (the single active one
@@ -1071,6 +1175,43 @@ void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
     p.setFont(f);
     p.drawText(rect().adjusted(8, 0, -8, -6),
                Qt::AlignBottom | Qt::AlignLeft, m_status);
+}
+
+void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
+{
+    if (m_gpuActive) {
+        // The canvas child draws the image; the overlay child draws the
+        // chrome. Keep their geometry in lockstep and repaint the chrome.
+        pushViewRect();
+        if (m_overlay) m_overlay->update();
+        QPainter p(this);
+        p.fillRect(rect(), QColor("#1E1E1E"));   // WA_OpaquePaintEvent safety
+        return;
+    }
+
+    QPainter p(this);
+    p.fillRect(rect(), QColor("#1E1E1E"));
+
+    if (!m_scaled.isNull()) {
+        const int x = (width()  - m_scaled.width())  / 2 + m_panOffset.x();
+        const int y = (height() - m_scaled.height()) / 2 + m_panOffset.y();
+
+        // Checkerboard under transparent output
+        if (m_scaled.hasAlphaChannel()) {
+            const int cs = 8;
+            const QRect imgRect(x, y, m_scaled.width(), m_scaled.height());
+            for (int yy = 0; yy < imgRect.height(); yy += cs)
+                for (int xx = 0; xx < imgRect.width(); xx += cs)
+                    p.fillRect(x + xx, y + yy,
+                               qMin(cs, imgRect.width() - xx),
+                               qMin(cs, imgRect.height() - yy),
+                               ((xx / cs + yy / cs) % 2) ? QColor("#2A2A2A") : QColor("#242424"));
+        }
+
+        p.drawImage(x, y, m_scaled);
+    }
+
+    paintOverlays(p);
 }
 
 void PreviewWidget::dragEnterEvent(QDragEnterEvent* event)

@@ -66,6 +66,13 @@ QFrame* bandLine()
 // *box* nudges the icon up to match the text's optical centre instead.
 QWidget* titleGutterIcon(QWidget* icon)
 {
+    // Force the stylesheet polish now (QEvent::Polish normally waits for
+    // first show): #iconBtn's QSS clamps to a literal 24×24 regardless of
+    // whatever setFixedSize() was given in C++ (see CLAUDE.md §9). Reading
+    // icon->width()/height() before that polish captures the pre-clamp,
+    // scaled size instead of the real one, so this wrap ends up the wrong
+    // size and the icon sits off-centre inside it once the clamp lands.
+    icon->ensurePolished();
     auto* wrap = new QWidget;
     const int h = icon->height();
     const int nudge = Ui::px(6);
@@ -121,28 +128,6 @@ QIcon shapePreviewIcon(const QString& path, int sidePx)
     p.end();
     return QIcon(QPixmap::fromImage(img));
 }
-
-// QLabel that shows its text elided with "…" to fit the available width, and
-// never forces the row wider (Ignored h-policy) — so a long file name can't
-// push neighbours past the column gutter.
-class ElidedLabel : public QLabel
-{
-public:
-    explicit ElidedLabel(QWidget* parent = nullptr) : QLabel(parent)
-    {
-        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-        setMinimumWidth(0);
-    }
-    void setFullText(const QString& t) { m_full = t; updateElide(); }
-protected:
-    void resizeEvent(QResizeEvent* e) override { QLabel::resizeEvent(e); updateElide(); }
-private:
-    void updateElide()
-    {
-        QLabel::setText(QFontMetrics(font()).elidedText(m_full, Qt::ElideRight, width()));
-    }
-    QString m_full;
-};
 
 struct BlendItem { BlendMode mode; const char* name; bool groupStart; };
 const BlendItem kBlend[] = {
@@ -401,10 +386,10 @@ private:
 } // namespace
 
 // ============================================================
-//  HalftonePage
+//  DotGridPage
 // ============================================================
 
-class HalftonePage : public QWidget
+class DotGridPage : public QWidget
 {
 public:
     std::function<void()> onChanged;
@@ -422,7 +407,7 @@ public:
         m_locDots->sync(m_loc);
     }
 
-    HalftonePage(QWidget* parent = nullptr)
+    DotGridPage(QWidget* parent = nullptr)
         : QWidget(parent)
     {
         auto* vl = new QVBoxLayout(this);
@@ -444,7 +429,7 @@ public:
             auto* addBtn = m_shapeSection->addHeaderButton(":/icons/plus.svg");
             addBtn->setToolTip("Add shape");
             connect(addBtn, &QPushButton::clicked, this, [this]() {
-                if (m_shapeSlots.size() < 4) addShapeSlot(HalftoneShape::Circle, QString(), false);
+                if (m_shapeSlots.size() < 4) addShapeSlot(DotGridShape::Circle, QString(), false);
             });
 
             // Shape slots live in their own nested layout (not the section's
@@ -481,7 +466,7 @@ public:
             m_shapeSection->body()->addWidget(makeLabeledGroup("Grid", gridRow));
         }
         vl->addWidget(m_shapeSection);
-        addShapeSlot(HalftoneShape::Square, QString(), true);
+        addShapeSlot(DotGridShape::Square, QString(), true);
 
         // ── Parameters ──────────────────────────────────────
         auto* settings = new PanelSection("Parameters", /*collapsible*/ false, true);
@@ -540,34 +525,34 @@ public:
 
     void setAnimatedParams(const QSet<ParamId>& ids)
     {
-        m_spacing->setAnimated(ids.contains(ParamId::HtGridSpacing));
-        m_rotation->setAnimated(ids.contains(ParamId::HtGridRotation));
-        m_gamma->setAnimated(ids.contains(ParamId::HtGamma));
-        m_diameter->setAnimated(ids.contains(ParamId::HtGridDiameter));
-        m_weight->setAnimated(ids.contains(ParamId::HtWeight));
-        m_jitter->setAnimated(ids.contains(ParamId::HtJitter));
-        m_opacity->setAnimated(ids.contains(ParamId::HtOpacity));
-        m_cornerRadius->setAnimated(ids.contains(ParamId::HtCornerRadius));
+        m_spacing->setAnimated(ids.contains(ParamId::DgGridSpacing));
+        m_rotation->setAnimated(ids.contains(ParamId::DgGridRotation));
+        m_gamma->setAnimated(ids.contains(ParamId::DgGamma));
+        m_diameter->setAnimated(ids.contains(ParamId::DgGridDiameter));
+        m_weight->setAnimated(ids.contains(ParamId::DgWeight));
+        m_jitter->setAnimated(ids.contains(ParamId::DgJitter));
+        m_opacity->setAnimated(ids.contains(ParamId::DgOpacity));
+        m_cornerRadius->setAnimated(ids.contains(ParamId::DgCornerRadius));
     }
 
     QHash<QWidget*, ParamId> paramWidgets() const
     {
         return {
-            { m_spacing, ParamId::HtGridSpacing }, { m_rotation, ParamId::HtGridRotation },
-            { m_gamma, ParamId::HtGamma },         { m_diameter, ParamId::HtGridDiameter },
-            { m_weight, ParamId::HtWeight },       { m_jitter, ParamId::HtJitter },
-            { m_opacity, ParamId::HtOpacity },     { m_cornerRadius, ParamId::HtCornerRadius },
+            { m_spacing, ParamId::DgGridSpacing }, { m_rotation, ParamId::DgGridRotation },
+            { m_gamma, ParamId::DgGamma },         { m_diameter, ParamId::DgGridDiameter },
+            { m_weight, ParamId::DgWeight },       { m_jitter, ParamId::DgJitter },
+            { m_opacity, ParamId::DgOpacity },     { m_cornerRadius, ParamId::DgCornerRadius },
         };
     }
 
-    HalftoneSettings settings() const
+    DotGridSettings settings() const
     {
-        HalftoneSettings s;
+        DotGridSettings s;
         s.inputDpi = 300;                       // fixed high quality (no DPI control)
         s.shapes.clear();
         for (const auto& slot : m_shapeSlots) {
             ShapeEntry e;
-            e.shape   = static_cast<HalftoneShape>(slot.combo->value().toInt());
+            e.shape   = static_cast<DotGridShape>(slot.combo->value().toInt());
             e.svgPath = slot.svgPath;
             s.shapes.push_back(e);
         }
@@ -603,13 +588,13 @@ public:
         return true;
     }
 
-    void setSettings(const HalftoneSettings& s)
+    void setSettings(const DotGridSettings& s)
     {
         m_updating = true;
         if (!shapesMatch(s.shapes)) {
             clearShapeSlots();
             if (s.shapes.empty())
-                addShapeSlot(HalftoneShape::Square, QString(), true);
+                addShapeSlot(DotGridShape::Square, QString(), true);
             else
                 for (const auto& e : s.shapes)
                     addShapeSlot(e.shape, e.svgPath, true);
@@ -683,7 +668,7 @@ private:
         }
     }
 
-    void addShapeSlot(HalftoneShape shape, const QString& svgPath, bool silent)
+    void addShapeSlot(DotGridShape shape, const QString& svgPath, bool silent)
     {
         if (m_shapeSlots.size() >= 4) return;
         const int gutterComp = Ui::px(46);   // boxes stop here; symbol sits beyond
@@ -701,11 +686,11 @@ private:
         rowl->setSpacing(0);
         slot.combo = new PopupPicker(1);
         slot.combo->setEntries({
-            { int(HalftoneShape::Triangle),  "Triangle",   QString(), QString() },
-            { int(HalftoneShape::Circle),    "Circle",     QString(), QString() },
-            { int(HalftoneShape::Square),    "Square",     QString(), QString() },
-            { int(HalftoneShape::Star),      "Star",       QString(), QString() },
-            { int(HalftoneShape::CustomSVG), "Custom SVG", QString(), QString() },
+            { int(DotGridShape::Triangle),  "Triangle",   QString(), QString() },
+            { int(DotGridShape::Circle),    "Circle",     QString(), QString() },
+            { int(DotGridShape::Square),    "Square",     QString(), QString() },
+            { int(DotGridShape::Star),      "Star",       QString(), QString() },
+            { int(DotGridShape::CustomSVG), "Custom SVG", QString(), QString() },
         });
         slot.combo->setValue(int(shape));
         rowl->addWidget(slot.combo, 1);
@@ -759,7 +744,7 @@ private:
         sr->addWidget(slot.svgBtn, 1);
 
         updateSvgRow(slot);
-        slot.svgRow->setVisible(shape == HalftoneShape::CustomSVG);
+        slot.svgRow->setVisible(shape == DotGridShape::CustomSVG);
         ov->addWidget(slot.svgRow);
 
         m_shapeSlots.append(slot);
@@ -771,7 +756,7 @@ private:
         QWidget*         svgRow = slot.svgRow;
         QPushButton*     svgBtn = slot.svgBtn;
         combo->onSelected = [this, svgRow](QVariant v) {
-            svgRow->setVisible(v.toInt() == int(HalftoneShape::CustomSVG));
+            svgRow->setVisible(v.toInt() == int(DotGridShape::CustomSVG));
             fire();
         };
         connect(slot.minusBtn, &QPushButton::clicked, this, [this, w]() { removeShapeSlot(w); });
@@ -1039,7 +1024,7 @@ public:
 
             updateDescription();
         }
-        // PanelSection (same as the Halftone page) so titles, band lines and
+        // PanelSection (same as the Dot Grid page) so titles, band lines and
         // gutters match across the three modes.
         auto* settingsSec = new PanelSection("Settings", /*collapsible*/ false, true);
         settingsSec->body()->addWidget(settingsContent);
@@ -1671,7 +1656,7 @@ public:
             sl->addWidget(makeLabeledGroup("Grid", m_gridType));
 
             m_rotation = new SliderRow("Rotation", 0, 360, 0);
-            m_rotation->setToolTip("Rotates the whole tile grid (like Halftone's\n"
+            m_rotation->setToolTip("Rotates the whole tile grid (like Dot Grid's\n"
                                    "Grid rotation) — tiles turn with it, for\n"
                                    "compositions with oblique lines.");
             m_rotation->onValueChanged = [this](int) { fire(); };
@@ -1910,6 +1895,244 @@ private:
 };
 
 // ============================================================
+//  HalftonePage — canonical AM screen (CMYK): shape, spacing,
+//  four per-channel screen angles, gamma. No tonal palette and
+//  no localization in v1 (inks derive from the source colours).
+// ============================================================
+
+class HalftonePage : public QWidget
+{
+public:
+    std::function<void()> onChanged;
+    std::function<void()> onBlendChanged;
+
+    HalftonePage(QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
+        auto* vl = new QVBoxLayout(this);
+        vl->setContentsMargins(0, 0, 0, 0);
+        vl->setSpacing(0);
+
+        // ── Settings ────────────────────────────────────────
+        auto* settingsSec = new PanelSection("Settings", /*collapsible*/ false, true);
+        {
+            auto* sl = settingsSec->body();
+
+            m_shape = new PopupPicker(1);
+            m_shape->setEntries({
+                { int(ScreenDotShape::Round),  "Round",  QString(), QString() },
+                { int(ScreenDotShape::Square), "Square", QString(), QString() },
+                { int(ScreenDotShape::Line),   "Line",   QString(), QString() },
+                { int(ScreenDotShape::Ink),    "Ink",    QString(),
+                  "Soft joined dots: neighbouring dots fuse\ninto organic blobs (printed-ink look)." },
+            });
+            m_shape->setValue(int(ScreenDotShape::Round));
+            m_shape->onSelected = [this](QVariant) { fire(); };
+            sl->addWidget(makeLabeledGroup("Shape", m_shape));
+
+            m_spacing = new SliderRow("Spacing", 2, 100, 12);
+            m_spacing->setToolTip("Cell pitch of all four screens, in frame px.");
+            m_angleC  = new SliderRow("Angle C", 0, 360, 15);
+            m_angleM  = new SliderRow("Angle M", 0, 360, 75);
+            m_angleY  = new SliderRow("Angle Y", 0, 360, 0);
+            m_angleK  = new SliderRow("Angle K", 0, 360, 45);
+            m_gamma   = new SliderRow("Gamma",   0, 100, 20);
+            m_softness = new SliderRow("Softness", 0, 100, 50);
+            m_softness->setToolTip("Edge softness: Ink widens the blob threshold,\n"
+                                   "the other shapes feather their edges.");
+            m_gridNoise = new SliderRow("Jitter", 0, 100, 0);
+            m_gridNoise->setToolTip("Random per-cell drift of dot position and\n"
+                                    "sampling (organic, less mechanical grid).");
+            m_grain = new SliderRow("Grain", 0, 100, 0);
+            m_grain->setToolTip("Paper-fibre noise: light/dark speckles over the\n"
+                                "result; with Ink it also roughens blob edges.");
+            for (SliderRow* r : { m_spacing, m_angleC, m_angleM, m_angleY,
+                                  m_angleK, m_gamma, m_softness, m_gridNoise, m_grain }) {
+                r->onValueChanged = [this](int) { fire(); };
+                sl->addWidget(r);
+            }
+        }
+        vl->addWidget(settingsSec);
+
+        // ── Inks (per-channel colour + flood/gain trims, + paper) ──
+        // Knob set modeled after paper-design/shaders' halftone-cmyk
+        // (Apache-2.0, github.com/paper-design/shaders).
+        auto* inksSec = new PanelSection("Inks", /*collapsible*/ false, true);
+        {
+            auto* il = inksSec->body();
+            static const char* names[4] = { "Cyan", "Magenta", "Yellow", "Black" };
+            for (int i = 0; i < 4; ++i) {
+                auto* row = new QHBoxLayout;
+                row->setContentsMargins(0, 0, 0, 0);
+                row->setSpacing(Ui::px(Ui::kGapTwinBoxes));
+
+                auto* sw = new FillSwatch(QColor(), 1.0f, /*showOpacity*/ false);
+                sw->onColorEdited = [this](QColor) { fire(); };
+                sw->onClicked = [this, sw]() { openInkPicker(sw); };
+                m_ink[i] = sw;
+
+                m_flood[i] = new DragSpinBox(QString(), -100, 100, 0, "");
+                m_flood[i]->setTextLabel("F");
+                m_flood[i]->setToolTip("Flood: flat dot-size offset for this ink\n"
+                                       "(shrinks or grows every dot equally).");
+                m_gain[i] = new DragSpinBox(QString(), -100, 100, 0, "");
+                m_gain[i]->setTextLabel("G");
+                m_gain[i]->setToolTip("Gain: proportional dot-size gain for this\n"
+                                      "ink (classic print dot-gain trim).");
+                m_flood[i]->onValueChanged = [this](int) { fire(); };
+                m_gain[i]->onValueChanged  = [this](int) { fire(); };
+
+                row->addWidget(sw, 2);
+                row->addWidget(m_flood[i], 1);
+                row->addWidget(m_gain[i], 1);
+                il->addWidget(makeLabeledGroup(names[i], row));
+            }
+
+            m_paper = new FillSwatch(QColor(Qt::white), 1.0f, /*showOpacity*/ false);
+            m_paper->onColorEdited = [this](QColor) { fire(); };
+            m_paper->onClicked = [this]() { openInkPicker(m_paper); };
+            il->addWidget(makeLabeledGroup("Paper", m_paper));
+        }
+        vl->addWidget(inksSec);
+
+        // ── Appearance (Fusion + Opacity) ──────────────────────
+        auto* appearance = new PanelSection("Appearance", /*collapsible*/ false, true);
+        {
+            auto* al = appearance->body();
+            m_fusion = new PopupPicker(1);
+            m_fusion->setEntries(blendPickerEntries());
+            m_fusion->setValue(int(BlendMode::Normal));
+            m_fusion->onSelected = [this](QVariant) {
+                if (!m_updating && onBlendChanged) onBlendChanged();
+            };
+            al->addWidget(makeLabeledGroup("Fusion", m_fusion));
+
+            m_opacity = new DragSpinBox(":/icons/opacity.svg", 0, 100, 100, "%");
+            m_opacity->onValueChanged = [this](int) { fire(); };
+            al->addWidget(makeLabeledGroup("Opacity", m_opacity));
+        }
+        vl->addWidget(appearance);
+    }
+
+    HalftoneSettings settings() const
+    {
+        HalftoneSettings s;
+        s.spacing  = float(m_spacing->value());
+        s.angleC   = float(m_angleC->value());
+        s.angleM   = float(m_angleM->value());
+        s.angleY   = float(m_angleY->value());
+        s.angleK   = float(m_angleK->value());
+        s.dotShape = ScreenDotShape(m_shape->value().toInt());
+        s.gamma    = m_gamma->value() / 100.0f * 5.0f;
+        s.opacity  = m_opacity->value() / 100.0f;
+        s.softness = m_softness->value() / 100.0f;
+        s.gridNoise = m_gridNoise->value() / 100.0f;
+        s.grain = m_grain->value() / 100.0f;
+        s.inkC  = m_ink[0]->color();
+        s.inkM  = m_ink[1]->color();
+        s.inkY  = m_ink[2]->color();
+        s.inkK  = m_ink[3]->color();
+        s.paper = m_paper->color();
+        s.floodC = m_flood[0]->value() / 100.0f;
+        s.floodM = m_flood[1]->value() / 100.0f;
+        s.floodY = m_flood[2]->value() / 100.0f;
+        s.floodK = m_flood[3]->value() / 100.0f;
+        s.gainC  = m_gain[0]->value() / 100.0f;
+        s.gainM  = m_gain[1]->value() / 100.0f;
+        s.gainY  = m_gain[2]->value() / 100.0f;
+        s.gainK  = m_gain[3]->value() / 100.0f;
+        return s;
+    }
+
+    void setSettings(const HalftoneSettings& s)
+    {
+        m_updating = true;
+        m_shape->setValue(int(s.dotShape));
+        m_spacing->setValue(qRound(s.spacing));
+        m_angleC->setValue(qRound(s.angleC));
+        m_angleM->setValue(qRound(s.angleM));
+        m_angleY->setValue(qRound(s.angleY));
+        m_angleK->setValue(qRound(s.angleK));
+        m_gamma->setValue(qRound(s.gamma / 5.0f * 100.0f));
+        m_opacity->setValue(qRound(s.opacity * 100));
+        m_softness->setValue(qRound(s.softness * 100));
+        m_gridNoise->setValue(qRound(s.gridNoise * 100));
+        m_grain->setValue(qRound(s.grain * 100));
+        m_ink[0]->setColor(s.inkC);
+        m_ink[1]->setColor(s.inkM);
+        m_ink[2]->setColor(s.inkY);
+        m_ink[3]->setColor(s.inkK);
+        m_paper->setColor(s.paper);
+        m_flood[0]->setValue(qRound(s.floodC * 100));
+        m_flood[1]->setValue(qRound(s.floodM * 100));
+        m_flood[2]->setValue(qRound(s.floodY * 100));
+        m_flood[3]->setValue(qRound(s.floodK * 100));
+        m_gain[0]->setValue(qRound(s.gainC * 100));
+        m_gain[1]->setValue(qRound(s.gainM * 100));
+        m_gain[2]->setValue(qRound(s.gainY * 100));
+        m_gain[3]->setValue(qRound(s.gainK * 100));
+        m_updating = false;
+    }
+
+    void setAnimatedParams(const QSet<ParamId>& ids)
+    {
+        m_spacing->setAnimated(ids.contains(ParamId::HfSpacing));
+        m_angleC->setAnimated(ids.contains(ParamId::HfAngleC));
+        m_angleM->setAnimated(ids.contains(ParamId::HfAngleM));
+        m_angleY->setAnimated(ids.contains(ParamId::HfAngleY));
+        m_angleK->setAnimated(ids.contains(ParamId::HfAngleK));
+        m_gamma->setAnimated(ids.contains(ParamId::HfGamma));
+        m_opacity->setAnimated(ids.contains(ParamId::HfOpacity));
+    }
+
+    QHash<QWidget*, ParamId> paramWidgets() const
+    {
+        return {
+            { m_spacing, ParamId::HfSpacing }, { m_angleC, ParamId::HfAngleC },
+            { m_angleM, ParamId::HfAngleM },   { m_angleY, ParamId::HfAngleY },
+            { m_angleK, ParamId::HfAngleK },   { m_gamma, ParamId::HfGamma },
+            { m_opacity, ParamId::HfOpacity },
+        };
+    }
+
+    BlendMode blend() const { return BlendMode(m_fusion->value().toInt()); }
+    void setBlend(BlendMode m) { m_fusion->setValue(int(m)); }
+
+private:
+    void fire() { if (!m_updating && onChanged) onChanged(); }
+
+    void openInkPicker(FillSwatch* sw)
+    {
+        auto* dlg = new ColorPickerDialog(sw->color(), 1.0f, /*showOpacity*/ false, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->moveNextTo(sw);
+        dlg->onColorChanged = [this, sw](QColor c, float) {
+            sw->setColor(c);
+            fire();
+        };
+        dlg->show(); dlg->raise(); dlg->activateWindow();
+    }
+
+    PopupPicker* m_shape   = nullptr;
+    SliderRow*   m_spacing = nullptr;
+    SliderRow*   m_angleC  = nullptr;
+    SliderRow*   m_angleM  = nullptr;
+    SliderRow*   m_angleY  = nullptr;
+    SliderRow*   m_angleK  = nullptr;
+    SliderRow*   m_gamma   = nullptr;
+    SliderRow*   m_softness = nullptr;
+    SliderRow*   m_gridNoise = nullptr;
+    SliderRow*   m_grain    = nullptr;
+    FillSwatch*  m_ink[4]  = {};       // C, M, Y, K
+    FillSwatch*  m_paper   = nullptr;
+    DragSpinBox* m_flood[4] = {};
+    DragSpinBox* m_gain[4]  = {};
+    PopupPicker* m_fusion  = nullptr;
+    DragSpinBox* m_opacity = nullptr;
+    bool m_updating = false;
+};
+
+// ============================================================
 //  ModePanel
 // ============================================================
 
@@ -1937,12 +2160,14 @@ ModePanel::ModePanel(QWidget* parent)
 
         m_modePick = new PopupPicker(1);
         m_modePick->setEntries({
-            { int(RenderMode::Halftone), "Halftone", QString(), QString() },
+            { int(RenderMode::DotGrid),  "Dot Grid", QString(), QString() },
             { int(RenderMode::Dither),   "Dither",   QString(), QString() },
             { int(RenderMode::Ascii),    "Ascii",    QString(), QString() },
             { int(RenderMode::Mosaic),   "Mosaic",   QString(), QString() },
+            { int(RenderMode::Halftone), "Halftone", QString(),
+              "Canonical CMYK print screen: four dot grids,\none per ink, each at its own angle." },
         });
-        m_modePick->setValue(int(RenderMode::Halftone));
+        m_modePick->setValue(int(RenderMode::DotGrid));
         m_modePick->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         m_modePick->setAccent(true);   // orange/white CTA — must stay unmistakable
         m_modePick->onSelected = [this](QVariant v) {
@@ -1986,25 +2211,28 @@ ModePanel::ModePanel(QWidget* parent)
     cl->setSpacing(0);
 
     // Per-mode pages (Shape + Settings).
-    m_halftonePage = new HalftonePage;
+    m_dotGridPage = new DotGridPage;
     m_ditherPage   = new DitherPage;
     m_asciiPage    = new AsciiPage;
     m_mosaicPage   = new MosaicPage;
+    m_halftonePage = new HalftonePage;
     m_ditherPage->setVisible(false);
     m_asciiPage->setVisible(false);
     m_mosaicPage->setVisible(false);
+    m_halftonePage->setVisible(false);
 
-    m_halftonePage->onChanged = [this]() { if (!m_updating) emit paramsChanged(); };
+    m_dotGridPage->onChanged = [this]() { if (!m_updating) emit paramsChanged(); };
     m_ditherPage->onChanged   = [this]() { if (!m_updating) emit paramsChanged(); };
     m_asciiPage->onChanged    = [this]() { if (!m_updating) emit paramsChanged(); };
     m_mosaicPage->onChanged   = [this]() { if (!m_updating) emit paramsChanged(); };
-    m_halftonePage->onBlendChanged = [this]() {
-        if (!m_updating) emit blendChanged(m_halftonePage->blend());
+    m_halftonePage->onChanged = [this]() { if (!m_updating) emit paramsChanged(); };
+    m_dotGridPage->onBlendChanged = [this]() {
+        if (!m_updating) emit blendChanged(m_dotGridPage->blend());
     };
     auto locToggle = [this](LocParam p) {
         if (!m_updating) emit localizationToggleRequested(p);
     };
-    m_halftonePage->onLocToggle = locToggle;
+    m_dotGridPage->onLocToggle = locToggle;
     m_ditherPage->onLocToggle   = locToggle;
     m_asciiPage->onLocToggle    = locToggle;
     m_mosaicPage->onLocToggle   = locToggle;
@@ -2017,11 +2245,15 @@ ModePanel::ModePanel(QWidget* parent)
     m_mosaicPage->onBlendChanged = [this]() {
         if (!m_updating) emit blendChanged(m_mosaicPage->blend());
     };
+    m_halftonePage->onBlendChanged = [this]() {
+        if (!m_updating) emit blendChanged(m_halftonePage->blend());
+    };
 
-    cl->addWidget(m_halftonePage);
+    cl->addWidget(m_dotGridPage);
     cl->addWidget(m_ditherPage);
     cl->addWidget(m_asciiPage);
     cl->addWidget(m_mosaicPage);
+    cl->addWidget(m_halftonePage);
 
     // ── Fill (shared palette) ────────────────────────────────
     auto* fill = new PanelSection("Fill", /*collapsible*/ true, true);
@@ -2153,11 +2385,11 @@ void ModePanel::setBackground(QColor c, float opacity)
     m_updating = false;
 }
 
-HalftoneSettings ModePanel::halftoneSettings() const { return m_halftonePage->settings(); }
+DotGridSettings ModePanel::dotGridSettings() const { return m_dotGridPage->settings(); }
 void ModePanel::setLocPoint(LocParam p, const LocPoint& pt)
 {
     switch (locParamKind(p)) {
-        case LayerKind::Halftone: m_halftonePage->setLocPoint(p, pt); break;
+        case LayerKind::DotGrid: m_dotGridPage->setLocPoint(p, pt); break;
         case LayerKind::Dither:   m_ditherPage->setLocPoint(p, pt);   break;
         case LayerKind::Ascii:    m_asciiPage->setLocPoint(p, pt);    break;
         case LayerKind::Mosaic:   m_mosaicPage->setLocPoint(p, pt);   break;
@@ -2167,16 +2399,18 @@ void ModePanel::setLocPoint(LocParam p, const LocPoint& pt)
 DitherSettings   ModePanel::ditherSettings()   const { return m_ditherPage->settings(); }
 AsciiSettings    ModePanel::asciiSettings()    const { return m_asciiPage->settings(); }
 MosaicSettings   ModePanel::mosaicSettings()   const { return m_mosaicPage->settings(); }
+HalftoneSettings ModePanel::halftoneSettings() const { return m_halftonePage->settings(); }
 
 QString ModePanel::outputFormat()   const { return m_format->value().toString(); }
 
 void ModePanel::setMode(RenderMode m)
 {
     m_mode = m;
-    m_halftonePage->setVisible(m == RenderMode::Halftone);
+    m_dotGridPage->setVisible(m == RenderMode::DotGrid);
     m_ditherPage->setVisible(m == RenderMode::Dither);
     m_asciiPage->setVisible(m == RenderMode::Ascii);
     m_mosaicPage->setVisible(m == RenderMode::Mosaic);
+    m_halftonePage->setVisible(m == RenderMode::Halftone);
     m_mosaicTextsSection->setVisible(m == RenderMode::Mosaic);
     m_modePick->setValue(int(m));
 }
@@ -2184,23 +2418,26 @@ void ModePanel::setMode(RenderMode m)
 void ModePanel::setFromLayer(const Layer& layer)
 {
     m_updating = true;
-    m_halftonePage->setSettings(layer.halftone);
+    m_dotGridPage->setSettings(layer.dotGrid);
     m_ditherPage->setSettings(layer.dither);
     m_asciiPage->setSettings(layer.ascii);
     m_mosaicPage->setSettings(layer.mosaic);
-    m_halftonePage->setBlend(layer.blend);
+    m_halftonePage->setSettings(layer.halftone);
+    m_dotGridPage->setBlend(layer.blend);
     m_ditherPage->setBlend(layer.blend);
     m_asciiPage->setBlend(layer.blend);
     m_mosaicPage->setBlend(layer.blend);
+    m_halftonePage->setBlend(layer.blend);
 
     // Fill (tonal) mirrors the active layer's mode tonal.
     TonalSettings tonal;
     bool haveTonal = true;
     switch (layer.kind) {
-        case LayerKind::Halftone: tonal = layer.halftone.tonal; break;
+        case LayerKind::DotGrid: tonal = layer.dotGrid.tonal; break;
         case LayerKind::Dither:   tonal = layer.dither.tonal;   break;
         case LayerKind::Ascii:    tonal = layer.ascii.tonal;    break;
         case LayerKind::Mosaic:   tonal = layer.mosaic.tonal;   break;
+        case LayerKind::Halftone: tonal = layer.halftone.tonal; break;
         case LayerKind::Original: haveTonal = false; break;
     }
     if (haveTonal) {
@@ -2218,10 +2455,11 @@ void ModePanel::setFromLayer(const Layer& layer)
         // No mode: the picker shows a neutral label (no entry matches -1,
         // so the text is set by hand) and every page hides.
         m_modePick->setPlaceholder("Select mode…");
-        m_halftonePage->setVisible(false);
+        m_dotGridPage->setVisible(false);
         m_ditherPage->setVisible(false);
         m_asciiPage->setVisible(false);
         m_mosaicPage->setVisible(false);
+        m_halftonePage->setVisible(false);
         m_mosaicTextsSection->setVisible(false);
     }
     m_fillSection->setVisible(hasMode);
@@ -2231,10 +2469,11 @@ void ModePanel::setFromLayer(const Layer& layer)
 
 void ModePanel::setAnimatedParams(const QSet<ParamId>& ids)
 {
-    m_halftonePage->setAnimatedParams(ids);
+    m_dotGridPage->setAnimatedParams(ids);
     m_ditherPage->setAnimatedParams(ids);
     m_asciiPage->setAnimatedParams(ids);
     m_mosaicPage->setAnimatedParams(ids);
+    m_halftonePage->setAnimatedParams(ids);
 }
 
 QHash<QWidget*, ParamId> ModePanel::paramWidgets() const
@@ -2243,10 +2482,11 @@ QHash<QWidget*, ParamId> ModePanel::paramWidgets() const
     // two pages' widgets are hidden, so including them is harmless but
     // pointless — return just the one matching the current mode.
     switch (m_mode) {
-        case RenderMode::Halftone: return m_halftonePage->paramWidgets();
+        case RenderMode::DotGrid:  return m_dotGridPage->paramWidgets();
         case RenderMode::Dither:   return m_ditherPage->paramWidgets();
         case RenderMode::Ascii:    return m_asciiPage->paramWidgets();
         case RenderMode::Mosaic:   return m_mosaicPage->paramWidgets();
+        case RenderMode::Halftone: return m_halftonePage->paramWidgets();
     }
     return {};
 }

@@ -261,9 +261,12 @@ FilmstripWidget::FilmstripWidget(QWidget* parent)
     m_thumbLayout->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     m_thumbRow->installEventFilter(this);
 
-    // Shown only while the library is empty; sits over the (then-empty) grid
-    // area and is kept in sync with m_thumbRow's size in the resize filter below.
-    m_emptyHint = new QLabel("Drop images here or on the frame", m_thumbRow);
+    // Shown only while the library is empty; centred on the whole section
+    // (add button + grid area), not just the grid, so it reads as the
+    // section's placeholder rather than something squeezed next to the "+".
+    // Parented to `this` (not m_thumbRow) and kept in sync with this
+    // widget's own size in resizeEvent below.
+    m_emptyHint = new QLabel("Drop images here or on the frame", this);
     m_emptyHint->setObjectName("filmstripEmptyHint");
     m_emptyHint->setAlignment(Qt::AlignCenter);
     m_emptyHint->setWordWrap(true);
@@ -272,6 +275,7 @@ FilmstripWidget::FilmstripWidget(QWidget* parent)
     m_scroll->setWidget(m_thumbRow);
     installOverlayScrollbar(m_scroll);
     hl->addWidget(m_scroll, 1);
+    m_emptyHint->raise();
 }
 
 void FilmstripWidget::addThumb(int mediaId, const QImage& source, const QString& name)
@@ -387,13 +391,13 @@ void FilmstripWidget::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     applyCellSizes();   // also sizes the add button when the library is empty
+    m_emptyHint->setGeometry(rect());
 }
 
 bool FilmstripWidget::eventFilter(QObject* obj, QEvent* event)
 {
     if (obj == m_thumbRow && event->type() == QEvent::Resize) {
         applyCellSizes();
-        m_emptyHint->setGeometry(m_thumbRow->rect());
     }
     return QWidget::eventFilter(obj, event);
 }

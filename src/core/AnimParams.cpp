@@ -32,19 +32,19 @@ const std::array<ParamDesc, int(ParamId::LocFirst)> kDescs = {{
     { "Scale",              10,  1000,  false, ParamScope::AllLayers },
     { "Rotation",         -180,   180,  false, ParamScope::AllLayers },
 
-    { "Spacing",            2,   500,  false, ParamScope::Halftone },
-    { "Point spacing",      2,   200,  false, ParamScope::Halftone },
-    { "Rotation",           0,   360,  false, ParamScope::Halftone },
-    { "Diameter",         0.1,   3.0,  false, ParamScope::Halftone },
-    { "Stretch",          0.1,   4.0,  false, ParamScope::Halftone },
-    { "Stretch angle",      0,   360,  false, ParamScope::Halftone },
-    { "Input DPI",         18,   300,  true,  ParamScope::Halftone },
-    { "Shape threshold",    0,   255,  true,  ParamScope::Halftone },
-    { "Gamma",            0.1,   5.0,  false, ParamScope::Halftone },
-    { "Weight",             0,     1,  false, ParamScope::Halftone },
-    { "Jitter",             0,     1,  false, ParamScope::Halftone },
-    { "Opacity",            0,     1,  false, ParamScope::Halftone },
-    { "Corner radius",      0,   100,  false, ParamScope::Halftone },
+    { "Spacing",            2,   500,  false, ParamScope::DotGrid },
+    { "Point spacing",      2,   200,  false, ParamScope::DotGrid },
+    { "Rotation",           0,   360,  false, ParamScope::DotGrid },
+    { "Diameter",         0.1,   3.0,  false, ParamScope::DotGrid },
+    { "Stretch",          0.1,   4.0,  false, ParamScope::DotGrid },
+    { "Stretch angle",      0,   360,  false, ParamScope::DotGrid },
+    { "Input DPI",         18,   300,  true,  ParamScope::DotGrid },
+    { "Shape threshold",    0,   255,  true,  ParamScope::DotGrid },
+    { "Gamma",            0.1,   5.0,  false, ParamScope::DotGrid },
+    { "Weight",             0,     1,  false, ParamScope::DotGrid },
+    { "Jitter",             0,     1,  false, ParamScope::DotGrid },
+    { "Opacity",            0,     1,  false, ParamScope::DotGrid },
+    { "Corner radius",      0,   100,  false, ParamScope::DotGrid },
 
     { "Pixel size",         1,   100,  true,  ParamScope::Dither },
     { "Strength",           0,   100,  true,  ParamScope::Dither },
@@ -79,6 +79,14 @@ const std::array<ParamDesc, int(ParamId::LocFirst)> kDescs = {{
     { "Threshold 8",        0,   255,  true,  ParamScope::Tonal },
 
     { "Background opacity", 0,     1,  false, ParamScope::Document },
+
+    { "Spacing",            2,   100,  false, ParamScope::Halftone },
+    { "Angle C",            0,   360,  false, ParamScope::Halftone },
+    { "Angle M",            0,   360,  false, ParamScope::Halftone },
+    { "Angle Y",            0,   360,  false, ParamScope::Halftone },
+    { "Angle K",            0,   360,  false, ParamScope::Halftone },
+    { "Gamma",            0.1,   5.0,  false, ParamScope::Halftone },
+    { "Opacity",            0,     1,  false, ParamScope::Halftone },
 }};
 
 // The tonal palette of the effect matching the layer's kind (nullptr for
@@ -86,10 +94,11 @@ const std::array<ParamDesc, int(ParamId::LocFirst)> kDescs = {{
 const TonalSettings* layerTonal(const Layer& l)
 {
     switch (l.kind) {
-        case LayerKind::Halftone: return &l.halftone.tonal;
+        case LayerKind::DotGrid:  return &l.dotGrid.tonal;
         case LayerKind::Dither:   return &l.dither.tonal;
         case LayerKind::Ascii:    return &l.ascii.tonal;
         case LayerKind::Mosaic:   return &l.mosaic.tonal;
+        case LayerKind::Halftone: return &l.halftone.tonal;
         default:                  return nullptr;
     }
 }
@@ -120,7 +129,7 @@ ParamScope locScope(LocParam p)
         case LayerKind::Dither: return ParamScope::Dither;
         case LayerKind::Ascii:  return ParamScope::Ascii;
         case LayerKind::Mosaic: return ParamScope::Mosaic;
-        default:                return ParamScope::Halftone;
+        default:                return ParamScope::DotGrid;
     }
 }
 
@@ -131,7 +140,7 @@ const LocMap& locMapFor(const Layer& l, LocParam p)
         case LayerKind::Dither: return l.dither.loc;
         case LayerKind::Ascii:  return l.ascii.loc;
         case LayerKind::Mosaic: return l.mosaic.loc;
-        default:                return l.halftone.loc;
+        default:                return l.dotGrid.loc;
     }
 }
 LocMap& locMapFor(Layer& l, LocParam p)
@@ -214,19 +223,19 @@ double getParam(const Layer& l, ParamId id)
         case ParamId::TfScale:    return l.transform.scalePct;
         case ParamId::TfRotation: return l.transform.rotation;
 
-        case ParamId::HtGridSpacing:       return l.halftone.grid.spacing;
-        case ParamId::HtGridPointSpacing:  return l.halftone.grid.pointSpacing;
-        case ParamId::HtGridRotation:      return l.halftone.grid.rotation;
-        case ParamId::HtGridDiameter:      return l.halftone.grid.diameter;
-        case ParamId::HtGridStretchFactor: return l.halftone.grid.stretchFactor;
-        case ParamId::HtGridStretchAngle:  return l.halftone.grid.stretchAngle;
-        case ParamId::HtInputDpi:          return l.halftone.inputDpi;
-        case ParamId::HtMultiThreshold:    return l.halftone.multiThreshold;
-        case ParamId::HtGamma:             return l.halftone.gamma;
-        case ParamId::HtWeight:            return l.halftone.weight;
-        case ParamId::HtJitter:            return l.halftone.jitter;
-        case ParamId::HtOpacity:           return l.halftone.opacity;
-        case ParamId::HtCornerRadius:      return l.halftone.cornerRadius;
+        case ParamId::DgGridSpacing:       return l.dotGrid.grid.spacing;
+        case ParamId::DgGridPointSpacing:  return l.dotGrid.grid.pointSpacing;
+        case ParamId::DgGridRotation:      return l.dotGrid.grid.rotation;
+        case ParamId::DgGridDiameter:      return l.dotGrid.grid.diameter;
+        case ParamId::DgGridStretchFactor: return l.dotGrid.grid.stretchFactor;
+        case ParamId::DgGridStretchAngle:  return l.dotGrid.grid.stretchAngle;
+        case ParamId::DgInputDpi:          return l.dotGrid.inputDpi;
+        case ParamId::DgMultiThreshold:    return l.dotGrid.multiThreshold;
+        case ParamId::DgGamma:             return l.dotGrid.gamma;
+        case ParamId::DgWeight:            return l.dotGrid.weight;
+        case ParamId::DgJitter:            return l.dotGrid.jitter;
+        case ParamId::DgOpacity:           return l.dotGrid.opacity;
+        case ParamId::DgCornerRadius:      return l.dotGrid.cornerRadius;
 
         case ParamId::DiPixelSize:    return l.dither.pixelSize;
         case ParamId::DiStrength:     return l.dither.strength;
@@ -250,6 +259,14 @@ double getParam(const Layer& l, ParamId id)
         case ParamId::MsHeightPct:   return l.mosaic.heightPct;
         case ParamId::MsTextPadding: return l.mosaic.textPadding;
         case ParamId::MsGridRotation: return l.mosaic.gridRotation;
+
+        case ParamId::HfSpacing: return l.halftone.spacing;
+        case ParamId::HfAngleC:  return l.halftone.angleC;
+        case ParamId::HfAngleM:  return l.halftone.angleM;
+        case ParamId::HfAngleY:  return l.halftone.angleY;
+        case ParamId::HfAngleK:  return l.halftone.angleK;
+        case ParamId::HfGamma:   return l.halftone.gamma;
+        case ParamId::HfOpacity: return l.halftone.opacity;
 
         default: return 0.0;   // Document params handled elsewhere
     }
@@ -301,19 +318,19 @@ void setParam(Layer& l, ParamId id, double v)
         case ParamId::TfScale:    l.transform.scalePct = fv; break;
         case ParamId::TfRotation: l.transform.rotation = fv; break;
 
-        case ParamId::HtGridSpacing:       l.halftone.grid.spacing       = fv; break;
-        case ParamId::HtGridPointSpacing:  l.halftone.grid.pointSpacing  = fv; break;
-        case ParamId::HtGridRotation:      l.halftone.grid.rotation      = fv; break;
-        case ParamId::HtGridDiameter:      l.halftone.grid.diameter      = fv; break;
-        case ParamId::HtGridStretchFactor: l.halftone.grid.stretchFactor = fv; break;
-        case ParamId::HtGridStretchAngle:  l.halftone.grid.stretchAngle  = fv; break;
-        case ParamId::HtInputDpi:          l.halftone.inputDpi           = iv; break;
-        case ParamId::HtMultiThreshold:    l.halftone.multiThreshold     = iv; break;
-        case ParamId::HtGamma:             l.halftone.gamma              = fv; break;
-        case ParamId::HtWeight:            l.halftone.weight             = fv; break;
-        case ParamId::HtJitter:            l.halftone.jitter             = fv; break;
-        case ParamId::HtOpacity:           l.halftone.opacity            = fv; break;
-        case ParamId::HtCornerRadius:      l.halftone.cornerRadius       = fv; break;
+        case ParamId::DgGridSpacing:       l.dotGrid.grid.spacing       = fv; break;
+        case ParamId::DgGridPointSpacing:  l.dotGrid.grid.pointSpacing  = fv; break;
+        case ParamId::DgGridRotation:      l.dotGrid.grid.rotation      = fv; break;
+        case ParamId::DgGridDiameter:      l.dotGrid.grid.diameter      = fv; break;
+        case ParamId::DgGridStretchFactor: l.dotGrid.grid.stretchFactor = fv; break;
+        case ParamId::DgGridStretchAngle:  l.dotGrid.grid.stretchAngle  = fv; break;
+        case ParamId::DgInputDpi:          l.dotGrid.inputDpi           = iv; break;
+        case ParamId::DgMultiThreshold:    l.dotGrid.multiThreshold     = iv; break;
+        case ParamId::DgGamma:             l.dotGrid.gamma              = fv; break;
+        case ParamId::DgWeight:            l.dotGrid.weight             = fv; break;
+        case ParamId::DgJitter:            l.dotGrid.jitter             = fv; break;
+        case ParamId::DgOpacity:           l.dotGrid.opacity            = fv; break;
+        case ParamId::DgCornerRadius:      l.dotGrid.cornerRadius       = fv; break;
 
         case ParamId::DiPixelSize:    l.dither.pixelSize    = iv; break;
         case ParamId::DiStrength:     l.dither.strength     = iv; break;
@@ -337,6 +354,14 @@ void setParam(Layer& l, ParamId id, double v)
         case ParamId::MsHeightPct:   l.mosaic.heightPct   = fv; break;
         case ParamId::MsTextPadding: l.mosaic.textPadding = iv; break;
         case ParamId::MsGridRotation: l.mosaic.gridRotation = fv; break;
+
+        case ParamId::HfSpacing: l.halftone.spacing = fv; break;
+        case ParamId::HfAngleC:  l.halftone.angleC  = fv; break;
+        case ParamId::HfAngleM:  l.halftone.angleM  = fv; break;
+        case ParamId::HfAngleY:  l.halftone.angleY  = fv; break;
+        case ParamId::HfAngleK:  l.halftone.angleK  = fv; break;
+        case ParamId::HfGamma:   l.halftone.gamma   = fv; break;
+        case ParamId::HfOpacity: l.halftone.opacity = fv; break;
 
         default: break;   // Document params handled elsewhere
     }
@@ -362,19 +387,20 @@ void setDocParam(SessionParams& p, ParamId id, double v)
 
 std::vector<ParamId> animatableParams(const Layer& layer)
 {
-    ParamScope kindScope = ParamScope::Halftone;
+    ParamScope kindScope = ParamScope::DotGrid;
     switch (layer.kind) {
-        case LayerKind::Halftone: kindScope = ParamScope::Halftone; break;
+        case LayerKind::DotGrid:  kindScope = ParamScope::DotGrid;  break;
         case LayerKind::Dither:   kindScope = ParamScope::Dither;   break;
         case LayerKind::Ascii:    kindScope = ParamScope::Ascii;    break;
-        case LayerKind::Mosaic:   kindScope = ParamScope::Mosaic;  break;
+        case LayerKind::Mosaic:   kindScope = ParamScope::Mosaic;   break;
+        case LayerKind::Halftone: kindScope = ParamScope::Halftone; break;
         case LayerKind::Original: kindScope = ParamScope::AllLayers; break;  // adjustments only
     }
 
     std::vector<ParamId> out;
     for (int i = 0; i < int(ParamId::Count); ++i) {
         const ParamId id = ParamId(i);
-        if (id == ParamId::HtInputDpi) continue;   // no UI control; ModePanel hardcodes it to 300
+        if (id == ParamId::DgInputDpi) continue;   // no UI control; ModePanel hardcodes it to 300
         // Loc quartets only make sense while their point exists and is on.
         if (const int li = locIndexOf(id); li >= 0) {
             const LocParam p = LocParam(li / 4);

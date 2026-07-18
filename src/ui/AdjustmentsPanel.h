@@ -48,9 +48,9 @@ public:
 
     // Inserts a widget above every row here (Brightness, Contrast, …), inside
     // the same scrolling viewport — used by ControlsPanel to fold the
-    // Transform (Position/Rotation/Scale) rows into the same scroll as the
-    // adjustments, so the merged "Transform" section scrolls as one list
-    // instead of Transform staying pinned above an independently-scrolling
+    // Image Adjustments (Position/Rotation/Scale) rows into the same scroll as the
+    // adjustments, so the merged "Image Adjustments" section scrolls as one list
+    // instead of Image Adjustments staying pinned above an independently-scrolling
     // Adjustments viewport.
     void prependWidget(QWidget* w);
 

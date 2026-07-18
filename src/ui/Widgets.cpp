@@ -1219,6 +1219,33 @@ void ColorPickerDialog::updatePreviewAndHex()
 }
 
 // ============================================================
+//  ElidedLabel
+// ============================================================
+
+ElidedLabel::ElidedLabel(QWidget* parent) : QLabel(parent)
+{
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    setMinimumWidth(0);
+}
+
+void ElidedLabel::setFullText(const QString& t)
+{
+    m_full = t;
+    updateElide();
+}
+
+void ElidedLabel::resizeEvent(QResizeEvent* e)
+{
+    QLabel::resizeEvent(e);
+    updateElide();
+}
+
+void ElidedLabel::updateElide()
+{
+    QLabel::setText(QFontMetrics(font()).elidedText(m_full, Qt::ElideRight, width()));
+}
+
+// ============================================================
 //  Small helpers
 // ============================================================
 

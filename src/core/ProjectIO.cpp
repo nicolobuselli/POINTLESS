@@ -113,8 +113,8 @@ LocMap locMapFromJson(const QJsonObject& o) {
     return m;
 }
 
-// ── HalftoneSettings ─────────────────────────────────────────
-QJsonObject toJson(const HalftoneSettings& s) {
+// ── DotGridSettings ─────────────────────────────────────────
+QJsonObject toJson(const DotGridSettings& s) {
     QJsonArray shapes;
     for (const ShapeEntry& sh : s.shapes)
         shapes.append(QJsonObject{ { "shape", int(sh.shape) }, { "svgPath", sh.svgPath } });
@@ -126,13 +126,13 @@ QJsonObject toJson(const HalftoneSettings& s) {
         { "loc", toJson(s.loc) }, { "tonal", toJson(s.tonal) },
     };
 }
-HalftoneSettings halftoneFromJson(const QJsonObject& o) {
-    HalftoneSettings s;
+DotGridSettings dotGridFromJson(const QJsonObject& o) {
+    DotGridSettings s;
     s.inputDpi = o["inputDpi"].toInt(s.inputDpi);
     s.shapes.clear();
     for (const QJsonValue& v : o["shapes"].toArray()) {
         const QJsonObject so = v.toObject();
-        s.shapes.push_back({ HalftoneShape(so["shape"].toInt()), so["svgPath"].toString() });
+        s.shapes.push_back({ DotGridShape(so["shape"].toInt()), so["svgPath"].toString() });
     }
     if (s.shapes.empty()) s.shapes = { ShapeEntry{} };
     s.multiThreshold = o["multiThreshold"].toInt(s.multiThreshold);
@@ -246,6 +246,58 @@ MosaicSettings mosaicFromJson(const QJsonObject& o) {
     return s;
 }
 
+// ── HalftoneSettings (canonical CMYK screen) ─────────────────
+QJsonObject toJson(const HalftoneSettings& s) {
+    return {
+        { "spacing", s.spacing },
+        { "angleC", s.angleC }, { "angleM", s.angleM },
+        { "angleY", s.angleY }, { "angleK", s.angleK },
+        { "dotShape", int(s.dotShape) },
+        { "gamma", s.gamma }, { "opacity", s.opacity },
+        { "softness", s.softness }, { "gridNoise", s.gridNoise },
+        { "grain", s.grain },
+        { "tonal", toJson(s.tonal) },
+        { "inkC", colorToJson(s.inkC) }, { "inkM", colorToJson(s.inkM) },
+        { "inkY", colorToJson(s.inkY) }, { "inkK", colorToJson(s.inkK) },
+        { "paper", colorToJson(s.paper) },
+        { "floodC", s.floodC }, { "floodM", s.floodM },
+        { "floodY", s.floodY }, { "floodK", s.floodK },
+        { "gainC", s.gainC }, { "gainM", s.gainM },
+        { "gainY", s.gainY }, { "gainK", s.gainK },
+    };
+}
+HalftoneSettings halftoneFromJson(const QJsonObject& o) {
+    HalftoneSettings s;
+    s.spacing  = float(o["spacing"].toDouble(s.spacing));
+    s.angleC   = float(o["angleC"].toDouble(s.angleC));
+    s.angleM   = float(o["angleM"].toDouble(s.angleM));
+    s.angleY   = float(o["angleY"].toDouble(s.angleY));
+    s.angleK   = float(o["angleK"].toDouble(s.angleK));
+    s.dotShape = ScreenDotShape(o["dotShape"].toInt(int(s.dotShape)));
+    s.gamma    = float(o["gamma"].toDouble(s.gamma));
+    s.opacity  = float(o["opacity"].toDouble(s.opacity));
+    s.softness = float(o["softness"].toDouble(s.softness));
+    s.gridNoise = float(o["gridNoise"].toDouble(s.gridNoise));
+    s.grain     = float(o["grain"].toDouble(s.grain));
+    // Guarded: older halftoneAm objects have no "tonal" — keep the
+    // ImageColors (CMYK) default instead of a zero-tone FixedTones.
+    if (o.contains("tonal")) s.tonal = tonalFromJson(o["tonal"].toObject());
+    if (o.contains("inkC"))  s.inkC  = colorFromJson(o["inkC"]);
+    if (o.contains("inkM"))  s.inkM  = colorFromJson(o["inkM"]);
+    if (o.contains("inkY"))  s.inkY  = colorFromJson(o["inkY"]);
+    if (o.contains("inkK"))  s.inkK  = colorFromJson(o["inkK"]);
+    if (o.contains("paper")) s.paper = colorFromJson(o["paper"]);
+    s.floodC = float(o["floodC"].toDouble(s.floodC));
+    s.floodM = float(o["floodM"].toDouble(s.floodM));
+    s.floodY = float(o["floodY"].toDouble(s.floodY));
+    s.floodK = float(o["floodK"].toDouble(s.floodK));
+    s.gainC  = float(o["gainC"].toDouble(s.gainC));
+    s.gainM  = float(o["gainM"].toDouble(s.gainM));
+    s.gainY  = float(o["gainY"].toDouble(s.gainY));
+    s.gainK  = float(o["gainK"].toDouble(s.gainK));
+    return s;
+}
+
 // ── Adjustments / LayerTransform ─────────────────────────────
 QJsonObject toJson(const Adjustments& a) {
     return {
@@ -302,8 +354,11 @@ QJsonObject toJson(const Layer& l) {
         { "visible", l.visible }, { "pinned", l.pinned }, { "locked", l.locked },
         { "blend", int(l.blend) }, { "mediaId", l.mediaId },
         { "transform", toJson(l.transform) }, { "adjustments", toJson(l.adjustments) },
-        { "halftone", toJson(l.halftone) }, { "dither", toJson(l.dither) },
+        // "halftone" is the FROZEN legacy JSON key for the Dot Grid mode
+        // (pre-rename .ultra files; no migration mechanism exists).
+        { "halftone", toJson(l.dotGrid) }, { "dither", toJson(l.dither) },
         { "ascii", toJson(l.ascii) }, { "mosaic", toJson(l.mosaic) },
+        { "halftoneAm", toJson(l.halftone) },
     };
 }
 Layer layerFromJson(const QJsonObject& o) {
@@ -318,7 +373,8 @@ Layer layerFromJson(const QJsonObject& o) {
     l.mediaId = o["mediaId"].toInt(l.mediaId);
     l.transform   = transformFromJson(o["transform"].toObject());
     l.adjustments = adjFromJson(o["adjustments"].toObject());
-    l.halftone    = halftoneFromJson(o["halftone"].toObject());
+    l.dotGrid    = dotGridFromJson(o["halftone"].toObject());
+    l.halftone    = halftoneFromJson(o["halftoneAm"].toObject());
     l.dither      = ditherFromJson(o["dither"].toObject());
     l.ascii       = asciiFromJson(o["ascii"].toObject());
     l.mosaic      = mosaicFromJson(o["mosaic"].toObject());

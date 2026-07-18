@@ -1,5 +1,7 @@
 #include "RenderWorker.h"
+#include "../core/ColorMath.h"
 #include "../core/ImageAdjuster.h"
+#include "../core/DotGridRenderer.h"
 #include "../core/HalftoneRenderer.h"
 #include "../core/DitherRenderer.h"
 #include "../core/AsciiRenderer.h"
@@ -9,10 +11,25 @@
 #include <QPainter>
 #include <QSvgGenerator>
 #include <QtConcurrent/QtConcurrent>
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QFile>
 #include <climits>
 #include <cmath>
 
 namespace {
+
+// ponytail: temporary perf probe (perf.log next to the exe) — remove once the
+// GPU phasing is settled. Only slow frames are logged, so it stays small.
+void perfLog(const QString& line)
+{
+    static QMutex mx;               // fast + full pass can run concurrently
+    QMutexLocker lock(&mx);
+    QFile f(QCoreApplication::applicationDirPath() + "/perf.log");
+    if (f.size() > 512 * 1024) return;   // cap, don't grow unbounded
+    if (f.open(QIODevice::Append | QIODevice::Text))
+        f.write((line + "\n").toUtf8());
+}
 
 float symbolSupersampleFactor(const Layer& layer, const QSize& size)
 {
@@ -20,8 +37,8 @@ float symbolSupersampleFactor(const Layer& layer, const QSize& size)
         return 1.0f;
 
     float target = 1.0f;
-    if (layer.kind == LayerKind::Halftone) {
-        const int dpi = qBound(18, layer.halftone.inputDpi, 300);
+    if (layer.kind == LayerKind::DotGrid) {
+        const int dpi = qBound(18, layer.dotGrid.inputDpi, 300);
         target = qBound(1.0f, 72.0f / float(dpi), 2.0f);
     } else if (layer.kind == LayerKind::Ascii) {
         const int cell = qBound(4, layer.ascii.cellSize, 128);
@@ -29,6 +46,9 @@ float symbolSupersampleFactor(const Layer& layer, const QSize& size)
     } else if (layer.kind == LayerKind::Mosaic) {
         const float cell = qBound(2.0f, qMin(layer.mosaic.cellW(), layer.mosaic.cellH()), 600.0f);
         target = qBound(1.0f, 24.0f / cell, 1.6f);   // crisp tile text at small cells
+    } else if (layer.kind == LayerKind::Halftone) {
+        const float sp = qBound(2.0f, layer.halftone.spacing, 100.0f);
+        target = qBound(1.0f, 16.0f / sp, 1.6f);     // crisp small screen dots
     }
 
     const double srcPixels = double(size.width()) * double(size.height());
@@ -54,10 +74,11 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
     // still paint). The stored palette is left intact for when it's restored.
     const Layer& layer = layerIn;
     switch (layer.kind) {
-        case LayerKind::Halftone: if (!layer.halftone.tonal.enabled) return; break;
+        case LayerKind::DotGrid: if (!layer.dotGrid.tonal.enabled) return; break;
         case LayerKind::Dither:   if (!layer.dither.tonal.enabled)   return; break;
         case LayerKind::Ascii:    if (!layer.ascii.tonal.enabled)    return; break;
         case LayerKind::Mosaic:   if (!layer.mosaic.tonal.enabled)   return; break;
+        case LayerKind::Halftone: if (!layer.halftone.tonal.enabled) return; break;
         case LayerKind::Original: break;
     }
 
@@ -66,8 +87,8 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
             painter.drawImage(0, 0, adjusted);
             break;
         }
-        case LayerKind::Halftone: {
-            const HalftoneSettings& hs = layer.halftone;
+        case LayerKind::DotGrid: {
+            const DotGridSettings& hs = layer.dotGrid;
             float scale = qBound(18, hs.inputDpi, 300) / 72.0f;
 
             // Clamp the working resolution to something sane.
@@ -76,7 +97,7 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
             if (maxDim * scale < 16.0f)   scale = 16.0f / maxDim;
 
             if (qAbs(scale - 1.0f) < 0.02f) {
-                HalftoneRenderer renderer;
+                DotGridRenderer renderer;
                 renderer.render(adjusted, painter, hs);
             } else {
                 QImage work = adjusted.scaled(qMax(8, qRound(adjusted.width()  * scale)),
@@ -89,11 +110,11 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
                 // DPI is a sampling-resolution control, not a symbol-size one:
                 // spacing is authored in output px, so it scales with the work
                 // raster and the painter scale-back cancels it exactly.
-                HalftoneSettings hw = hs;
+                DotGridSettings hw = hs;
                 const float kx = float(work.width()) / adjusted.width();
                 hw.grid.spacing      *= kx;
                 hw.grid.pointSpacing *= kx;
-                HalftoneRenderer renderer;
+                DotGridRenderer renderer;
                 renderer.render(work, painter, hw);
                 painter.restore();
             }
@@ -113,6 +134,11 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
         }
         case LayerKind::Mosaic: {
             MosaicRenderer::render(adjusted, painter, layer.mosaic);
+            break;
+        }
+        case LayerKind::Halftone: {
+            HalftoneRenderer r;
+            r.render(adjusted, painter, layer.halftone);
             break;
         }
     }
@@ -211,10 +237,11 @@ static void prerenderAtFrameRes(QImage& src, Layer& layer)
     src = src.scaled(qMax(1, qRound(src.width()  * rs)),
                      qMax(1, qRound(src.height() * rs)),
                      Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-    layer.halftone.grid.spacing = qMax(2.0f, layer.halftone.grid.spacing * float(rs));
+    layer.dotGrid.grid.spacing = qMax(2.0f, layer.dotGrid.grid.spacing * float(rs));
     layer.ascii.cellSize        = qMax(3,    int(layer.ascii.cellSize    * rs));
     layer.dither.pixelSize      = qMax(1,    qRound(layer.dither.pixelSize * rs));
     layer.mosaic.spacing        = qMax(2.0f, layer.mosaic.spacing * float(rs));
+    layer.halftone.spacing      = qMax(2.0f, layer.halftone.spacing * float(rs));
     layer.transform.scalePct    = newScale;
 }
 
@@ -227,13 +254,14 @@ static void compensateSymbolScale(Layer& l)
     if (l.kind == LayerKind::Original) return;
     const double s = qMax(0.0001, double(l.transform.scalePct) / 100.0);
     if (qAbs(s - 1.0) < 0.001) return;
-    l.halftone.grid.spacing      = float(l.halftone.grid.spacing / s);
-    l.halftone.grid.pointSpacing = float(l.halftone.grid.pointSpacing / s);
+    l.dotGrid.grid.spacing      = float(l.dotGrid.grid.spacing / s);
+    l.dotGrid.grid.pointSpacing = float(l.dotGrid.grid.pointSpacing / s);
     // ponytail: int params round here — at extreme scales cell/pixel sizes
     // drift by up to half a source px; make them float if it ever shows.
     l.ascii.cellSize   = qMax(1, qRound(l.ascii.cellSize / s));
     l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize / s));
     l.mosaic.spacing   = float(l.mosaic.spacing / s);
+    l.halftone.spacing = float(l.halftone.spacing / s);
 }
 
 static QImage placeOnFrame(const QImage& layerImg, const LayerTransform& tf, QSize frame)
@@ -369,6 +397,200 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
     return canvas;
 }
 
+// Defined in the SVG-export section below; also used for GPU placement.
+static QTransform layerMatrix(const LayerTransform& tf, QSize layerSize, QSize frame);
+
+// Original layers whose adjustments are all point ops run them in
+// composite.frag instead of ImageAdjuster (Phase 2). Neighborhood ops
+// (blur / sharpen / edge enhancement) need multi-pass — CPU path for now.
+static bool gpuAdjustableLayer(const Layer& l)
+{
+    return l.kind == LayerKind::Original
+        && l.adjustments.blur == 0
+        && l.adjustments.sharpenStrength == 0
+        && l.adjustments.edgeEnhancement == 0;
+}
+
+// Adjusted+flattened source → linear-light RGBA16F for the GPU halftone
+// and Dot Grid passes (mip filtering then averages in linear light,
+// matching the CPU's per-cell linear averages).
+static QImage toLinearF16(const QImage& src)
+{
+    const QImage rgb = (src.format() == QImage::Format_RGB32)
+                     ? src : src.convertToFormat(QImage::Format_RGB32);
+    QImage out(rgb.size(), QImage::Format_RGBA16FPx4);
+    for (int y = 0; y < rgb.height(); ++y) {
+        const QRgb* in = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
+        qfloat16*   o  = reinterpret_cast<qfloat16*>(out.scanLine(y));
+        for (int x = 0; x < rgb.width(); ++x) {
+            const QRgb px = in[x];
+            o[0] = qfloat16(ColorMath::srgbToLinear(qRed(px)));
+            o[1] = qfloat16(ColorMath::srgbToLinear(qGreen(px)));
+            o[2] = qfloat16(ColorMath::srgbToLinear(qBlue(px)));
+            o[3] = qfloat16(1.0f);
+            o += 4;
+        }
+    }
+    return out;
+}
+
+// GPU-compositing variant of renderDocumentImpl: renders each layer through
+// the same per-layer cache, but skips CPU placement + blend — those become
+// the GPU compositor's job. Placement matrices mirror placeOnFrame exactly.
+GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const SessionParams& params,
+                                                  const QHash<int, QImage>& layerSrc)
+{
+    GpuFramePackage pkg;
+
+    QSize outSize = (params.frameW > 0 && params.frameH > 0)
+                  ? QSize(params.frameW, params.frameH)
+                  : (source.isNull() ? QSize() : source.size());
+    if (outSize.isEmpty()) {
+        for (const Layer& l : params.layers) {
+            const QImage s = layerSrc.value(l.id);
+            if (!s.isNull()) { outSize = s.size(); break; }
+        }
+    }
+    if (outSize.isEmpty()) return pkg;
+
+    pkg.frame = outSize;
+    QColor bg = params.background;
+    bg.setAlphaF(params.backgroundOpacity);
+    pkg.bg = bg;
+
+    struct Job { QImage origSrc; Layer origLayer; QImage rendered; bool gpuAdjust = false;
+                 qint64 renderMs = 0;
+                 bool instanced = false; float spacingScale = 1.0f; bool halftone = false; };
+    std::vector<Job> jobs;
+    for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
+        if (!it->visible) continue;
+        QImage src = layerSrc.contains(it->id) ? layerSrc.value(it->id) : source;
+        if (src.isNull()) continue;
+        Job j{ src, *it, {}, gpuAdjustableLayer(*it) };
+        j.instanced = (it->kind == LayerKind::DotGrid
+                       && DotGridRenderer::gpuRenderable(it->dotGrid));
+        j.halftone  = (it->kind == LayerKind::Halftone
+                       && HalftoneRenderer::gpuRenderable(it->halftone));
+        jobs.push_back(std::move(j));
+    }
+
+    QElapsedTimer pkgTimer;
+    pkgTimer.start();
+
+    QtConcurrent::blockingMap(jobs, [this](Job& j) {
+        // Same cache key discipline as renderDocumentImpl.
+        Layer contentKey = j.origLayer;
+        contentKey.transform.xPct = contentKey.transform.yPct = contentKey.transform.rotation = 0.0f;
+        contentKey.transform.flipH = contentKey.transform.flipV = false;
+        // GPU-adjusted layers cache the RAW converted source: any adjustment
+        // slider drag stays a cache hit (the shader applies the values).
+        if (j.gpuAdjust) contentKey.adjustments = Adjustments{};
+        const void* srcBits = static_cast<const void*>(j.origSrc.constBits());
+        const qint64 sizeKey = rasterSizeKey(j.origSrc.size());
+
+        // GPU-halftone / GPU Dot Grid: the "render" is just the adjusted
+        // source in linear fp16 — every settings field lives in the UBO, so
+        // the whole struct is neutralized out of the key (any slider,
+        // spacing/grid included, = hit).
+        if (j.halftone)  contentKey.halftone = HalftoneSettings{};
+        if (j.instanced) contentKey.dotGrid  = DotGridSettings{};
+
+        bool hit = false;
+        {
+            QMutexLocker lock(&m_layerCacheMutex);
+            auto layerIt = m_layerCache.find(j.origLayer.id);
+            if (layerIt != m_layerCache.end()) {
+                auto sizeIt = layerIt->find(sizeKey);
+                if (sizeIt != layerIt->end() && sizeIt->key == contentKey
+                    && sizeIt->srcBits == srcBits) {
+                    j.rendered     = sizeIt->rendered;
+                    j.spacingScale = sizeIt->spacingScale;
+                    hit = true;
+                }
+            }
+        }
+        if (!hit) {
+            QElapsedTimer t; t.start();
+            if (j.gpuAdjust) {
+                j.rendered = j.origSrc;
+            } else if (j.halftone || j.instanced) {
+                QImage wsrc = j.origSrc;
+                Layer  wlayer = j.origLayer;
+                compensateSymbolScale(wlayer);
+                prerenderAtFrameRes(wsrc, wlayer);
+                const QImage adjusted = ImageAdjuster::apply(wsrc, wlayer.adjustments);
+                j.rendered = toLinearF16(flattenOntoWhite(adjusted));
+                j.spacingScale = j.halftone
+                    ? wlayer.halftone.spacing
+                      / qMax(0.01f, j.origLayer.halftone.spacing)
+                    : wlayer.dotGrid.grid.spacing
+                      / qMax(0.01f, j.origLayer.dotGrid.grid.spacing);
+            } else {
+                QImage wsrc = j.origSrc;
+                Layer  wlayer = j.origLayer;
+                compensateSymbolScale(wlayer);
+                prerenderAtFrameRes(wsrc, wlayer);
+                j.rendered = renderLayer(wsrc, wlayer);
+            }
+            j.renderMs = t.elapsed();
+            // Upload format, converted HERE (worker, parallel, cached) so the
+            // GUI thread never pays a per-frame swizzle in ensureLayerTextures.
+            // (GPU halftone/Dot Grid sources are already RGBA16FPx4 — leave them.)
+            if (!j.halftone && !j.instanced)
+                j.rendered = j.rendered.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+            QMutexLocker lock(&m_layerCacheMutex);
+            m_layerCache[j.origLayer.id][sizeKey] =
+                { contentKey, j.origSrc.size(), srcBits, j.rendered, j.spacingScale };
+        }
+    });
+
+    for (Job& j : jobs) {
+        if (j.rendered.isNull()) continue;
+        LayerTransform placementTf = j.origLayer.transform;
+        placementTf.scalePct = effectivePlacementScalePct(
+            j.origLayer.kind, j.origLayer.transform.scalePct, j.origSrc.size());
+        if (j.gpuAdjust)   // sizePct resample becomes a placement scale
+            placementTf.scalePct *= float(qBound(10, j.origLayer.adjustments.sizePct, 200)) / 100.0f;
+        GpuLayer gl;
+        gl.id          = j.origLayer.id;
+        gl.image       = j.rendered;
+        gl.contentSize = j.rendered.size();
+        gl.placement   = layerMatrix(placementTf, gl.contentSize, outSize);
+        gl.blend       = j.origLayer.blend;
+        gl.adj         = j.origLayer.adjustments;
+        gl.gpuAdjust   = j.gpuAdjust;
+        if (j.instanced) {
+            gl.dotScreen   = true;
+            gl.dotSettings = j.origLayer.dotGrid;   // LIVE params for the UBO,
+            gl.dotSettings.grid.spacing *= j.spacingScale;   // in bake-res px
+        }
+        if (j.halftone) {
+            gl.halftoneScreen   = true;
+            gl.halftoneSettings = j.origLayer.halftone;      // same rule
+            gl.halftoneSettings.spacing *= j.spacingScale;
+        }
+        pkg.layers.append(gl);
+    }
+    pkg.valid = true;
+
+    const qint64 total = pkgTimer.elapsed();
+    if (total > 8) {   // pure cache-hit packages are sub-ms noise
+        QString detail;
+        for (const Job& j : jobs)
+            if (j.renderMs > 0) {
+                const QSize sz = j.rendered.size();
+                detail += QString(" [id %1 kind %2%3: %4ms %5x%6]")
+                    .arg(j.origLayer.id).arg(int(j.origLayer.kind))
+                    .arg(j.instanced ? QStringLiteral(" inst") : QString())
+                    .arg(j.renderMs).arg(sz.width()).arg(sz.height());
+            }
+        perfLog(QString("pkg %1x%2 %3 layers %4ms%5")
+                .arg(outSize.width()).arg(outSize.height())
+                .arg(pkg.layers.size()).arg(total).arg(detail));
+    }
+    return pkg;
+}
+
 // ---------------------------------------------------------------------------
 // SVG (vector) export
 // ---------------------------------------------------------------------------
@@ -393,10 +615,11 @@ static QTransform layerMatrix(const LayerTransform& tf, QSize layerSize, QSize f
 static bool layerFillEnabled(const Layer& l)
 {
     switch (l.kind) {
-        case LayerKind::Halftone: return l.halftone.tonal.enabled;
+        case LayerKind::DotGrid: return l.dotGrid.tonal.enabled;
         case LayerKind::Dither:   return l.dither.tonal.enabled;
         case LayerKind::Ascii:    return l.ascii.tonal.enabled;
         case LayerKind::Mosaic:   return l.mosaic.tonal.enabled;
+        case LayerKind::Halftone: return l.halftone.tonal.enabled;
         case LayerKind::Original: return true;
     }
     return true;
@@ -441,7 +664,7 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
         // Blend modes and the Original photo can't be expressed as SVG vectors;
         // rasterise those layers and embed them so the output still matches.
         const bool vectorable = (layer.blend == BlendMode::Normal)
-                             && (layer.kind == LayerKind::Halftone
+                             && (layer.kind == LayerKind::DotGrid
                               || layer.kind == LayerKind::Dither
                               || layer.kind == LayerKind::Ascii
                               || layer.kind == LayerKind::Mosaic);
@@ -461,15 +684,15 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
         p.save();
         p.setTransform(layerMatrix(layer.transform, ls, frame));
         switch (layer.kind) {
-            case LayerKind::Halftone: {
+            case LayerKind::DotGrid: {
                 // Match the raster path's inputDpi supersampling, or the grid
                 // comes out ~dpi/72× coarser (much less dense) than the preview.
-                const HalftoneSettings& hs = layer.halftone;
+                const DotGridSettings& hs = layer.dotGrid;
                 float scale = qBound(18, hs.inputDpi, 300) / 72.0f;
                 const int maxDim = qMax(forRender.width(), forRender.height());
                 if (maxDim * scale > 6000.0f) scale = 6000.0f / maxDim;
                 if (maxDim * scale < 16.0f)   scale = 16.0f / maxDim;
-                HalftoneRenderer r;
+                DotGridRenderer r;
                 if (qAbs(scale - 1.0f) < 0.02f) {
                     r.renderVector(forRender, p, hs);
                 } else {
@@ -481,7 +704,7 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
                             qreal(forRender.height()) / work.height());
                     // Same DPI compensation as the raster path: spacing is
                     // output px, DPI only changes sampling resolution.
-                    HalftoneSettings hw = hs;
+                    DotGridSettings hw = hs;
                     const float kx = float(work.width()) / forRender.width();
                     hw.grid.spacing      *= kx;
                     hw.grid.pointSpacing *= kx;
@@ -520,8 +743,8 @@ int RenderWorker::estimateSvgElements(const QImage& source, const SessionParams&
         const double s  = qMax(0.0001, double(layer.transform.scalePct) / 100.0);
         const double s2 = s * s;
         switch (layer.kind) {
-            case LayerKind::Halftone: {
-                total += (long long)(HalftoneRenderer::estimateDotCount(adjusted, layer.halftone)
+            case LayerKind::DotGrid: {
+                total += (long long)(DotGridRenderer::estimateDotCount(adjusted, layer.dotGrid)
                                      * s2);
                 break;
             }
@@ -561,6 +784,10 @@ RenderWorker::RenderWorker(QObject* parent)
             this, &RenderWorker::onFastRenderFinished);
     connect(&m_fullWatcher, &QFutureWatcher<QImage>::finished,
             this, &RenderWorker::onFullRenderFinished);
+    connect(&m_fastPkgWatcher, &QFutureWatcher<GpuFramePackage>::finished,
+            this, &RenderWorker::onFastPackageFinished);
+    connect(&m_fullPkgWatcher, &QFutureWatcher<GpuFramePackage>::finished,
+            this, &RenderWorker::onFullPackageFinished);
 }
 
 RenderWorker::~RenderWorker() = default;
@@ -572,7 +799,7 @@ void RenderWorker::requestRender(const QImage& source, const SessionParams& para
     m_latestParams = params;
     m_layerSrc     = layerSrc;
 
-    if (m_fastWatcher.isRunning()) {
+    if (fastBusy()) {
         m_fastPending = true;
     } else {
         launchFast();
@@ -607,6 +834,28 @@ static QHash<int, QImage> scaledLayerSrc(const QHash<int, QImage>& src, float sc
     return out;
 }
 
+// Memoized variant for the interactive pass (see m_scaledLayerSrcCache in the
+// header). GUI-thread only — launchFast copies the result into the lambda.
+QHash<int, QImage> RenderWorker::scaledLayerSrcCached(const QHash<int, QImage>& src, float scale)
+{
+    if (qAbs(scale - 1.0f) < 0.001f) return src;
+    QHash<int, QImage> out;
+    for (auto it = src.begin(); it != src.end(); ++it) {
+        const QImage& im = it.value();
+        if (im.isNull()) { out.insert(it.key(), im); continue; }
+        ScaledSrcEntry& c = m_scaledLayerSrcCache[it.key()];
+        if (c.bits != im.constBits() || qAbs(c.k - scale) > 0.0001f) {
+            c.img  = im.scaled(qMax(1, qRound(im.width()  * scale)),
+                               qMax(1, qRound(im.height() * scale)),
+                               Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            c.bits = im.constBits();
+            c.k    = scale;
+        }
+        out.insert(it.key(), c.img);
+    }
+    return out;
+}
+
 QImage RenderWorker::renderPreview(const QImage& source, const SessionParams& params, int maxPx,
                                    const QHash<int, QImage>& layerSrc)
 {
@@ -619,12 +868,12 @@ QImage RenderWorker::renderPreview(const QImage& source, const SessionParams& pa
     SessionParams p = scaledForPreview(params, k);
     // Keep halftone dot scale consistent with the full render (mirrors launchFast).
     for (Layer& l : p.layers) {
-        if (l.kind != LayerKind::Halftone) continue;
-        const float requested = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
+        if (l.kind != LayerKind::DotGrid) continue;
+        const float requested = qBound(18, l.dotGrid.inputDpi, 300) / 72.0f;
         const float maxBySize = 6000.0f / float(maxDim);
         const float minBySize = 16.0f   / float(maxDim);
         const float eff = qBound(minBySize, requested, maxBySize);
-        l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
+        l.dotGrid.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
     }
     return renderDocument(small, p, scaledLayerSrc(layerSrc, k));
 }
@@ -640,12 +889,12 @@ QImage RenderWorker::renderPreviewCached(const QImage& source, const SessionPara
     const QImage small = source.scaled(maxPx, maxPx, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     SessionParams p = scaledForPreview(params, k);
     for (Layer& l : p.layers) {
-        if (l.kind != LayerKind::Halftone) continue;
-        const float requested = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
+        if (l.kind != LayerKind::DotGrid) continue;
+        const float requested = qBound(18, l.dotGrid.inputDpi, 300) / 72.0f;
         const float maxBySize = 6000.0f / float(maxDim);
         const float minBySize = 16.0f   / float(maxDim);
         const float eff = qBound(minBySize, requested, maxBySize);
-        l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
+        l.dotGrid.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
     }
     return renderDocumentImpl(small, p, scaledLayerSrc(layerSrc, k), &m_layerCache, &m_layerCacheMutex);
 }
@@ -662,7 +911,8 @@ SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float 
         l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize * scale));
         // Halftone dot pitch is a fixed pixel value: scale it with the image too,
         // or dots stay full-size on the shrunk preview and look ~1/scale too big.
-        l.halftone.grid.spacing = qMax(2.0f, l.halftone.grid.spacing * scale);
+        l.dotGrid.grid.spacing = qMax(2.0f, l.dotGrid.grid.spacing * scale);
+        l.halftone.spacing     = qMax(2.0f, l.halftone.spacing * scale);
         l.adjustments.sharpenRadius = qMax(1, qRound(l.adjustments.sharpenRadius * scale));
     }
     return p;
@@ -701,24 +951,30 @@ void RenderWorker::launchFast()
         }
         src = m_cachedSmallSrc;
         p  = scaledForPreview(m_latestParams, k);
-        ls = scaledLayerSrc(m_layerSrc, k);
+        ls = scaledLayerSrcCached(m_layerSrc, k);
 
         // Keep preview and full render at the same effective halftone scale.
         for (Layer& l : p.layers) {
-            if (l.kind != LayerKind::Halftone) continue;
-            const float requestedScale = qBound(18, l.halftone.inputDpi, 300) / 72.0f;
+            if (l.kind != LayerKind::DotGrid) continue;
+            const float requestedScale = qBound(18, l.dotGrid.inputDpi, 300) / 72.0f;
             const float maxBySize = 6000.0f / float(srcMax);
             const float minBySize = 16.0f   / float(srcMax);
             const float eff = qBound(minBySize, requestedScale, maxBySize);
-            l.halftone.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
+            l.dotGrid.inputDpi = qBound(18, qRound(eff * 72.0f), 300);
         }
     }
 
     emit renderStarted(true);
 
-    m_fastWatcher.setFuture(QtConcurrent::run([this, src, p, ls]() {
-        return renderDocumentInteractive(src, p, ls);
-    }));
+    if (m_gpuPackages) {
+        m_fastPkgWatcher.setFuture(QtConcurrent::run([this, src, p, ls]() {
+            return renderLayersPackage(src, p, ls);
+        }));
+    } else {
+        m_fastWatcher.setFuture(QtConcurrent::run([this, src, p, ls]() {
+            return renderDocumentInteractive(src, p, ls);
+        }));
+    }
 }
 
 void RenderWorker::launchFull()
@@ -745,14 +1001,20 @@ void RenderWorker::launchFull()
 
     emit renderStarted(false);
 
-    m_fullWatcher.setFuture(QtConcurrent::run([this, src, p, ls]() {
-        return renderDocumentInteractive(src, p, ls);
-    }));
+    if (m_gpuPackages) {
+        m_fullPkgWatcher.setFuture(QtConcurrent::run([this, src, p, ls]() {
+            return renderLayersPackage(src, p, ls);
+        }));
+    } else {
+        m_fullWatcher.setFuture(QtConcurrent::run([this, src, p, ls]() {
+            return renderDocumentInteractive(src, p, ls);
+        }));
+    }
 }
 
 void RenderWorker::onFullTimerTimeout()
 {
-    if (m_fullWatcher.isRunning()) {
+    if (fullBusy()) {
         m_fullPending = true;
         return;
     }
@@ -775,6 +1037,24 @@ void RenderWorker::onFullRenderFinished()
     QImage result = m_fullWatcher.result();
     emit renderComplete(result, false);
 
+    if (m_fullPending) {
+        m_fullPending = false;
+        launchFull();
+    }
+}
+
+void RenderWorker::onFastPackageFinished()
+{
+    emit layersComplete(m_fastPkgWatcher.result(), true);
+    if (m_fastPending) {
+        m_fastPending = false;
+        launchFast();
+    }
+}
+
+void RenderWorker::onFullPackageFinished()
+{
+    emit layersComplete(m_fullPkgWatcher.result(), false);
     if (m_fullPending) {
         m_fullPending = false;
         launchFull();

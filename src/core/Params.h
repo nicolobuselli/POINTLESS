@@ -11,10 +11,11 @@
 // ============================================================
 
 enum class RenderMode {
-    Halftone = 0,
+    DotGrid  = 0,
     Dither   = 1,
     Ascii    = 2,
-    Mosaic   = 3
+    Mosaic   = 3,
+    Halftone = 4    // canonical AM screen (CMYK) — NOT the old dot-grid mode
 };
 
 // ============================================================
@@ -23,10 +24,11 @@ enum class RenderMode {
 
 enum class LayerKind {
     Original = 0,
-    Halftone = 1,
+    DotGrid  = 1,
     Dither   = 2,
     Ascii    = 3,
-    Mosaic   = 4
+    Mosaic   = 4,
+    Halftone = 5    // canonical AM screen (CMYK) — NOT the old dot-grid mode
 };
 
 // Classic Photoshop blend modes, in Photoshop menu order.
@@ -42,20 +44,22 @@ enum class BlendMode {
 inline LayerKind layerKindForMode(RenderMode m)
 {
     switch (m) {
-        case RenderMode::Dither: return LayerKind::Dither;
-        case RenderMode::Ascii:  return LayerKind::Ascii;
-        case RenderMode::Mosaic: return LayerKind::Mosaic;
-        default:                 return LayerKind::Halftone;
+        case RenderMode::Dither:   return LayerKind::Dither;
+        case RenderMode::Ascii:    return LayerKind::Ascii;
+        case RenderMode::Mosaic:   return LayerKind::Mosaic;
+        case RenderMode::Halftone: return LayerKind::Halftone;
+        default:                   return LayerKind::DotGrid;
     }
 }
 
 inline RenderMode modeForLayerKind(LayerKind k)
 {
     switch (k) {
-        case LayerKind::Dither: return RenderMode::Dither;
-        case LayerKind::Ascii:  return RenderMode::Ascii;
-        case LayerKind::Mosaic: return RenderMode::Mosaic;
-        default:                return RenderMode::Halftone;
+        case LayerKind::Dither:   return RenderMode::Dither;
+        case LayerKind::Ascii:    return RenderMode::Ascii;
+        case LayerKind::Mosaic:   return RenderMode::Mosaic;
+        case LayerKind::Halftone: return RenderMode::Halftone;
+        default:                  return RenderMode::DotGrid;
     }
 }
 
@@ -63,10 +67,11 @@ inline QString layerKindName(LayerKind k)
 {
     switch (k) {
         case LayerKind::Original: return QStringLiteral("Original");
-        case LayerKind::Halftone: return QStringLiteral("Halftone");
+        case LayerKind::DotGrid:  return QStringLiteral("Dot Grid");
         case LayerKind::Dither:   return QStringLiteral("Dither");
         case LayerKind::Ascii:    return QStringLiteral("Ascii");
         case LayerKind::Mosaic:   return QStringLiteral("Mosaic");
+        case LayerKind::Halftone: return QStringLiteral("Halftone");
     }
     return {};
 }
@@ -229,10 +234,10 @@ inline std::vector<ToneEntry> tonesFromColors(const std::vector<QColor>& colors)
 }
 
 // ============================================================
-//  Halftone
+//  Dot Grid
 // ============================================================
 
-enum class HalftoneShape {
+enum class DotGridShape {
     Triangle,
     Circle,
     Square,
@@ -241,7 +246,7 @@ enum class HalftoneShape {
 };
 
 struct ShapeEntry {
-    HalftoneShape shape = HalftoneShape::Circle;
+    DotGridShape shape = DotGridShape::Circle;
     QString       svgPath;
 };
 
@@ -313,7 +318,7 @@ inline bool operator==(const LocPoint& a, const LocPoint& b) {
 // is grouped by layer kind — locParamKind() relies on the grouping, and the
 // animation system appends one ParamId quartet per entry in this exact order.
 enum class LocParam {
-    HtDiameter, HtGamma, HtWeight, HtJitter, HtMask,
+    DgDiameter, DgGamma, DgWeight, DgJitter, DgMask,
     DiStrength, DiThreshold, DiLevels, DiLineAngle, DiLineSpacing, DiMask,
     AsGamma, AsEdges, AsHatching, AsStipple, AsContour, AsMask,
     MsSpacing, MsWidthPct, MsHeightPct, MsTextPadding, MsMask,
@@ -330,7 +335,7 @@ inline LocPoint locPointOr(const LocMap& m, LocParam p)
 
 inline LayerKind locParamKind(LocParam p)
 {
-    if (p <= LocParam::HtMask)        return LayerKind::Halftone;
+    if (p <= LocParam::DgMask)        return LayerKind::DotGrid;
     if (p <= LocParam::DiMask)        return LayerKind::Dither;
     if (p <= LocParam::AsMask)        return LayerKind::Ascii;
     return LayerKind::Mosaic;
@@ -399,7 +404,7 @@ inline LocMask locMask(const LocMap& m, float imgW, float imgH)
     return out;
 }
 
-struct HalftoneSettings {
+struct DotGridSettings {
     int                     inputDpi       = 72;   // 18..300 — render resolution
     std::vector<ShapeEntry> shapes         = { ShapeEntry{} };
     int                     multiThreshold = 128;  // luminosity bias, shapes.size() > 1
@@ -415,7 +420,7 @@ struct HalftoneSettings {
     TonalSettings tonal { ToneMode::ImageColors, defaultAccentTones(1) };
 };
 
-inline bool operator==(const HalftoneSettings& a, const HalftoneSettings& b) {
+inline bool operator==(const DotGridSettings& a, const DotGridSettings& b) {
     return a.inputDpi == b.inputDpi && a.shapes == b.shapes
         && a.multiThreshold == b.multiThreshold && a.grid == b.grid
         && a.gamma == b.gamma && a.weight == b.weight
@@ -565,7 +570,7 @@ struct MosaicSettings {
     float   spacing     = 40.0f;   // 2..200 — base cell size (frame px), like halftone
     float   widthPct    = 100.0f;  // 10..300 — cell width  = spacing × widthPct/100
     float   heightPct   = 100.0f;  // 10..300 — cell height = spacing × heightPct/100
-    GridType gridShape    = GridType::Square;   // tile lattice layout, like Halftone's grid
+    GridType gridShape    = GridType::Square;   // tile lattice layout, like Dot Grid's grid
     float    gridRotation = 0.0f;               // 0..360 deg — rotates the lattice
     int     textPadding = 12;      // 0..45  — % of the tile's shorter side
     QString fontFamily  = QStringLiteral("Funnel Display");
@@ -591,6 +596,67 @@ inline bool operator==(const MosaicSettings& a, const MosaicSettings& b) {
         && a.opacity == b.opacity && a.cornerRadius == b.cornerRadius
         && a.texts == b.texts && a.textColors == b.textColors
         && a.tonal == b.tonal && a.loc == b.loc;
+}
+
+// ============================================================
+//  Halftone — canonical AM (amplitude-modulated) print screen:
+//  four separate CMYK screens, each rotated to its own angle,
+//  dot area ∝ ink coverage with hole-inversion past 50%, channels
+//  composited multiplicatively on white. Colours derive from the
+//  source (no tonal palette, no localization in v1).
+// ============================================================
+
+// Ink = soft-field "joined" dots (paper-design/shaders' halftone-cmyk "ink"
+// type, Apache-2.0): per-cell soft masks accumulate and a single threshold
+// cuts the union, so neighbouring dots fuse into organic blobs.
+enum class ScreenDotShape { Round, Square, Line, Ink };
+
+struct HalftoneSettings {
+    float spacing  = 12.0f;   // 2..100 — shared cell pitch, frame px
+    float angleC   = 15.0f;   // 0..360 deg — per-channel screen angles
+    float angleM   = 75.0f;
+    float angleY   = 0.0f;
+    float angleK   = 45.0f;
+    ScreenDotShape dotShape = ScreenDotShape::Round;
+    float gamma    = 1.0f;    // 0.1..5.0 — coverage curve
+    float opacity  = 1.0f;
+    float softness = 0.5f;    // 0..1 — edge softness (Ink: threshold ramp; others: per-dot feather)
+    float gridNoise = 0.0f;   // 0..1 — "Jitter": random per-cell offset of dot position + sampling
+    float grain    = 0.0f;    // 0..1 — paper-grain overlay (+ organic Ink edges)
+
+    // Editable inks + paper and per-channel dot-size trims, modeled after
+    // paper-design/shaders' halftone-cmyk (Apache-2.0,
+    // github.com/paper-design/shaders): flood = flat coverage offset,
+    // gain = proportional coverage gain (classic print dot-gain knob).
+    QColor inkC  = QColor(0x00, 0xFF, 0xFF);
+    QColor inkM  = QColor(0xFF, 0x00, 0xFF);
+    QColor inkY  = QColor(0xFF, 0xFF, 0x00);
+    QColor inkK  = QColor(0x00, 0x00, 0x00);
+    QColor paper = QColor(0xFF, 0xFF, 0xFF);
+    float floodC = 0.0f, floodM = 0.0f, floodY = 0.0f, floodK = 0.0f;  // -1..1
+    float gainC  = 0.0f, gainM  = 0.0f, gainY  = 0.0f, gainK  = 0.0f; // -1..1
+
+    // Shared Fill system, like every other mode. ImageColors (default) =
+    // true CMYK separation with the editable inks above; FixedTones/Palette
+    // = one rotated screen PER TONE (duotone/tritone/N-ink printing), each
+    // ink's coverage peaking where cell luminosity matches its tone level.
+    TonalSettings tonal { ToneMode::ImageColors, defaultAccentTones(1) };
+};
+
+inline bool operator==(const HalftoneSettings& a, const HalftoneSettings& b) {
+    return a.spacing == b.spacing && a.angleC == b.angleC
+        && a.angleM == b.angleM && a.angleY == b.angleY
+        && a.angleK == b.angleK && a.dotShape == b.dotShape
+        && a.gamma == b.gamma && a.opacity == b.opacity
+        && a.softness == b.softness && a.gridNoise == b.gridNoise
+        && a.grain == b.grain
+        && a.inkC == b.inkC && a.inkM == b.inkM && a.inkY == b.inkY
+        && a.inkK == b.inkK && a.paper == b.paper
+        && a.floodC == b.floodC && a.floodM == b.floodM
+        && a.floodY == b.floodY && a.floodK == b.floodK
+        && a.gainC == b.gainC && a.gainM == b.gainM
+        && a.gainY == b.gainY && a.gainK == b.gainK
+        && a.tonal == b.tonal;
 }
 
 // ============================================================
@@ -642,10 +708,11 @@ struct Layer {
     LayerTransform transform;        // placement on the canvas
 
     Adjustments      adjustments;   // per-layer reference image
-    HalftoneSettings halftone;      // only the struct matching `kind` is used
+    DotGridSettings dotGrid;       // only the struct matching `kind` is used
     DitherSettings   dither;
     AsciiSettings    ascii;
     MosaicSettings   mosaic;
+    HalftoneSettings halftone;      // canonical CMYK screen (JSON key "halftoneAm")
 };
 
 inline bool operator==(const Layer& a, const Layer& b) {
@@ -653,8 +720,9 @@ inline bool operator==(const Layer& a, const Layer& b) {
         && a.visible == b.visible && a.pinned == b.pinned
         && a.locked == b.locked && a.blend == b.blend
         && a.mediaId == b.mediaId && a.transform == b.transform
-        && a.adjustments == b.adjustments && a.halftone == b.halftone
-        && a.dither == b.dither && a.ascii == b.ascii && a.mosaic == b.mosaic;
+        && a.adjustments == b.adjustments && a.dotGrid == b.dotGrid
+        && a.dither == b.dither && a.ascii == b.ascii && a.mosaic == b.mosaic
+        && a.halftone == b.halftone;
 }
 inline bool operator!=(const Layer& a, const Layer& b) { return !(a == b); }
 
@@ -665,14 +733,14 @@ inline int findLayerById(const std::vector<Layer>& layers, int id)
     return -1;
 }
 
-// Session default: active Halftone layer over the hidden Original.
+// Session default: active Dot Grid layer over the hidden Original.
 inline std::vector<Layer> defaultLayers()
 {
-    Layer halftone;
-    halftone.id      = 2;
-    halftone.kind    = LayerKind::Halftone;
-    halftone.name    = layerKindName(LayerKind::Halftone);
-    halftone.visible = true;
+    Layer dotGrid;
+    dotGrid.id      = 2;
+    dotGrid.kind    = LayerKind::DotGrid;
+    dotGrid.name    = layerKindName(LayerKind::DotGrid);
+    dotGrid.visible = true;
 
     Layer original;
     original.id      = 1;
@@ -680,7 +748,7 @@ inline std::vector<Layer> defaultLayers()
     original.name    = layerKindName(LayerKind::Original);
     original.visible = false;
 
-    return { halftone, original };
+    return { dotGrid, original };
 }
 
 // ============================================================
