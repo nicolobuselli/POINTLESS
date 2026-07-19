@@ -271,6 +271,12 @@ FilmstripWidget::FilmstripWidget(QWidget* parent)
     m_emptyHint->setAlignment(Qt::AlignCenter);
     m_emptyHint->setWordWrap(true);
     m_emptyHint->setAttribute(Qt::WA_TransparentForMouseEvents);
+    // Its geometry spans the whole widget (see comment above), overlapping
+    // the always-visible "+" button. Without this, Qt's opaque-widget
+    // stacking assumes the raised label fully covers that region and skips
+    // repainting the button underneath — the SVG icon goes invisible until
+    // something else forces a repaint (e.g. the hint hiding on first import).
+    m_emptyHint->setAttribute(Qt::WA_TranslucentBackground);
 
     m_scroll->setWidget(m_thumbRow);
     installOverlayScrollbar(m_scroll);
