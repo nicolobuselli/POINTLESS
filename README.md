@@ -8,7 +8,8 @@ separations — live, with layers, blend modes, per-parameter localization, and
 a full keyframe animation timeline. It's a native C++/Qt6 desktop app: no
 browser, no subscription, no upload.
 
-<!-- ![ULTRATOOL screenshot](assets/screenshot.png) -->
+<img width="2560" height="1502" alt="image" src="https://github.com/user-attachments/assets/4789eec9-e86a-4976-8031-69a1d17c26db" />
+
 
 ## Why
 
@@ -24,10 +25,21 @@ canvas, animate any of it on a timeline, and export straight to mp4.
 | Mode | What it does |
 |---|---|
 | **Dot Grid** | Area-corrected dot screen — multiple point shapes, jitter, localization |
+<img width="800" height="450" alt="DotGrid_gif" src="https://github.com/user-attachments/assets/a59f5232-4725-46c2-ae05-d374a1b34fde" />
+
 | **Halftone** | Canonical AM halftone — 4 separate CMYK screens at their own angles, dot/hole inversion past 50% coverage |
+<img width="800" height="450" alt="halftone_gif" src="https://github.com/user-attachments/assets/88204f81-2451-4009-bd89-6e0a42daed70" />
+
 | **Dither** | Error diffusion, ordered, and threshold dithering, with palette-constrained color matching |
+<img width="800" height="450" alt="dither_gif" src="https://github.com/user-attachments/assets/cbbd21e1-5361-4bf1-bf03-27eae6ba0a6c" />
+
 | **ASCII** | Glyph-based rendering driven by real font metrics, not a lookup table |
+<img width="800" height="450" alt="ascii_gif" src="https://github.com/user-attachments/assets/c9b6eb35-073a-437b-8912-c2c2fd746795" />
+
 | **Mosaic** | Rectangular tile grid, one solid color or character per tone |
+<img width="800" height="450" alt="mosaic_gif" src="https://github.com/user-attachments/assets/7979ed5a-7e5f-46db-a40d-2224c17e3e53" />
+
+
 
 **Compositing**
 - Layers with Photoshop-style blend modes, visibility, reordering, lock,
