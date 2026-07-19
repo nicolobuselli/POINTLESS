@@ -1,23 +1,55 @@
 # ULTRATOOL
 
-Real-time halftone & dithering image/video renderer. C++/Qt6 desktop app
-with layers, live preview, and a dark-themed control panel.
+**A real-time halftone, dithering, and ASCII-art renderer for images and video.**
+
+ULTRATOOL turns photos and footage into dot screens, error-diffusion dithers,
+ASCII glyph art, mosaic tile grids, and canonical 4-color CMYK halftone
+separations — live, with layers, blend modes, per-parameter localization, and
+a full keyframe animation timeline. It's a native C++/Qt6 desktop app: no
+browser, no subscription, no upload.
+
+<!-- ![ULTRATOOL screenshot](assets/screenshot.png) -->
+
+## Why
+
+Most dithering/halftone tools are either a one-shot filter (apply once, done)
+or a web toy with no layers and no video support. ULTRATOOL treats these
+effects as a real compositing pipeline: stack multiple rendering modes as
+layers, blend them, mask and scale individual parameters over regions of the
+canvas, animate any of it on a timeline, and export straight to mp4.
 
 ## Features
 
-- Four rendering modes: **Halftone** (area-corrected dot screens), **Dither**
-  (error diffusion / ordered / threshold), **ASCII** (glyph-based, real font
-  metrics), **Mosaic** (tonal tile grid).
-- Layers with Photoshop-style blend modes, per-layer transform (position,
-  rotation, scale, flip), visibility, reordering, lock.
-- Per-parameter localization: mask and scale any of 14 parameters over a
-  region of the canvas.
-- Palette-constrained dithering with OkLab nearest-color matching and
-  median-cut palette extraction from an image.
-- Keyframe animation timeline (dopesheet, auto-key, easing presets) and mp4
-  video import/export (bundled FFmpeg).
-- Gamma-correct color math throughout (linear light for quantities,
-  perceptual luma for tone/glyph selection).
+**Five rendering modes**
+| Mode | What it does |
+|---|---|
+| **Dot Grid** | Area-corrected dot screen — multiple point shapes, jitter, localization |
+| **Halftone** | Canonical AM halftone — 4 separate CMYK screens at their own angles, dot/hole inversion past 50% coverage |
+| **Dither** | Error diffusion, ordered, and threshold dithering, with palette-constrained color matching |
+| **ASCII** | Glyph-based rendering driven by real font metrics, not a lookup table |
+| **Mosaic** | Rectangular tile grid, one solid color or character per tone |
+
+**Compositing**
+- Layers with Photoshop-style blend modes, visibility, reordering, lock,
+  per-layer transform (position, rotation, scale, flip).
+- Per-parameter localization: mask and independently scale any of 14
+  parameters over a hand-drawn region of the canvas.
+- Gamma-correct color math throughout — linear light for quantities
+  (coverage, dot area, error diffusion), perceptual luma for tone/glyph
+  selection.
+
+**Color**
+- Palette-constrained dithering with OkLab nearest-color matching.
+- Median-cut palette extraction straight from an image.
+
+**Animation & video**
+- Keyframe timeline (dopesheet UI, auto-key, easing presets, copy/paste
+  keys) across ~50 numeric parameters.
+- mp4 import/export via bundled FFmpeg; PNG sequence import.
+
+**Project files**
+- Full session save/load (`.ultra`, JSON) — frame, layers, transforms,
+  animation, and an embedded still-image library.
 
 ## Download
 
