@@ -71,7 +71,9 @@ cmake --build build --config Release
 ```
 
 On Windows, `windeployqt` runs automatically as a post-build step to bundle
-the Qt DLLs, and `tools/ffmpeg.exe` is copied next to the executable so
+the Qt DLLs. `ffmpeg.exe` isn't committed to the repo (it's a ~100MB static
+binary); run `tools/fetch-ffmpeg.ps1` once to download it into `tools/`
+before building, and the build will bundle it next to the executable so
 video import/export works out of the box.
 
 CI (`.github/workflows/build.yml`) builds with MSVC + Qt 6.7 on every push;

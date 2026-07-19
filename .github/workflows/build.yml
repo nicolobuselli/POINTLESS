@@ -28,6 +28,9 @@ jobs:
           # listable aqt module, so requesting it here makes the install fail.
           cache: true
 
+      - name: Fetch ffmpeg
+        run: ./tools/fetch-ffmpeg.ps1
+
       - name: Configure CMake
         # Let CMake pick whatever Visual Studio the runner has (pinning a
         # version breaks when the image updates). QT_ROOT_DIR is set by

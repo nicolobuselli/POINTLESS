@@ -82,3 +82,7 @@ Testing/
 
 CLAUDE.md
 handoff.md
+
+# fetched by tools/fetch-ffmpeg.ps1, not committed (was 97MB, near GitHub's
+# 100MB hard limit)
+/tools/ffmpeg.exe
