@@ -157,6 +157,14 @@ const char* locParamLabel(LocParam p)
 
 const ParamDesc& paramDesc(ParamId id)
 {
+    if (id == ParamId::HfSoftness || id == ParamId::HfGridNoise || id == ParamId::HfGrain) {
+        static const ParamDesc softness  = { "Softness", 0, 1, false, ParamScope::Halftone };
+        static const ParamDesc gridNoise = { "Jitter",   0, 1, false, ParamScope::Halftone };
+        static const ParamDesc grain     = { "Grain",    0, 1, false, ParamScope::Halftone };
+        if (id == ParamId::HfSoftness)  return softness;
+        if (id == ParamId::HfGridNoise) return gridNoise;
+        return grain;
+    }
     const int li = locIndexOf(id);
     if (li < 0) return kDescs[size_t(id)];
 
@@ -202,6 +210,10 @@ double getParam(const Layer& l, ParamId id)
         return (t && ti < int(t->tones.size())) ? double(t->tones[size_t(ti)].level) : 0.0;
     }
     switch (id) {
+        case ParamId::HfSoftness:  return l.halftone.softness;
+        case ParamId::HfGridNoise: return l.halftone.gridNoise;
+        case ParamId::HfGrain:     return l.halftone.grain;
+
         case ParamId::AdjBrightness:      return l.adjustments.brightness;
         case ParamId::AdjContrast:        return l.adjustments.contrast;
         case ParamId::AdjGamma:           return l.adjustments.gamma;
@@ -297,6 +309,10 @@ void setParam(Layer& l, ParamId id, double v)
     }
 
     switch (id) {
+        case ParamId::HfSoftness:  l.halftone.softness  = fv; break;
+        case ParamId::HfGridNoise: l.halftone.gridNoise = fv; break;
+        case ParamId::HfGrain:     l.halftone.grain     = fv; break;
+
         case ParamId::AdjBrightness:      l.adjustments.brightness      = iv; break;
         case ParamId::AdjContrast:        l.adjustments.contrast        = iv; break;
         case ParamId::AdjGamma:           l.adjustments.gamma           = iv; break;

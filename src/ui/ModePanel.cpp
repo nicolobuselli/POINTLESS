@@ -2083,6 +2083,9 @@ public:
         m_angleK->setAnimated(ids.contains(ParamId::HfAngleK));
         m_gamma->setAnimated(ids.contains(ParamId::HfGamma));
         m_opacity->setAnimated(ids.contains(ParamId::HfOpacity));
+        m_softness->setAnimated(ids.contains(ParamId::HfSoftness));
+        m_gridNoise->setAnimated(ids.contains(ParamId::HfGridNoise));
+        m_grain->setAnimated(ids.contains(ParamId::HfGrain));
     }
 
     QHash<QWidget*, ParamId> paramWidgets() const
@@ -2092,6 +2095,8 @@ public:
             { m_angleM, ParamId::HfAngleM },   { m_angleY, ParamId::HfAngleY },
             { m_angleK, ParamId::HfAngleK },   { m_gamma, ParamId::HfGamma },
             { m_opacity, ParamId::HfOpacity },
+            { m_softness, ParamId::HfSoftness }, { m_gridNoise, ParamId::HfGridNoise },
+            { m_grain, ParamId::HfGrain },
         };
     }
 

@@ -56,7 +56,16 @@ enum class ParamId {
     // LocParam, in LocParam order. Addressed via locParamId(), no named
     // enumerators. Keep this block LAST (append-only enum, see CLAUDE.md).
     LocFirst,
-    Count = LocFirst + int(LocParam::Count) * 4
+
+    // Params added after the loc block was placed: appended past LocFirst's
+    // quartets (not before LocFirst) so existing serialized loc-quartet
+    // ordinals don't shift. Needs their own cases in paramDesc/getParam/
+    // setParam since they fall outside both kDescs and the loc range.
+    HfSoftness = LocFirst + int(LocParam::Count) * 4,
+    HfGridNoise,
+    HfGrain,
+
+    Count
 };
 
 inline ParamId toneLevelParam(int index) {
