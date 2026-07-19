@@ -156,6 +156,11 @@ public:
 
         m_thumb = new QLabel;
         m_thumb->setFixedSize(Ui::px(46), Ui::px(32));
+        // roundedThumb() renders at 44×30 (2px smaller than this label on each
+        // axis, for the rounded-corner antialiasing margin) — QLabel's default
+        // left/vcenter alignment then left-hugs the pixmap instead of
+        // centering it. AlignCenter closes that 2px left/right gap evenly.
+        m_thumb->setAlignment(Qt::AlignCenter);
         m_thumb->setStyleSheet("background: transparent;");
         m_thumb->setAttribute(Qt::WA_TransparentForMouseEvents);
         pl->addWidget(m_thumb);
@@ -661,6 +666,7 @@ public:
 
         m_thumb = new QLabel;
         m_thumb->setFixedSize(Ui::px(46), Ui::px(32));   // same cell as child rows
+        m_thumb->setAlignment(Qt::AlignCenter);   // see LayerRow's m_thumb — same 2px pixmap/label gap
         m_thumb->setAttribute(Qt::WA_TransparentForMouseEvents);
         bl->addWidget(m_thumb);
 
@@ -1129,7 +1135,7 @@ void LayersPanel::buildTree()
     m_parentRows.clear();
     QVector<RowsArea::Row> model;
 
-    auto addChildRow = [&](const Layer& layer) {
+    auto addChildRow = [&](const Layer& layer, int indentPx) {
         auto* row = new LayerRow(layer.id);
         row->setName(layer.name);
         row->setThumb(thumbFor(layer));
@@ -1137,7 +1143,7 @@ void LayersPanel::buildTree()
         row->setLocked(layer.locked);
         row->setSelected(m_selectedParentMediaId < 0
                           && (layer.id == m_activeId || m_selSet.contains(layer.id)));
-        row->setIndent(tree::indent());
+        row->setIndent(indentPx);
         row->setHasEdits(layer.kind != LayerKind::Original);
         const int id = layer.id;
         row->onSelected        = [this, id]()                { emit layerSelected(id); };
@@ -1156,8 +1162,9 @@ void LayersPanel::buildTree()
     };
 
     if (m_parents.empty()) {
-        // Legacy flat list (no groups supplied).
-        for (const Layer& l : m_layers) addChildRow(l);
+        // Legacy flat list (no groups supplied): no tree indent, flush like
+        // a header row (matches ParentRow's own left edge).
+        for (const Layer& l : m_layers) addChildRow(l, 0);
     } else {
         for (const ParentGroup& g : m_parents) {
             auto* prow = new ParentRow(g.mediaId);
@@ -1180,7 +1187,7 @@ void LayersPanel::buildTree()
 
             if (!g.collapsed)
                 for (const Layer& l : m_layers)
-                    if (l.mediaId == g.mediaId) addChildRow(l);
+                    if (l.mediaId == g.mediaId) addChildRow(l, tree::indent());
         }
     }
 

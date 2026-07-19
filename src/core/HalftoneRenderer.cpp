@@ -133,6 +133,7 @@ float valueNoise(float x, float y)
 // ~2.2px paper-fibre feature size (paper-design samples its noise texture at
 // a comparable density).
 constexpr float kGrainScale = 0.45f;
+constexpr float kMinEdgeSoftness = 0.02f;
 
 // "Ink" style — CPU port of paper-design/shaders' "ink" type: every cell
 // splats a soft radial mask whose reach exceeds the cell (r ∝ coverage, up
@@ -188,9 +189,10 @@ void renderChannelInk(ChannelJob& job)
     // grainMixer): the blob edges wobble organically instead of staying
     // mathematically smooth.
     const float soft = qBound(0.0f, p.softness, 1.0f);
+    const float edgeSoft = qMax(soft, kMinEdgeSoftness);
     const float grain = qBound(0.0f, p.grain, 1.0f);
-    const float lo = 0.5f - 0.5f * soft;
-    const float hi = 0.5f + 0.5f * soft + 0.01f;
+    const float lo = 0.5f - 0.5f * edgeSoft;
+    const float hi = 0.5f + 0.5f * edgeSoft + 0.01f;
     const float invW = 1.0f / (hi - lo);
     const int ir = job.ink.red(), ig = job.ink.green(), ib = job.ink.blue();
     const float inkA = job.ink.alphaF();
@@ -234,6 +236,7 @@ void renderChannel(ChannelJob& job)
     const float invGamma = 1.0f / qBound(0.1f, p.gamma, 5.0f);
     const float gn       = qBound(0.0f, p.gridNoise, 1.0f) * sp;
     const float soft     = qBound(0.0f, p.softness, 1.0f);
+    const float edgeSoft = qMax(soft, kMinEdgeSoftness);
 
     QPainter painter(&job.canvas);
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -265,14 +268,14 @@ void renderChannel(ChannelJob& job)
         case ScreenDotShape::Round: {
             const float r = sp * std::sqrt(cov / float(M_PI));
             if (r < 0.25f) break;
-            if (soft <= 0.01f) {
+            if (edgeSoft <= 0.01f) {
                 painter.drawEllipse(QPointF(px, py), r, r);
             } else {
                 // Crisp core + gradient rim proportional to the dot's radius.
-                const float R = r * (1.0f + 0.35f * soft);
+                const float R = r * (1.0f + 0.35f * edgeSoft);
                 QRadialGradient grad(QPointF(px, py), R);
                 QColor edge = job.ink; edge.setAlpha(0);
-                grad.setColorAt(qBound(0.0, 1.0 - 0.75 * double(soft), 0.99), job.ink);
+                grad.setColorAt(qBound(0.0, 1.0 - 0.75 * double(edgeSoft), 0.99), job.ink);
                 grad.setColorAt(1.0, edge);
                 painter.setBrush(grad);
                 painter.drawEllipse(QPointF(px, py), R, R);
@@ -284,8 +287,8 @@ void renderChannel(ChannelJob& job)
             const float half = sp * std::sqrt(cov) * 0.5f;
             if (half < 0.2f) break;
             for (const Shell& sh : shells) {
-                if (soft <= 0.01f && sh.alpha < 1.0f) continue;
-                const float hh = half * (1.0f + sh.grow * soft);
+                if (edgeSoft <= 0.01f && sh.alpha < 1.0f) continue;
+                const float hh = half * (1.0f + sh.grow * edgeSoft);
                 QColor c = job.ink;
                 c.setAlphaF(c.alphaF() * sh.alpha);
                 painter.setBrush(c);
@@ -300,8 +303,8 @@ void renderChannel(ChannelJob& job)
             const float th = sp * cov;
             if (th < 0.2f) break;
             for (const Shell& sh : shells) {
-                if (soft <= 0.01f && sh.alpha < 1.0f) continue;
-                const float t2 = th * (1.0f + sh.grow * soft);
+                if (edgeSoft <= 0.01f && sh.alpha < 1.0f) continue;
+                const float t2 = th * (1.0f + sh.grow * edgeSoft);
                 QColor c = job.ink;
                 c.setAlphaF(c.alphaF() * sh.alpha);
                 painter.setBrush(c);
@@ -401,26 +404,9 @@ void HalftoneRenderer::render(const QImage& input, QPainter& output,
             pp.drawImage(0, 0, j.canvas);
     }
 
-    // Paper-grain overlay (paper-design's grainOverlay): value noise pushed
-    // toward white or black speckles, mixed over the result — the "printed
-    // on fibrous paper" feel.
-    const float grain = qBound(0.0f, params.grain, 1.0f);
-    if (grain > 0.005f) {
-        for (int y = 0; y < imgH; ++y) {
-            QRgb* row = reinterpret_cast<QRgb*>(paper.scanLine(y));
-            for (int x = 0; x < imgW; ++x) {
-                const float n  = valueNoise(x * kGrainScale + 311.7f, y * kGrainScale + 127.3f);
-                const float gv = n * 2.0f - 1.0f;
-                const float st = 0.5f * grain * std::pow(std::fabs(gv), 0.8f);
-                const int target = gv > 0.0f ? 255 : 0;
-                const QRgb px = row[x];
-                const int r = qRed(px)   + int((target - qRed(px))   * st);
-                const int g = qGreen(px) + int((target - qGreen(px)) * st);
-                const int b = qBlue(px)  + int((target - qBlue(px))  * st);
-                row[x] = qRgba(r, g, b, qAlpha(px));
-            }
-        }
-    }
+    // Grain only perturbs the dot-edge field earlier (organic displacement);
+    // it no longer paints a visible speckle overlay here — high grain values
+    // were making the halftone too noisy without adding useful texture.
 
     output.save();
     output.setOpacity(output.opacity() * qBound(0.0f, params.opacity, 1.0f));

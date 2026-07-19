@@ -1,5 +1,4 @@
 #include "RenderWorker.h"
-#include "../core/ColorMath.h"
 #include "../core/ImageAdjuster.h"
 #include "../core/DotGridRenderer.h"
 #include "../core/HalftoneRenderer.h"
@@ -84,7 +83,13 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
 
     switch (layer.kind) {
         case LayerKind::Original: {
+            // No mode picked → only Fusion + Opacity apply (see ModePanel's
+            // no-mode Appearance section); every other kind bakes its own
+            // opacity into the mode render instead.
+            const qreal prevOpacity = painter.opacity();
+            painter.setOpacity(prevOpacity * qBound(0.0f, layer.opacity, 1.0f));
             painter.drawImage(0, 0, adjusted);
+            painter.setOpacity(prevOpacity);
             break;
         }
         case LayerKind::DotGrid: {
@@ -400,38 +405,32 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
 // Defined in the SVG-export section below; also used for GPU placement.
 static QTransform layerMatrix(const LayerTransform& tf, QSize layerSize, QSize frame);
 
-// Original layers whose adjustments are all point ops run them in
-// composite.frag instead of ImageAdjuster (Phase 2). Neighborhood ops
-// (blur / sharpen / edge enhancement) need multi-pass — CPU path for now.
-static bool gpuAdjustableLayer(const Layer& l)
+static bool adjPointOnly(const Adjustments& a)
 {
-    return l.kind == LayerKind::Original
-        && l.adjustments.blur == 0
-        && l.adjustments.sharpenStrength == 0
-        && l.adjustments.edgeEnhancement == 0;
+    return a.blur == 0 && a.sharpenStrength == 0 && a.edgeEnhancement == 0;
 }
 
-// Adjusted+flattened source → linear-light RGBA16F for the GPU halftone
-// and Dot Grid passes (mip filtering then averages in linear light,
-// matching the CPU's per-cell linear averages).
-static QImage toLinearF16(const QImage& src)
+// Original layers whose adjustments are all point ops run them in
+// composite.frag instead of ImageAdjuster (Phase 2).
+static bool gpuAdjustableLayer(const Layer& l)
 {
-    const QImage rgb = (src.format() == QImage::Format_RGB32)
-                     ? src : src.convertToFormat(QImage::Format_RGB32);
-    QImage out(rgb.size(), QImage::Format_RGBA16FPx4);
-    for (int y = 0; y < rgb.height(); ++y) {
-        const QRgb* in = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
-        qfloat16*   o  = reinterpret_cast<qfloat16*>(out.scanLine(y));
-        for (int x = 0; x < rgb.width(); ++x) {
-            const QRgb px = in[x];
-            o[0] = qfloat16(ColorMath::srgbToLinear(qRed(px)));
-            o[1] = qfloat16(ColorMath::srgbToLinear(qGreen(px)));
-            o[2] = qfloat16(ColorMath::srgbToLinear(qBlue(px)));
-            o[3] = qfloat16(1.0f);
-            o += 4;
-        }
-    }
-    return out;
+    return l.kind == LayerKind::Original && adjPointOnly(l.adjustments);
+}
+
+// Original layers with neighborhood ops (blur / sharpen / edge) run the FULL
+// adjustment pipeline in the GPU adjust chain (Phase 4, adjust.frag).
+static bool gpuAdjustChainLayer(const Layer& l)
+{
+    return l.kind == LayerKind::Original && !adjPointOnly(l.adjustments);
+}
+
+// ImageAdjuster's step-1 resize (sizePct), replicated for GpuLayer.contentSize:
+// the GPU adjust chain resamples the raw source to this size in its first pass.
+static QSize sizePctScaled(QSize s, int sizePct)
+{
+    const int pct = qBound(10, sizePct, 200);
+    if (pct == 100) return s;
+    return QSize(qMax(8, s.width() * pct / 100), qMax(8, s.height() * pct / 100));
 }
 
 // GPU-compositing variant of renderDocumentImpl: renders each layer through
@@ -460,17 +459,26 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
 
     struct Job { QImage origSrc; Layer origLayer; QImage rendered; bool gpuAdjust = false;
                  qint64 renderMs = 0;
-                 bool instanced = false; float spacingScale = 1.0f; bool halftone = false; };
+                 bool instanced = false; float spacingScale = 1.0f; bool halftone = false;
+                 bool adjChain = false; bool ditherScr = false; bool mosaicScr = false;
+                 bool asciiScr = false; };
     std::vector<Job> jobs;
     for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
         if (!it->visible) continue;
         QImage src = layerSrc.contains(it->id) ? layerSrc.value(it->id) : source;
         if (src.isNull()) continue;
         Job j{ src, *it, {}, gpuAdjustableLayer(*it) };
+        j.adjChain  = gpuAdjustChainLayer(*it);
         j.instanced = (it->kind == LayerKind::DotGrid
                        && DotGridRenderer::gpuRenderable(it->dotGrid));
         j.halftone  = (it->kind == LayerKind::Halftone
                        && HalftoneRenderer::gpuRenderable(it->halftone));
+        j.ditherScr = (it->kind == LayerKind::Dither
+                       && DitherRenderer::gpuRenderable(it->dither));
+        j.mosaicScr = (it->kind == LayerKind::Mosaic
+                       && MosaicRenderer::gpuRenderable(it->mosaic));
+        j.asciiScr  = (it->kind == LayerKind::Ascii
+                       && AsciiRenderer::gpuRenderable(it->ascii));
         jobs.push_back(std::move(j));
     }
 
@@ -482,18 +490,25 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
         Layer contentKey = j.origLayer;
         contentKey.transform.xPct = contentKey.transform.yPct = contentKey.transform.rotation = 0.0f;
         contentKey.transform.flipH = contentKey.transform.flipV = false;
-        // GPU-adjusted layers cache the RAW converted source: any adjustment
-        // slider drag stays a cache hit (the shader applies the values).
-        if (j.gpuAdjust) contentKey.adjustments = Adjustments{};
+        // GPU-adjusted layers (point-op composite path AND adjust-chain
+        // layers, screen sources included) cache the RAW converted source:
+        // any adjustment slider drag stays a cache hit — the GPU applies
+        // the values (Phase 2 in composite.frag, Phase 4 in adjust.frag).
+        if (j.gpuAdjust || j.adjChain || j.halftone || j.instanced || j.ditherScr
+            || j.mosaicScr || j.asciiScr)
+            contentKey.adjustments = Adjustments{};
         const void* srcBits = static_cast<const void*>(j.origSrc.constBits());
         const qint64 sizeKey = rasterSizeKey(j.origSrc.size());
 
-        // GPU-halftone / GPU Dot Grid: the "render" is just the adjusted
-        // source in linear fp16 — every settings field lives in the UBO, so
-        // the whole struct is neutralized out of the key (any slider,
-        // spacing/grid included, = hit).
+        // GPU-halftone / GPU Dot Grid / GPU dither: the "render" is just the
+        // raw working source — every settings field lives in the UBO, so the
+        // whole struct is neutralized out of the key (any slider, spacing/
+        // grid/pixelSize included, = hit).
         if (j.halftone)  contentKey.halftone = HalftoneSettings{};
         if (j.instanced) contentKey.dotGrid  = DotGridSettings{};
+        if (j.ditherScr) contentKey.dither   = DitherSettings{};
+        if (j.mosaicScr) contentKey.mosaic   = MosaicSettings{};
+        if (j.asciiScr)  contentKey.ascii    = AsciiSettings{};
 
         bool hit = false;
         {
@@ -511,20 +526,29 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
         }
         if (!hit) {
             QElapsedTimer t; t.start();
-            if (j.gpuAdjust) {
+            if (j.gpuAdjust || j.adjChain) {
                 j.rendered = j.origSrc;
-            } else if (j.halftone || j.instanced) {
+            } else if (j.halftone || j.instanced || j.ditherScr || j.mosaicScr
+                       || j.asciiScr) {
                 QImage wsrc = j.origSrc;
                 Layer  wlayer = j.origLayer;
                 compensateSymbolScale(wlayer);
                 prerenderAtFrameRes(wsrc, wlayer);
-                const QImage adjusted = ImageAdjuster::apply(wsrc, wlayer.adjustments);
-                j.rendered = toLinearF16(flattenOntoWhite(adjusted));
+                j.rendered = wsrc;   // RAW: the GPU adjust chain does the rest
                 j.spacingScale = j.halftone
                     ? wlayer.halftone.spacing
                       / qMax(0.01f, j.origLayer.halftone.spacing)
-                    : wlayer.dotGrid.grid.spacing
-                      / qMax(0.01f, j.origLayer.dotGrid.grid.spacing);
+                    : j.instanced
+                    ? wlayer.dotGrid.grid.spacing
+                      / qMax(0.01f, j.origLayer.dotGrid.grid.spacing)
+                    : j.mosaicScr
+                    ? wlayer.mosaic.spacing
+                      / qMax(0.01f, j.origLayer.mosaic.spacing)
+                    : j.asciiScr
+                    ? float(wlayer.ascii.cellSize)
+                      / qMax(1, j.origLayer.ascii.cellSize)
+                    : float(wlayer.dither.pixelSize)
+                      / qMax(1, j.origLayer.dither.pixelSize);
             } else {
                 QImage wsrc = j.origSrc;
                 Layer  wlayer = j.origLayer;
@@ -535,8 +559,13 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
             j.renderMs = t.elapsed();
             // Upload format, converted HERE (worker, parallel, cached) so the
             // GUI thread never pays a per-frame swizzle in ensureLayerTextures.
-            // (GPU halftone/Dot Grid sources are already RGBA16FPx4 — leave them.)
-            if (!j.halftone && !j.instanced)
+            // Adjust-chain inputs (screen sources + neighborhood-op Originals)
+            // upload STRAIGHT alpha: the chain math mirrors ImageAdjuster's
+            // straight-RGB ops, and its finish pass premultiplies/flattens.
+            if (j.halftone || j.instanced || j.ditherScr || j.mosaicScr
+                || j.asciiScr || j.adjChain)
+                j.rendered = j.rendered.convertToFormat(QImage::Format_RGBA8888);
+            else
                 j.rendered = j.rendered.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
             QMutexLocker lock(&m_layerCacheMutex);
             m_layerCache[j.origLayer.id][sizeKey] =
@@ -555,10 +584,15 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
         gl.id          = j.origLayer.id;
         gl.image       = j.rendered;
         gl.contentSize = j.rendered.size();
-        gl.placement   = layerMatrix(placementTf, gl.contentSize, outSize);
         gl.blend       = j.origLayer.blend;
         gl.adj         = j.origLayer.adjustments;
         gl.gpuAdjust   = j.gpuAdjust;
+        gl.adjustChain = j.adjChain || j.halftone || j.instanced || j.ditherScr
+                       || j.mosaicScr || j.asciiScr;
+        if (gl.adjustChain)   // chain's first pass resamples raw → this size
+            gl.contentSize = sizePctScaled(j.rendered.size(),
+                                           j.origLayer.adjustments.sizePct);
+        gl.placement   = layerMatrix(placementTf, gl.contentSize, outSize);
         if (j.instanced) {
             gl.dotScreen   = true;
             gl.dotSettings = j.origLayer.dotGrid;   // LIVE params for the UBO,
@@ -568,6 +602,25 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
             gl.halftoneScreen   = true;
             gl.halftoneSettings = j.origLayer.halftone;      // same rule
             gl.halftoneSettings.spacing *= j.spacingScale;
+        }
+        if (j.ditherScr) {
+            gl.ditherScreen   = true;
+            gl.ditherSettings = j.origLayer.dither;          // same rule
+            gl.ditherSettings.pixelSize = qMax(1,
+                qRound(gl.ditherSettings.pixelSize * j.spacingScale));
+        }
+        if (j.mosaicScr) {
+            gl.mosaicScreen   = true;
+            gl.mosaicSettings = j.origLayer.mosaic;          // same rule
+            gl.mosaicSettings.spacing *= j.spacingScale;
+        }
+        if (j.asciiScr) {
+            const bool instanced = AsciiRenderer::gpuInstanced(j.origLayer.ascii);
+            gl.asciiScreen    = !instanced;
+            gl.asciiInstanced = instanced;
+            gl.asciiSettings  = j.origLayer.ascii;            // same rule
+            gl.asciiSettings.cellSize = qMax(1,
+                qRound(gl.asciiSettings.cellSize * j.spacingScale));
         }
         pkg.layers.append(gl);
     }
@@ -909,6 +962,7 @@ SessionParams RenderWorker::scaledForPreview(const SessionParams& params, float 
     for (Layer& l : p.layers) {
         l.ascii.cellSize   = qMax(3, int(l.ascii.cellSize * scale));
         l.dither.pixelSize = qMax(1, qRound(l.dither.pixelSize * scale));
+        l.mosaic.spacing   = qMax(2.0f, l.mosaic.spacing * scale);
         // Halftone dot pitch is a fixed pixel value: scale it with the image too,
         // or dots stay full-size on the shrunk preview and look ~1/scale too big.
         l.dotGrid.grid.spacing = qMax(2.0f, l.dotGrid.grid.spacing * scale);

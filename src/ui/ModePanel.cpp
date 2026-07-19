@@ -1489,14 +1489,14 @@ private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
     // Edges/Hatching/Contour need the raster's row/col neighbour grid, only
-    // built for the Square grid shape (see AsciiRenderer) — grey them out
-    // rather than leave sliders that silently do nothing.
+    // built for the Square grid shape (see AsciiRenderer) — hide them rather
+    // than leave sliders that silently do nothing.
     void updateGridEnabled()
     {
         const bool square = GridType(m_gridShape->value().toInt()) == GridType::Square;
-        m_edges->setEnabled(square);
-        m_hatching->setEnabled(square);
-        m_contour->setEnabled(square);
+        m_edges->setVisible(square);
+        m_hatching->setVisible(square);
+        m_contour->setVisible(square);
     }
 
     LocDots*         m_locDots    = nullptr;
@@ -2255,6 +2255,30 @@ ModePanel::ModePanel(QWidget* parent)
     cl->addWidget(m_mosaicPage);
     cl->addWidget(m_halftonePage);
 
+    // ── Appearance (no mode picked): Fusion + Opacity only — lets a layer
+    //    stay a plain (textured) image without forcing a rendering mode on it.
+    {
+        auto* noMode = new PanelSection("Appearance", /*collapsible*/ false, true);
+        m_noModeSection = noMode;
+        auto* al = noMode->body();
+        m_noModeFusion = new PopupPicker(1);
+        m_noModeFusion->setEntries(blendPickerEntries());
+        m_noModeFusion->setValue(int(BlendMode::Normal));
+        m_noModeFusion->onSelected = [this](QVariant) {
+            if (!m_updating) emit blendChanged(BlendMode(m_noModeFusion->value().toInt()));
+        };
+        al->addWidget(makeLabeledGroup("Fusion", m_noModeFusion));
+
+        m_noModeOpacity = new DragSpinBox(":/icons/opacity.svg", 0, 100, 100, "%");
+        m_noModeOpacity->onValueChanged = [this](int v) {
+            if (!m_updating) emit noModeOpacityChanged(v / 100.0f);
+        };
+        al->addWidget(makeLabeledGroup("Opacity", m_noModeOpacity));
+
+        noMode->setVisible(false);
+        cl->addWidget(noMode);
+    }
+
     // ── Fill (shared palette) ────────────────────────────────
     auto* fill = new PanelSection("Fill", /*collapsible*/ true, true);
     m_fillSection = fill;
@@ -2453,7 +2477,8 @@ void ModePanel::setFromLayer(const Layer& layer)
     if (hasMode) setMode(modeForLayerKind(layer.kind));
     else {
         // No mode: the picker shows a neutral label (no entry matches -1,
-        // so the text is set by hand) and every page hides.
+        // so the text is set by hand) and every page hides — Appearance
+        // (Fusion + Opacity) stays, so a plain image can still be blended.
         m_modePick->setPlaceholder("Select mode…");
         m_dotGridPage->setVisible(false);
         m_ditherPage->setVisible(false);
@@ -2461,7 +2486,10 @@ void ModePanel::setFromLayer(const Layer& layer)
         m_mosaicPage->setVisible(false);
         m_halftonePage->setVisible(false);
         m_mosaicTextsSection->setVisible(false);
+        m_noModeFusion->setValue(int(layer.blend));
+        m_noModeOpacity->setValue(int(qRound(layer.opacity * 100.0f)));
     }
+    m_noModeSection->setVisible(!hasMode);
     m_fillSection->setVisible(hasMode);
 
     m_updating = false;

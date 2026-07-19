@@ -540,15 +540,6 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    if (event->button() == Qt::LeftButton && !m_panMode && !m_showOriginal
-        && imageScale() > 0.0 && !widgetInsideFrame(event->position())) {
-        m_boxSelecting = true;
-        m_boxAdditive  = (event->modifiers() & Qt::ShiftModifier);
-        m_boxStart = m_boxCur = event->pos();
-        event->accept();
-        return;
-    }
-
     // Selection + transform (left button, not in pan/original mode).
     if (event->button() == Qt::LeftButton && !m_panMode && !m_showOriginal
         && imageScale() > 0.0) {
@@ -673,6 +664,17 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
             }
         }
 
+        // Outside the frame and not on a handle (checked above, so an
+        // overflowing selected layer's handles stay grabbable even past the
+        // frame edge) → rubber-band box selection.
+        if (!widgetInsideFrame(pos)) {
+            m_boxSelecting = true;
+            m_boxAdditive  = (mods & Qt::ShiftModifier);
+            m_boxStart = m_boxCur = event->pos();
+            event->accept();
+            return;
+        }
+
         const int hit = hitTest(pos);   // top-most layer under the cursor
 
         // Shift / Ctrl operate on the top-most layer under the cursor.
@@ -743,8 +745,50 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
     QWidget::mousePressEvent(event);
 }
 
+void PreviewWidget::forceEndDrags()
+{
+    if (m_locDrag != LocDrag::None) {
+        m_locDrag = LocDrag::None;
+        if (m_gestureMoved) emit localizationEditFinished();
+    }
+    if (m_groupDrag) {
+        m_groupDrag = false;
+        m_groupMode = TfDrag::None;
+        if (m_gestureMoved) emit transformEditFinished();
+    }
+    if (m_tfDrag != TfDrag::None) {
+        m_tfDrag = TfDrag::None;
+        if (m_gestureMoved) emit transformEditFinished();
+    }
+    m_boxSelecting = false;
+    m_dragging     = false;
+    m_dragButton   = Qt::NoButton;
+    setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
+    update();
+}
+
+void PreviewWidget::changeEvent(QEvent* event)
+{
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow())
+        forceEndDrags();
+    QWidget::changeEvent(event);
+}
+
 void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
 {
+    // The button that started the current drag is no longer held: the real
+    // mouseReleaseEvent was swallowed somewhere (lost focus, a popup grabbed
+    // the mouse, …). Treat it as an implicit release instead of leaving the
+    // drag stuck — see forceEndDrags().
+    const bool leftStuck = (m_tfDrag != TfDrag::None || m_groupDrag || m_boxSelecting)
+                         && !event->buttons().testFlag(Qt::LeftButton);
+    const bool panStuck  = m_dragging && !event->buttons().testFlag(m_dragButton);
+    if (leftStuck || panStuck) {
+        forceEndDrags();
+        event->accept();
+        return;
+    }
+
     if (!m_gestureMoved) {
         // A physical mouse/trackpad click always has some jitter between press
         // and release — well past a couple of pixels. Without a real tolerance

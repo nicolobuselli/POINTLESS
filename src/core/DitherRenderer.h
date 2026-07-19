@@ -34,10 +34,28 @@ class QPainter;
  *   2+ tones    → luminosity mapped onto the tone palette via each
  *                 tone's level anchor (see pickToneIndex).
  */
+// Threshold matrix handed to the GPU dither pass (tiled, values in [0,1]).
+struct DitherGpuMask {
+    int w = 0, h = 0;
+    std::vector<float> t;
+};
+
 class DitherRenderer
 {
 public:
     static QImage render(const QImage& input, const DitherSettings& s);
+
+    // GPU pass support (dither.frag): ordered + threshold algorithms only —
+    // error diffusion stays CPU forever (serial). Palette mode (OkLab
+    // matching), cornerRadius rounding (QPainter path) and per-pixel levels
+    // localization with multi-tone expansion also fall back to the CPU.
+    static bool gpuRenderable(const DitherSettings& s);
+    // Threshold matrix for mask-based ordered algorithms; empty for
+    // LineHatch (analytic in-shader) and Threshold.
+    static DitherGpuMask gpuMask(const DitherSettings& s);
+    // Sorted + levels-expanded tone set the shader indexes (≤ 64 entries,
+    // enforced by gpuRenderable).
+    static std::vector<ToneEntry> gpuTones(const DitherSettings& s);
 
     // SVG-friendly output: merge the dithered cell grid into the fewest
     // axis-aligned rectangles (greedy maximal rects over equal-colour, opaque

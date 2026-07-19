@@ -13,6 +13,11 @@
 #include "../core/ImageAdjuster.h"
 #include "../core/ProjectIO.h"
 #include "../core/VideoIO.h"
+#include "../core/DotGridRenderer.h"
+#include "../core/HalftoneRenderer.h"
+#include "../core/DitherRenderer.h"
+#include "../core/MosaicRenderer.h"
+#include "../core/AsciiRenderer.h"
 
 #include <QApplication>
 #include <QCursor>
@@ -422,6 +427,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_right, &ModePanel::blendChanged, this, [this](BlendMode m) {
         if (const Layer* l = activeLayer()) onLayerBlendChanged(l->id, m);
     });
+    connect(m_right, &ModePanel::noModeOpacityChanged, this, &MainWindow::onLayerNoModeOpacityChanged);
     connect(m_right, &ModePanel::modeSelected,              this, &MainWindow::onModeSelected);
     connect(m_right, &ModePanel::clearModeRequested, this, [this]() {
         if (Layer* act = activeLayer()) onLayerRemoveEditsRequested(act->id);
@@ -451,7 +457,49 @@ MainWindow::MainWindow(QWidget* parent)
     // and never blocks: each tick just swaps the displayed image.
     m_playTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_playTimer, &QTimer::timeout, this, [this]() {
-        if (!m_playing || m_current < 0 || m_playCache.isEmpty()) return;
+        if (!m_playing || m_current < 0) return;
+
+        if (m_playLive) {
+            // A mid-play edit can switch a layer onto a CPU-only mode
+            // (e.g. Dither → error-diffusion) — drop back to the pre-baked
+            // path exactly like the cache-staleness recovery below.
+            if (!animCanPlayLive()) {
+                m_playTimer.stop();
+                m_playLive = false;
+                if (!buildPlayCache() || m_playCache.isEmpty()) {
+                    m_playing = false;
+                    m_timeline->setPlayingSilent(false);
+                    scheduleRender();
+                    return;
+                }
+                m_playTimer.start(1000 / qMax(1, m_images[m_current].anim.fps));
+                return;
+            }
+            Animation& a = m_images[m_current].anim;
+            int next = a.playhead + 1;
+            if (next > a.frameEnd) next = a.frameStart;   // loop
+            a.playhead = next;
+            m_timeline->setPlayheadSilent(next);
+            scheduleRender(/*previewOnly=*/true);
+            return;
+        }
+
+        // An edit landed mid-playback (layer added/hidden/deleted, param change,
+        // …): rebake before the next tick so playback shows the new state. Timer
+        // stopped first — the progress dialog processes events and would re-enter.
+        SessionImage& img = m_images[m_current];
+        if (!m_playCacheValid || m_playCache.isEmpty()
+            || img.state != m_playCacheParams || img.anim != m_playCacheAnim) {
+            m_playTimer.stop();
+            if (!buildPlayCache() || m_playCache.isEmpty()) {
+                m_playing = false;
+                m_timeline->setPlayingSilent(false);
+                scheduleRender();
+                return;
+            }
+            m_playTimer.start(1000 / qMax(1, img.anim.fps));
+        }
+        if (m_playCache.isEmpty()) return;
         Animation& a = m_images[m_current].anim;
         int next = a.playhead + 1;
         if (next > a.frameEnd) next = a.frameStart;   // loop
@@ -838,8 +886,6 @@ void MainWindow::updatePreviewInteractionState()
 
     if (capsLockActive) {
         m_preview->setStatus("Original + adjustments (Caps Lock active)");
-    } else if (m_spaceDown) {
-        m_preview->setStatus("Pan (hold Space and drag)");
     } else {
         m_preview->setStatus(QString());
     }
@@ -1067,7 +1113,10 @@ void MainWindow::syncLayersPanel()
     }
 
     m_layersPanel->setBackground(st.background, st.backgroundOpacity);
-    m_layersPanel->setTree(st.parents, st.layers, st.activeLayerId, mediaImages);
+    // Parent/child grouping temporarily hidden — classic flat layer list until
+    // it's brought back. The underlying st.parents model is untouched, so
+    // reverting to the tree view is just passing st.parents back in here.
+    m_layersPanel->setTree({}, st.layers, st.activeLayerId, mediaImages);
     m_layersPanel->setSelection(m_selection);   // reflect multi-select highlight
     m_layersPanel->setSelectedParent(m_selectedParentMediaId);
 }
@@ -1256,11 +1305,46 @@ void MainWindow::onTimelineEdited()
     m_undoTimer.start();
 }
 
+// Visible layers whose mode still forces the CPU renderer (error-diffusion
+// dither, Braille, Mosaic/Palette text fallbacks, …) block live playback —
+// Original layers are always GPU (point-op or the full adjust chain).
+static bool layerBlocksLivePlayback(const Layer& l)
+{
+    if (!l.visible) return false;
+    switch (l.kind) {
+        case LayerKind::DotGrid:  return !DotGridRenderer::gpuRenderable(l.dotGrid);
+        case LayerKind::Halftone: return !HalftoneRenderer::gpuRenderable(l.halftone);
+        case LayerKind::Dither:   return !DitherRenderer::gpuRenderable(l.dither);
+        case LayerKind::Mosaic:   return !MosaicRenderer::gpuRenderable(l.mosaic);
+        case LayerKind::Ascii:    return !AsciiRenderer::gpuRenderable(l.ascii);
+        case LayerKind::Original: return false;
+    }
+    return false;
+}
+
+// Checked against the base (un-animated) layer settings: the enums that
+// route CPU vs GPU (algorithm, tonal mode, grid shape, per-tone text, …)
+// aren't animatable, so they can't drift across the played range.
+bool MainWindow::animCanPlayLive() const
+{
+    if (m_current < 0 || !m_preview->gpuActive()) return false;
+    for (const Layer& l : m_images[m_current].state.layers)
+        if (layerBlocksLivePlayback(l)) return false;
+    return true;
+}
+
 void MainWindow::onPlayToggled(bool playing)
 {
     if (m_current < 0) { m_playing = false; return; }
 
     if (playing) {
+        m_playLive = animCanPlayLive();
+        if (m_playLive) {
+            m_playing = true;
+            scheduleRender(/*previewOnly=*/true);   // show current frame immediately
+            m_playTimer.start(1000 / qMax(1, m_images[m_current].anim.fps));
+            return;
+        }
         if (!buildPlayCache()) {            // canceled or nothing to play
             m_playing = false;
             m_timeline->setPlayingSilent(false);
@@ -1273,6 +1357,7 @@ void MainWindow::onPlayToggled(bool playing)
         m_playTimer.start(1000 / qMax(1, a.fps));
     } else {
         m_playing = false;
+        m_playLive = false;
         m_playTimer.stop();
         // Hold the frame we're showing as the fallback, or scheduleRender's
         // m_lastRender reset briefly exposes the stale pre-playback preview.
@@ -1290,9 +1375,13 @@ void MainWindow::onPlayToggled(bool playing)
 bool MainWindow::buildPlayCache()
 {
     if (m_current < 0) return false;
-    if (m_playCacheValid && !m_playCache.isEmpty()) return true;
-
     SessionImage& img = m_images[m_current];
+    // Snapshot compare (not just the flag): catches every edit path, including
+    // structural ones that never bothered to clear m_playCacheValid.
+    if (m_playCacheValid && !m_playCache.isEmpty()
+        && img.state == m_playCacheParams && img.anim == m_playCacheAnim)
+        return true;
+
     const int f0 = img.anim.frameStart;
     const int f1 = qMax(f0, img.anim.frameEnd);
     const int count = f1 - f0 + 1;
@@ -1320,7 +1409,9 @@ bool MainWindow::buildPlayCache()
                                                          layerSourcesAt(img, frame)));
     }
     progress.setValue(count);
-    m_playCacheValid = true;
+    m_playCacheValid  = true;
+    m_playCacheParams = img.state;
+    m_playCacheAnim   = img.anim;
     return true;
 }
 
@@ -1377,13 +1468,30 @@ QString MainWindow::uniqueLayerName(const SessionParams& p, LayerKind kind, int 
     return candidate;
 }
 
+// Duplicating a layer keeps the source's (possibly user-renamed) name instead
+// of regenerating "<source>.<mode>" from scratch, so a rename survives its
+// copies: "sunset" → "sunset_1", "sunset_2"…
+QString MainWindow::uniqueDuplicateName(const SessionParams& p, const QString& baseName) const
+{
+    auto exists = [&p](const QString& name) {
+        for (const Layer& l : p.layers)
+            if (l.name == name) return true;
+        return false;
+    };
+    int n = 1;
+    QString candidate = baseName + "_" + QString::number(n);
+    while (exists(candidate))
+        candidate = baseName + "_" + QString::number(++n);
+    return candidate;
+}
+
 void MainWindow::onModeSelected(RenderMode m)
 {
     // No active layer to retarget (no image loaded, or the board has none
-    // right now): still remember the pick on the panel itself, since
-    // addLayerFromMedia() reads m_right->mode() for whatever layer comes
-    // next. Without this, clicking a mode with nothing active looked like
-    // it did nothing (page shown / next new layer's kind stayed stale).
+    // right now): still remember the pick on the panel itself (new layers
+    // always start mode-less regardless — see addLayerFromMedia — but a mode
+    // click with nothing active should still show that page, not silently
+    // do nothing).
     if (m_current < 0) { m_right->setMode(m); return; }
     auto& st = m_images[m_current].state;
     const LayerKind kind = layerKindForMode(m);
@@ -1558,6 +1666,17 @@ void MainWindow::onLayerBlendChanged(int layerId, BlendMode mode)
     if (idx < 0) return;
 
     layers[idx].blend = mode;
+    scheduleRender();
+    m_undoTimer.start();
+}
+
+void MainWindow::onLayerNoModeOpacityChanged(float opacity)
+{
+    if (m_current < 0) return;
+    Layer* l = activeLayer();
+    if (!l) return;
+
+    l->opacity = qBound(0.0f, opacity, 1.0f);
     scheduleRender();
     m_undoTimer.start();
 }
@@ -1822,7 +1941,9 @@ void MainWindow::onLayerReordered(int layerId, int insertIndex)
     if (insertIndex > from) --insertIndex;
     insertIndex = qBound(0, insertIndex, int(layers.size()));
     layers.insert(layers.begin() + insertIndex, moved);
-    regroupLayers(m_images[m_current].state);   // keep composite order == tree order
+    // No regroupLayers() here: that forces layers back into contiguous
+    // per-parent blocks, which fights the flat classic list (§ layer panel
+    // flattening) where a drag can freely reorder across former groups.
 
     syncLayersPanel();
     scheduleRender();
@@ -1841,12 +1962,12 @@ void MainWindow::onLayerDuplicateRequested(int layerId, int insertIndex)
 
     Layer nl = st.layers[from];
     nl.id   = st.nextLayerId++;
-    nl.name = uniqueLayerName(st, nl.kind, nl.mediaId);
+    nl.name = uniqueDuplicateName(st, nl.name);
 
     insertIndex = qBound(0, insertIndex, int(st.layers.size()));
     st.layers.insert(st.layers.begin() + insertIndex, nl);
     st.activeLayerId = nl.id;
-    regroupLayers(st);
+    // No regroupLayers() — see onLayerReordered.
 
     applyParams(st);
     syncLayersPanel();
@@ -1876,7 +1997,7 @@ void MainWindow::onPasteLayerRequested(int layerId)
 
     Layer nl = m_layerClipboard;
     nl.id   = st.nextLayerId++;
-    nl.name = uniqueLayerName(st, nl.kind, nl.mediaId);
+    nl.name = uniqueDuplicateName(st, nl.name);
 
     st.layers.insert(st.layers.begin() + insertAt, nl);
     st.activeLayerId = nl.id;
@@ -1900,7 +2021,7 @@ void MainWindow::pasteLayerBelowActive()
 
     Layer nl = m_layerClipboard;
     nl.id   = st.nextLayerId++;
-    nl.name = uniqueLayerName(st, nl.kind, nl.mediaId);
+    nl.name = uniqueDuplicateName(st, nl.name);
 
     st.layers.insert(st.layers.begin() + activeIdx + 1, nl);
     st.activeLayerId = nl.id;
@@ -2055,10 +2176,17 @@ void MainWindow::onDeleteParentRequested(int mediaId)
 // native frame resolution (preview just upscales it).
 float MainWindow::zoomQualityScale() const
 {
-    // ponytail: never supersample on zoom. Re-rendering on every scroll was
-    // distracting in every mode (and for raster dither it shifted the cell
-    // grid). The on-screen raster is just upscaled instead.
-    return 1.0f;
+    // Supersample the full-quality pass to match how big the frame actually
+    // shows on screen (canvas zoom AND a layer's own Transform Scale both
+    // land here, since currentViewScale() is measured post-fit). Debounced
+    // via m_zoomRenderTimer (150ms after the last zoomChanged) so this never
+    // fires on every scroll tick — only once the zoom settles.
+    // ponytail: this resamples the WHOLE document uniformly, so Dither's
+    // pixel grid (defined in absolute frame px) shifts slightly when the
+    // supersample kicks in. Give Dither its own opt-out if that ever bugs
+    // someone in practice.
+    const double s = m_preview ? m_preview->currentViewScale() : 1.0;
+    return s > 0.0 ? float(s) : 1.0f;
 }
 
 void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
@@ -2575,7 +2703,9 @@ void MainWindow::addLayerFromMedia(int mediaId)
         st.parents.push_back(g);
     }
 
-    Layer child = makeChildLayer(st, mediaId, layerKindForMode(m_right->mode()),
+    // Mode-less by default (like onAddLayerRequested) — dropping a new source
+    // shouldn't inherit whatever mode happens to be showing in the panel.
+    Layer child = makeChildLayer(st, mediaId, LayerKind::Original,
                                  clip.image.size());
     st.layers.insert(st.layers.begin(), child);
     st.activeLayerId = child.id;

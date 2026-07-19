@@ -269,6 +269,87 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
 
 } // namespace
 
+// GPU path: the fullscreen ascii.frag ports the whole square-grid loop —
+// coverage ramp, stipple, gamma, plus edges/hatching/contour (each fragment
+// re-samples neighbour cells for the Sobel/isoline passes). Braille
+// (per-cell codepoints), Palette (OkLab) and non-square lattices stay CPU.
+bool AsciiRenderer::gpuRenderable(const AsciiSettings& s)
+{
+    if (s.isBraille()) return false;
+    if (s.tonal.mode == ToneMode::Palette) return false;
+    if (s.tonal.mode == ToneMode::FixedTones && s.tonal.tones.size() > 8) return false;
+    if (s.effectiveCharset().size() > 128) return false;   // UBO coverage cap
+    return true;
+}
+
+const AsciiGpuAtlas& AsciiRenderer::gpuAtlas(const AsciiSettings& s)
+{
+    static QMutex mutex;
+    static QHash<QString, AsciiGpuAtlas> cache;
+    QMutexLocker lock(&mutex);
+
+    const int     cellH   = qBound(3, s.cellSize, 128);
+    const QFont   font    = settingsFont(s, cellH);
+    const QString charset = s.effectiveCharset();
+    const QFontMetricsF fm(font);
+    const int     cellW   = qMax(2, qRound(fm.horizontalAdvance(QLatin1Char('M'))));
+
+    const QString key = font.family() + QLatin1Char('|')
+                      + QString::number(font.weight()) + QLatin1Char('|') + charset
+                      + QString("|%1x%2").arg(cellW).arg(cellH);
+    auto it = cache.constFind(key);
+    if (it != cache.constEnd()) return it.value();
+
+    AsciiGpuAtlas a;
+    a.cellW  = cellW;
+    a.cellH  = cellH;
+    a.nChars = charset.size();
+    a.spaceIndex = charset.indexOf(QLatin1Char(' '));
+    // Padded tile so glyphs drawn AlignCenter|TextDontClip can overflow the
+    // logical cell without bleeding into the neighbouring atlas tile.
+    a.glyphW = cellW * 2;
+    a.glyphH = cellH * 2;
+
+    // Specials appended after the charset: - / | \ # (edge/hatch glyphs), so
+    // the same atlas serves the effect path when it later moves to the GPU.
+    static const QChar kSpecials[5] = {
+        QLatin1Char('-'), QLatin1Char('/'), QLatin1Char('|'),
+        QLatin1Char('\\'), QLatin1Char('#')
+    };
+    const int nTiles = a.nChars + 5;
+    a.atlasCols = qMax(1, int(std::ceil(std::sqrt(double(nTiles)))));
+    const int atlasRows = (nTiles + a.atlasCols - 1) / a.atlasCols;
+
+    a.image = QImage(a.atlasCols * a.glyphW, atlasRows * a.glyphH,
+                     QImage::Format_ARGB32);
+    a.image.fill(Qt::transparent);
+    {
+        QPainter p(&a.image);
+        p.setFont(font);
+        p.setPen(Qt::white);
+        p.setRenderHint(QPainter::TextAntialiasing, true);
+        for (int i = 0; i < nTiles; ++i) {
+            const QChar ch = (i < a.nChars) ? charset.at(i) : kSpecials[i - a.nChars];
+            const int tx = (i % a.atlasCols) * a.glyphW;
+            const int ty = (i / a.atlasCols) * a.glyphH;
+            p.drawText(QRectF(tx, ty, a.glyphW, a.glyphH),
+                       Qt::AlignCenter | Qt::TextDontClip, QString(ch));
+        }
+    }
+    a.image = a.image.convertToFormat(QImage::Format_RGBA8888);
+
+    // Coverage is measured on the logical cellW×cellH rect (CPU-identical), so
+    // the luminosity→glyph mapping matches the CPU renderer exactly.
+    const std::vector<float>& cov = glyphCoverage(font, charset, cellW, cellH);
+    a.coverage = cov;
+    a.sortedIdx.resize(size_t(a.nChars));
+    for (int i = 0; i < a.nChars; ++i) a.sortedIdx[size_t(i)] = i;
+    std::sort(a.sortedIdx.begin(), a.sortedIdx.end(),
+              [&](int x, int y) { return cov[size_t(x)] < cov[size_t(y)]; });
+
+    return cache.insert(key, std::move(a)).value();
+}
+
 void AsciiRenderer::render(const QImage& input, QPainter& output,
                            const AsciiSettings& params)
 {

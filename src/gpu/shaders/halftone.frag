@@ -30,6 +30,7 @@ layout(std140, binding = 0) uniform buf {
 layout(binding = 1) uniform sampler2D srcTex;   // linear light, mipmapped
 
 const float PI = 3.14159265359;
+const float kMinEdgeSoftness = 0.02;
 
 float lin2s(float v)
 {
@@ -108,6 +109,7 @@ void main()
     vec2  p    = v_uv * dims.xy;          // pixel centre, image px
     float sp   = dims.z;
     float soft = clamp(pA.y, 0.0, 1.0);
+    float edgeSoft = max(soft, kMinEdgeSoftness);
     float gn   = clamp(pA.z, 0.0, 1.0) * sp;
     float grain = clamp(pA.w, 0.0, 1.0);
     int   nScr  = int(pB.y + 0.5);
@@ -163,11 +165,11 @@ void main()
                 if (r < 0.25) continue;
                 float d = distance(p, ctr);
                 float a;
-                if (soft <= 0.01) {
+                if (edgeSoft <= 0.01) {
                     a = aaStep(r, d);
                 } else {
-                    float R  = r * (1.0 + 0.35 * soft);
-                    float t0 = clamp(1.0 - 0.75 * soft, 0.0, 0.99);
+                    float R  = r * (1.0 + 0.35 * edgeSoft);
+                    float t0 = clamp(1.0 - 0.75 * edgeSoft, 0.0, 0.99);
                     float x  = d / R;
                     a = x <= t0 ? 1.0 : clamp((1.0 - x) / (1.0 - t0), 0.0, 1.0);
                 }
@@ -180,8 +182,8 @@ void main()
                     float half0 = sp * sqrt(cov) * 0.5;
                     if (half0 < 0.2) continue;
                     for (int k = 0; k < 3; ++k) {
-                        if (soft <= 0.01 && shellAlpha[k] < 1.0) continue;
-                        float hh = half0 * (1.0 + shellGrow[k] * soft);
+                        if (edgeSoft <= 0.01 && shellAlpha[k] < 1.0) continue;
+                        float hh = half0 * (1.0 + shellGrow[k] * edgeSoft);
                         float d  = max(abs(l2.x), abs(l2.y)) - hh;
                         alive *= 1.0 - aaStep(0.0, d) * shellAlpha[k] * inkA;
                     }
@@ -189,8 +191,8 @@ void main()
                     float th = sp * cov;
                     if (th < 0.2) continue;
                     for (int k = 0; k < 3; ++k) {
-                        if (soft <= 0.01 && shellAlpha[k] < 1.0) continue;
-                        float t2 = th * (1.0 + shellGrow[k] * soft);
+                        if (edgeSoft <= 0.01 && shellAlpha[k] < 1.0) continue;
+                        float t2 = th * (1.0 + shellGrow[k] * edgeSoft);
                         vec2  hd = vec2(sp * 0.55, t2 * 0.5);
                         vec2  dq = abs(l2) - hd;
                         float d  = max(dq.x, dq.y);
@@ -205,8 +207,8 @@ void main()
             // Threshold over the union; grain wobbles the blob edges.
             if (grain > 0.005)
                 field += (valueNoise(floor(p) * kGrainScale) - 0.5) * grain * 0.7;
-            float lo = 0.5 - 0.5 * soft;
-            float hi = 0.5 + 0.5 * soft + 0.01;
+            float lo = 0.5 - 0.5 * edgeSoft;
+            float hi = 0.5 + 0.5 * edgeSoft + 0.01;
             float t  = clamp((field - lo) / (hi - lo), 0.0, 1.0);
             a = t * t * (3.0 - 2.0 * t) * inkA;
         } else {
@@ -215,13 +217,8 @@ void main()
         color *= mix(vec3(1.0), inks[s].rgb, a);                   // Multiply over paper
     }
 
-    // Paper-grain overlay: value noise pushed toward white/black speckles.
-    if (grain > 0.005) {
-        float n  = valueNoise(floor(p) * kGrainScale + vec2(311.7, 127.3));
-        float gv = n * 2.0 - 1.0;
-        float st = 0.5 * grain * pow(abs(gv), 0.8);
-        color = mix(color, vec3(gv > 0.0 ? 1.0 : 0.0), st);
-    }
+    // Grain only wobbles the blob edges above (organic displacement); no
+    // visible speckle overlay here — it made high grain values too noisy.
 
     float op = clamp(pB.x, 0.0, 1.0);
     fragColor = vec4(color * op, op);   // premultiplied, layer alpha = opacity

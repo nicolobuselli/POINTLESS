@@ -108,6 +108,16 @@ qt_add_shaders(ULTRATOOL "ultratool_shaders"
         src/gpu/shaders/dot.frag
         src/gpu/shaders/halftone.vert
         src/gpu/shaders/halftone.frag
+        src/gpu/shaders/adjust.vert
+        src/gpu/shaders/adjust.frag
+        src/gpu/shaders/dither.vert
+        src/gpu/shaders/dither.frag
+        src/gpu/shaders/mosaic.vert
+        src/gpu/shaders/mosaic.frag
+        src/gpu/shaders/ascii.vert
+        src/gpu/shaders/ascii.frag
+        src/gpu/shaders/ascii_grid.vert
+        src/gpu/shaders/ascii_grid.frag
 )
 
 # ── Link Qt ──────────────────────────────────────────────────────────────────

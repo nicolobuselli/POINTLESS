@@ -523,6 +523,75 @@ bool DitherRenderer::isThreshold(DitherAlgorithm a)
     return a == DitherAlgorithm::Threshold;
 }
 
+bool DitherRenderer::gpuRenderable(const DitherSettings& s)
+{
+    if (!(isOrdered(s.algorithm) || isThreshold(s.algorithm))) return false;
+    if (!s.tonal.enabled) return false;                  // Fill "−": layer paints nothing
+    if (s.tonal.mode == ToneMode::Palette) return false; // OkLab nearest-match: CPU
+    if (s.cornerRadius > 0.0f && qBound(1, s.pixelSize, 100) > 1)
+        return false;                                    // QPainter connected rounding
+    if (s.tonal.mode == ToneMode::FixedTones) {
+        const int nT = int(s.tonal.tones.size());
+        if (nT > 8) return false;
+        const int L = qBound(2, s.levels, 16);
+        if (nT + qMax(0, nT - 1) * (L - 2) > 64) return false;   // UBO tone cap
+        // A levels loc point re-expands the tone set per pixel — CPU only.
+        if (nT > 1 && locPointOr(s.loc, LocParam::DiLevels).enabled) return false;
+    }
+    return true;
+}
+
+// KEEP IN SYNC with renderOrdered's threshold lambdas.
+DitherGpuMask DitherRenderer::gpuMask(const DitherSettings& s)
+{
+    DitherGpuMask m;
+    switch (s.algorithm) {
+    case DitherAlgorithm::Bayer: {
+        const int bn = (s.bayerSize == 2 || s.bayerSize == 4 ||
+                        s.bayerSize == 8 || s.bayerSize == 16) ? s.bayerSize : 8;
+        m.w = m.h = bn;
+        m.t = bayerMatrix(bn);
+        break;
+    }
+    case DitherAlgorithm::ClusteredDot:
+        if (s.bayerSize <= 4) {
+            m.w = m.h = 4;
+            m.t.resize(16);
+            for (int i = 0; i < 16; ++i) m.t[size_t(i)] = (kClustered4[i] + 0.5f) / 16.0f;
+        } else {
+            m.w = m.h = 8;
+            m.t.resize(64);
+            for (int i = 0; i < 64; ++i) m.t[size_t(i)] = (kClustered8[i] + 0.5f) / 64.0f;
+        }
+        break;
+    case DitherAlgorithm::BlueNoise:
+        m.w = m.h = 64;
+        m.t = blueNoiseMask();
+        break;
+    case DitherAlgorithm::VoidAndCluster:
+        m.w = m.h = 32;
+        m.t = voidClusterMask();
+        break;
+    case DitherAlgorithm::CustomPattern: {
+        PatternMask pm = patternMask(s.patternPath);
+        if (pm.w > 0 && pm.h > 0) {
+            m.w = pm.w; m.h = pm.h; m.t = std::move(pm.t);
+        } else {                       // no/invalid pattern → Bayer 8 fallback
+            m.w = m.h = 8;
+            m.t = bayerMatrix(8);
+        }
+        break;
+    }
+    default: break;                    // LineHatch / Threshold: analytic
+    }
+    return m;
+}
+
+std::vector<ToneEntry> DitherRenderer::gpuTones(const DitherSettings& s)
+{
+    return expandTones(sortedTones(s.tonal.tones), qBound(2, s.levels, 16));
+}
+
 // Round every corner of a rectilinear path with quadratic Béziers. Because the
 // curve is steered through the original vertex, convex AND concave corners round
 // alike — so inner notches get the same radius as outer edges.

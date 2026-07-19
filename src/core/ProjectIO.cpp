@@ -352,7 +352,7 @@ QJsonObject toJson(const Layer& l) {
     return {
         { "id", l.id }, { "kind", int(l.kind) }, { "name", l.name },
         { "visible", l.visible }, { "pinned", l.pinned }, { "locked", l.locked },
-        { "blend", int(l.blend) }, { "mediaId", l.mediaId },
+        { "blend", int(l.blend) }, { "opacity", l.opacity }, { "mediaId", l.mediaId },
         { "transform", toJson(l.transform) }, { "adjustments", toJson(l.adjustments) },
         // "halftone" is the FROZEN legacy JSON key for the Dot Grid mode
         // (pre-rename .ultra files; no migration mechanism exists).
@@ -370,6 +370,7 @@ Layer layerFromJson(const QJsonObject& o) {
     l.pinned  = o["pinned"].toBool(l.pinned);
     l.locked  = o["locked"].toBool(l.locked);
     l.blend   = BlendMode(o["blend"].toInt(int(l.blend)));
+    l.opacity = float(o["opacity"].toDouble(l.opacity));
     l.mediaId = o["mediaId"].toInt(l.mediaId);
     l.transform   = transformFromJson(o["transform"].toObject());
     l.adjustments = adjFromJson(o["adjustments"].toObject());

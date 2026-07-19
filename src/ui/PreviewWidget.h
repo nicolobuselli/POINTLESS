@@ -52,6 +52,14 @@ public:
     // zoomed in, so the vector symbols stay crisp instead of upscaling a raster.
     double zoomFactor() const { return m_zoomFactor; }
 
+    // Effective on-screen px per frame px right now (includes zoomFactor AND
+    // the widget/frame aspect fit — zoomFactor alone isn't the real ratio).
+    // MainWindow::zoomQualityScale() supersamples the full-quality pass by
+    // this, so baked content (dot/halftone/mosaic/ascii instanced textures
+    // included) matches what's actually shown instead of blurring when
+    // magnified past frame resolution.
+    double currentViewScale() const { return imageScale(); }
+
     // True while an active move drag is magnet-snapped to a frame edge/centre:
     // the position is momentarily locked in place, so MainWindow can afford a
     // full-quality render right away instead of the usual downscaled drag
@@ -100,9 +108,18 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void changeEvent(QEvent* event) override;
 
 private:
     friend class PreviewOverlay;
+
+    // Safety net: if the window is deactivated (alt-tab, a popup steals the
+    // grab, …) mid-drag, the matching mouseReleaseEvent never arrives and
+    // m_tfDrag/m_groupDrag stay stuck forever — after that, setActiveTransform()
+    // permanently no-ops (see its guard) and every future handle hit-test runs
+    // against a transform frozen at drag-start, so handles silently stop
+    // responding. Force-clear any in-progress drag so state can resync.
+    void forceEndDrags();
 
     QImage  m_image;
     QImage  m_originalImage;

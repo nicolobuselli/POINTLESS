@@ -703,6 +703,8 @@ struct Layer {
     bool      pinned  = false;   // turned on by hand → survives mode switches
     bool      locked  = false;   // canvas clicks/drags ignore it; panels still edit it
     BlendMode blend   = BlendMode::Normal;
+    float     opacity = 1.0f;   // 0..1 — only used while kind == Original (no mode picked);
+                                 // every other kind bakes its own opacity into the mode render
 
     int            mediaId   = -1;   // which media this layer draws (-1 = document base)
     LayerTransform transform;        // placement on the canvas
@@ -718,7 +720,7 @@ struct Layer {
 inline bool operator==(const Layer& a, const Layer& b) {
     return a.id == b.id && a.kind == b.kind && a.name == b.name
         && a.visible == b.visible && a.pinned == b.pinned
-        && a.locked == b.locked && a.blend == b.blend
+        && a.locked == b.locked && a.blend == b.blend && a.opacity == b.opacity
         && a.mediaId == b.mediaId && a.transform == b.transform
         && a.adjustments == b.adjustments && a.dotGrid == b.dotGrid
         && a.dither == b.dither && a.ascii == b.ascii && a.mosaic == b.mosaic

@@ -74,6 +74,7 @@ signals:
     void tonalChanged();
     void backgroundChanged();
     void blendChanged(BlendMode mode);       // Fusion combo → active layer
+    void noModeOpacityChanged(float opacity);   // Opacity box in the no-mode Appearance section
     void modeSelected(RenderMode m);         // user clicked a tab
     void clearModeRequested();               // user clicked the "X" → back to Original
     void exportRequested();
@@ -82,6 +83,9 @@ signals:
 private:
 
     QWidget*     m_fillSection = nullptr;   // Fill section (per-mode tonal)
+    QWidget*     m_noModeSection = nullptr;    // Appearance shown only when no mode is picked
+    PopupPicker* m_noModeFusion  = nullptr;
+    DragSpinBox* m_noModeOpacity = nullptr;
     QWidget*     m_mosaicTextsSection = nullptr;   // Texts section (Mosaic only, between Fill and Background)
     PopupPicker* m_modePick = nullptr;   // mode dropdown (replaced the tab row)
 

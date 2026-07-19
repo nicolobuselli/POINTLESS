@@ -68,6 +68,7 @@ private slots:
     void onLayerDeleteRequested(int layerId);
     void onLayerRemoveEditsRequested(int layerId);
     void onLayerBlendChanged(int layerId, BlendMode mode);
+    void onLayerNoModeOpacityChanged(float opacity);
     void onLayerTransformChanged(const LayerTransform& t);
     void onGroupTransformChanged(const QHash<int, LayerTransform>& byId);
     void onLocalizationChanged(LocParam p, const LocPoint& pt);
@@ -134,6 +135,7 @@ private:
     void  pushPreviewTransform();          // feed active transform + selection + loc dot to the preview
     void selectLayerInternal(int layerId, bool makeVisible);
     QString uniqueLayerName(const SessionParams& p, LayerKind kind, int mediaId) const;
+    QString uniqueDuplicateName(const SessionParams& p, const QString& baseName) const;
     void syncLayersPanel();
     void pasteLayerBelowActive();   // Ctrl+V on a focused layer row: paste right under it
     void scheduleRender(bool previewOnly = false, bool qualityOnly = false);
@@ -156,6 +158,10 @@ private:
     void onTimelineEdited();              // timeline → state (keyframes moved/changed)
     void onPlayToggled(bool playing);
     bool buildPlayCache();                // pre-render all frames for smooth playback
+    // True when every visible layer's mode is GPU-renderable (see each
+    // *Renderer::gpuRenderable) and the GPU compositor is active — playback
+    // can then render each frame live instead of pre-baking the whole range.
+    bool animCanPlayLive() const;
     void autoKeyChanged(const SessionParams& before, const SessionParams& after);
     void autoKeyTransform(int layerId, const LayerTransform& before, const LayerTransform& after);
     void autoKeyLocalization(int layerId, LocParam p, const LocPoint& before, const LocPoint& after);
@@ -216,8 +222,11 @@ private:
     QTimer          m_playTimer;
     bool            m_autoKey = false;
     bool            m_playing = false;
+    bool            m_playLive = false;      // true: render each tick live, no pre-bake
     QVector<QImage> m_playCache;             // pre-rendered frames for playback
     bool            m_playCacheValid = false;
+    SessionParams   m_playCacheParams;       // state/anim the cache was baked from —
+    Animation       m_playCacheAnim;         // any mismatch means the cache is stale
 
     // Bottom Timeline/Library panel: collapses to just its tab titles when
     // dragged down past a threshold (see MainWindow ctor).
