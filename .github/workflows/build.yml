@@ -26,6 +26,9 @@ jobs:
           arch: 'win64_msvc2019_64'
           # Qt SVG ships inside the base Qt 6 install — it is NOT a separately
           # listable aqt module, so requesting it here makes the install fail.
+          # ShaderTools (needed by CMakeLists.txt for the GPU renderer) IS a
+          # separate module and must be requested explicitly.
+          modules: 'qtshadertools'
           cache: true
 
       - name: Fetch ffmpeg
