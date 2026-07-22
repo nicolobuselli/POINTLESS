@@ -4,30 +4,102 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QPushButton>
 #include <QLabel>
 #include <QIcon>
 #include <QStyle>
+#include <QPainter>
+#include <QSvgRenderer>
+#include <QPixmap>
 #include <array>
 #include <cmath>
 
-namespace {
-// Paints (or clears) the little checkmark inside a checkRow's indicator
-// square. Shared by the live toggle handler and the silent setters below,
-// so setAdjustments()/setLocalizeChecked() (which block signals) still
-// leave the square in sync.
-void syncCheckSquare(QLabel* square, bool on)
+// Invert/Localize on/off indicator: the same clover silhouette as the app
+// logo and the #iconBtn hover shape (hover_shape.svg), not a rounded square.
+// Idle = a thin ring in the clover outline (@boxStroke); checked = the
+// clover filled solid yellow with a dark checkmark on top — the "yellow",
+// not blue (@boxStrokeActive) like the old rounded-square indicator.
+class CheckSquare : public QWidget
 {
-    square->setPixmap(on ? QIcon(":/icons/check.svg").pixmap(Ui::px(14), Ui::px(14)) : QPixmap());
-    square->setProperty("checked", on);
-    square->style()->unpolish(square);
-    square->style()->polish(square);
-}
+public:
+    explicit CheckSquare(QWidget* parent = nullptr) : QWidget(parent)
+    {
+        setFixedSize(Ui::px(22), Ui::px(22));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
 
-// Invert/Localize box: label on the left, a small checkmark-square
-// indicator on the right — the box itself stays the standard idle chrome,
-// only the square shows on/off state.
-QPushButton* makeCheckRow(const QString& text, QLabel*& squareOut)
+    void setChecked(bool on)
+    {
+        if (m_checked == on) return;
+        m_checked = on;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        static QSvgRenderer cloverRenderer(QString(":/icons/hover_shape.svg"));
+        static QSvgRenderer checkRenderer(QString(":/icons/check.svg"));
+
+        // Renders `renderer` into an alpha mask the size of this widget, then
+        // flood-fills it with `color` via DestinationIn — recolors a flat
+        // baked-color SVG without needing a separate asset per tint.
+        auto tintedMask = [this](QSvgRenderer& renderer, const QColor& color, const QRectF& area) {
+            QPixmap mask(size());
+            mask.fill(Qt::transparent);
+            { QPainter mp(&mask); renderer.render(&mp, area); }
+            QPixmap tinted(size());
+            tinted.fill(Qt::transparent);
+            QPainter tp(&tinted);
+            tp.fillRect(tinted.rect(), color);
+            tp.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+            tp.drawPixmap(0, 0, mask);
+            return tinted;
+        };
+
+        QPainter p(this);
+        const QRectF full = rect();
+
+        if (m_checked) {
+            p.drawPixmap(0, 0, tintedMask(cloverRenderer, QColor("#D2FC51"), full));
+            p.drawPixmap(0, 0, tintedMask(checkRenderer, QColor("#1E1E1E"),
+                                          full.adjusted(5, 5, -5, -5)));
+        } else {
+            // Ring = outer clover minus a smaller inner clover (DestinationOut),
+            // same "stroke, not fill" language as every other idle box.
+            const qreal strokeW = 1.5;
+            QPixmap outer(size());
+            outer.fill(Qt::transparent);
+            { QPainter op(&outer); cloverRenderer.render(&op, full); }
+            QPixmap inner(size());
+            inner.fill(Qt::transparent);
+            { QPainter ip(&inner);
+              cloverRenderer.render(&ip, full.adjusted(strokeW, strokeW, -strokeW, -strokeW)); }
+            { QPainter op2(&outer);
+              op2.setCompositionMode(QPainter::CompositionMode_DestinationOut);
+              op2.drawPixmap(0, 0, inner); }
+
+            QPixmap ring(size());
+            ring.fill(Qt::transparent);
+            QPainter rp(&ring);
+            rp.fillRect(ring.rect(), QColor("#3D3D3D"));   // @boxStroke
+            rp.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+            rp.drawPixmap(0, 0, outer);
+            rp.end();
+            p.drawPixmap(0, 0, ring);
+        }
+    }
+
+private:
+    bool m_checked = false;
+};
+
+namespace {
+// Invert/Localize box: label on the left, a CheckSquare indicator on the
+// right — the box itself stays the standard idle chrome, only the square
+// shows on/off state.
+QPushButton* makeCheckRow(const QString& text, CheckSquare*& squareOut)
 {
     auto* btn = new QPushButton;
     btn->setObjectName("checkRow");
@@ -44,14 +116,10 @@ QPushButton* makeCheckRow(const QString& text, QLabel*& squareOut)
     label->setAttribute(Qt::WA_TransparentForMouseEvents);
     hl->addWidget(label, 1);
 
-    auto* square = new QLabel;
-    square->setObjectName("checkSquare");
-    square->setFixedSize(Ui::px(22), Ui::px(22));
-    square->setAlignment(Qt::AlignCenter);
-    square->setAttribute(Qt::WA_TransparentForMouseEvents);
+    auto* square = new CheckSquare;
     hl->addWidget(square, 0, Qt::AlignVCenter);
 
-    QObject::connect(btn, &QPushButton::toggled, btn, [square](bool on) { syncCheckSquare(square, on); });
+    QObject::connect(btn, &QPushButton::toggled, btn, [square](bool on) { square->setChecked(on); });
 
     squareOut = square;
     return btn;
@@ -75,6 +143,7 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll->setFrameShape(QFrame::NoFrame);
+    m_scroll = scroll;
 
     auto* content = new QWidget;
     content->setObjectName("controlRoot");
@@ -205,7 +274,7 @@ void AdjustmentsPanel::setAdjustments(const Adjustments& a)
     m_invert->blockSignals(true);
     m_invert->setChecked(a.invert);
     m_invert->blockSignals(false);
-    syncCheckSquare(m_invertSquare, a.invert);
+    m_invertSquare->setChecked(a.invert);
     m_blur->setValue(a.blur);
     m_grain->setValue(a.grain);
     m_posterize->setValue(a.posterize);
@@ -222,7 +291,12 @@ void AdjustmentsPanel::setLocalizeChecked(bool on)
     m_localize->blockSignals(true);
     m_localize->setChecked(on);
     m_localize->blockSignals(false);
-    syncCheckSquare(m_localizeSquare, on);
+    m_localizeSquare->setChecked(on);
+}
+
+void AdjustmentsPanel::scrollToTop()
+{
+    if (m_scroll) m_scroll->verticalScrollBar()->setValue(0);
 }
 
 void AdjustmentsPanel::setSourceImage(const QImage& img)

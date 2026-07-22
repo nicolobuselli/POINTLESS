@@ -18,7 +18,7 @@
 class QResizeEvent;
 
 // ============================================================
-//  Shared custom widgets for ULTRATOOL panels.
+//  Shared custom widgets for POINTLESS panels.
 //  Callback style (std::function) — no extra signals/moc needed.
 // ============================================================
 
@@ -279,7 +279,7 @@ private:
 
 // ── UnsavedChangesDialog ─────────────────────────────────────
 // Frameless close-confirmation prompt, styled like the rest of the app
-// instead of a native QMessageBox: mini title bar (ULTRATOOL + a
+// instead of a native QMessageBox: mini title bar (POINTLESS + a
 // permanently-red close button) over a warning icon, message, and Yes/No.
 // The close button (or Esc) leaves choice() at Cancel — same as dismissing
 // a native dialog without picking an option.
@@ -301,7 +301,7 @@ private:
 
 // ── StyledMessageBox ─────────────────────────────────────────
 // In-app-styled stand-in for QMessageBox: same frameless chrome as
-// UnsavedChangesDialog (mini "ULTRATOOL" title bar + warning icon)
+// UnsavedChangesDialog (mini "POINTLESS" title bar + warning icon)
 // instead of a native OS dialog. Two buttons (Yes/No) or one (OK),
 // picked by leaving noText empty. Use askYesNo()/showMessage() below
 // rather than constructing this directly.
@@ -369,6 +369,7 @@ private:
     int                        m_columns;
     QVector<PopupPickerEntry>  m_entries;
     QVariant                   m_value;
+    bool                       m_accent = false;
     QLabel*                    m_arrow = nullptr;
     QLabel*                    m_label = nullptr;
     QString                    m_fullText;

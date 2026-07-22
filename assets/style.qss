@@ -1,5 +1,5 @@
 /* ============================================================
-   ULTRATOOL — Design system
+   POINTLESS — Design system
 
    Every color below is a @token (e.g. @boxStroke), substituted by
    substitutePaletteTokens() in main.cpp against a single named palette —
@@ -15,14 +15,14 @@
                always, @boxStroke border, @boxStrokeHover border on hover,
                @boxStrokeActive border while being edited/opened/pressed)
    Special boxes (own colors instead of the box system above):
-               reset adjustments → @resetStroke / @resetStrokeHover
-               active layer row  → @activeLayerFill (border stays @boxStroke)
-               mode picker       → @modeFill / @modeStroke / @modeStrokeHover
+               mode picker       → border-image (mode_shape.svg), @modeFill/
+                                    @modeStroke/@modeStrokeHover on dialog CTAs
    Accent:     @accent @accentHover @accentPress          (orange CTA)
-   Selection:  @selBlue @selBlueHover                     (blue)
+   Selection:  @selBlue @selBlueHover                     (blue, palette items)
+   Select (lime): @selectFill @selectStroke   (layer row, Timeline/Library
+               tabs, Levels graph — lime fill @ 20% opacity, olive stroke/text)
    Danger:     @danger @dangerHover                       (red)
-   Other:      @keyOrange (timeline auto-key — distinct from @accent)
-               @scrollHandle @scrollHandleHover
+   Other:      @scrollHandle @scrollHandleHover
    ============================================================ */
 
 /* ── Global ─────────────────────────────────────────────────── */
@@ -130,7 +130,7 @@ QScrollArea > QWidget > QWidget {
 QPushButton#rectTab {
     background-color: transparent;
     color: @textDim;
-    border: none;
+    border: 1px solid transparent;
     border-radius: s(5)px;
     padding: s(12)px s(20)px;
     font-size: s(18)px;
@@ -139,9 +139,12 @@ QPushButton#rectTab {
 QPushButton#rectTab:hover {
     color: #C8C8C8;
 }
+/* Same treatment as the selected entry in a mode dropdown (#algoCell:checked):
+   light gray fill + light gray stroke, exactly. */
 QPushButton#rectTab:checked {
-    background-color: #3F3F3F;
-    color: @textTitle;
+    background-color: @surface2;
+    border-color: #555555;
+    color: @textBody;
 }
 
 /* ── Bottom bar (same colour as the side panels) ──────────────── */
@@ -187,9 +190,9 @@ QPushButton#autoKeyBtn {
 QPushButton#autoKeyBtn:hover   { border-color: @boxStrokeHover; }
 QPushButton#autoKeyBtn:pressed { border-color: @boxStrokeActive; }
 QPushButton#autoKeyBtn:checked {
-    background-color: @keyOrange;
-    border-color: @keyOrange;
-    color: #FFFFFF;
+    background-color: @selectFill;
+    border-color: @selectStroke;
+    color: @selectStroke;
 }
 
 #transportBox {
@@ -263,7 +266,7 @@ QPushButton#tabBtn[tabPos="last"]:checked {
 
 #filmstripEmptyHint {
     color: @textDim;
-    font-size: s(16)px;
+    font-size: s(22)px;
     font-weight: 500;
 }
 
@@ -280,22 +283,21 @@ QPushButton#exportBtn {
 QPushButton#exportBtn:hover   { border-color: @boxStrokeHover; }
 QPushButton#exportBtn:pressed { border-color: @boxStrokeActive; }
 
-/* ── Reset adjustments button — special box: transparent fill, its own
-   (warning-red) stroke instead of the standard @boxStroke ── */
+/* ── Reset adjustments button — same chrome as every other standard box ── */
 QPushButton#resetBtn {
     background-color: @boxFill;
     color: @textValue;
-    border: 1px solid @resetStroke;
+    border: 1px solid @boxStroke;
     border-radius: s(8)px;
     padding: 0 s(14)px;
     font-size: s(17)px;
     font-weight: 500;
 }
 QPushButton#resetBtn:hover {
-    border-color: @resetStrokeHover;
+    border-color: @boxStrokeHover;
 }
 QPushButton#resetBtn:pressed {
-    background-color: rgba(134, 65, 65, 60);
+    border-color: @boxStrokeActive;
 }
 
 /* ── Check row (Invert / Localize) — box in the standard box language;
@@ -313,17 +315,10 @@ QPushButton#checkRow:pressed { border-color: @boxStrokeActive; }
     font-size: s(17)px;
     font-weight: 500;
 }
-QLabel#checkSquare {
-    background-color: @boxFill;
-    border: 1px solid @boxStroke;
-    border-radius: s(4)px;
-}
-/* Persistent "on" indicator (not the transient click cue above): filled
-   solid, same blue family as @boxStrokeActive. */
-QLabel#checkSquare[checked="true"] {
-    background-color: @boxStrokeActive;
-    border-color: @boxStrokeActive;
-}
+/* checkSquare (Invert/Localize indicator) is a custom-painted widget now
+   (clover shape, matching the logo/iconBtn-hover silhouette) — see
+   CheckSquare in AdjustmentsPanel.cpp. No QSS box here; idle/checked/yellow
+   are painted directly. */
 
 /* ── Animation progress bar (playback prep / frame export) ─────── */
 QProgressBar#animProgressBar {
@@ -517,7 +512,7 @@ QPushButton#iconBtn {
     border-radius: 4px;
 }
 QPushButton#iconBtn:hover {
-    background-color: @surface2;
+    border-image: url(:/icons/hover_shape.svg) 0 0 0 0 stretch stretch;
 }
 
 /* Rotation quick-buttons (rotate90/mirror_x/mirror_y): same hover chrome as
@@ -578,7 +573,9 @@ QPushButton#favBtn {
     min-width:  24px;
     max-width:  24px;
 }
-QPushButton#favBtn:hover   { background-color: @surface2; }
+QPushButton#favBtn:hover {
+    border-image: url(:/icons/hover_shape.svg) 0 0 0 0 stretch stretch;
+}
 QPushButton#favBtn:pressed { background-color: #2A2A2A; }
 
 /* ── ComboBox ────────────────────────────────────────────────── */
@@ -634,21 +631,22 @@ QLabel#algoBoxLabel {
     font-weight: 500;
 }
 
-/* Mode picker: same shape as #algoBox, its own special-box colours (like a
-   permanent CTA) so it reads as the one control at the top of the column
-   that always shows what mode is active. */
+/* Mode picker: same slot as #algoBox, but its own scalloped shape
+   (mode_shape.svg, lime fill @ 20% baked into the asset) instead of a plain
+   box, so it reads as the one control at the top of the column that always
+   shows what mode is active. */
 QPushButton#algoBoxAccent {
-    background-color: @modeFill;
-    border: 1px solid @modeStroke;
-    border-radius: s(8)px;
+    border-image: url(:/icons/mode_shape.svg) 0 0 0 0 stretch stretch;
     padding: 0 s(12)px;
     text-align: left;
 }
-QPushButton#algoBoxAccent:hover { border-color: @modeStrokeHover; }
+QPushButton#algoBoxAccent:hover {
+    border-image: url(:/icons/mode_shape_hover.svg) 0 0 0 0 stretch stretch;
+}
 QLabel#algoBoxLabelAccent {
     background: transparent;
     border: none;
-    color: #FFFFFF;
+    color: @selectStroke;
     font-size: s(17)px;
     font-weight: 600;
 }
@@ -739,9 +737,9 @@ QSlider::handle:horizontal:hover {
     border-color: @boxStrokeActive;
 }
 /* Animated-parameter indicator: tint the value box's stroke when it has a
-   keyframe track (same orange as the timeline auto-key dot). */
+   keyframe track. */
 #dragSpinBox[animated="true"] {
-    border-color: @keyOrange;
+    border-color: #D2FC51;
 }
 
 /* Value text inside a DragSpinBox: transparent so the frame's own bg/border
@@ -869,11 +867,11 @@ QPushButton#layersToggleBtn:pressed {
     border-radius: s(10)px;
 }
 #layerRow[selected="true"] {
-    background-color: @activeLayerFill;
+    background-color: transparent;
     border: 1px solid @boxStroke;
 }
 #layerRowOuter:hover #layerRow[selected="true"] {
-    border-color: @boxStrokeHover;
+    border-color: @boxStroke;
 }
 
 /* Parent (source image) row in the cascade tree — a subtle outlined box. */
@@ -889,8 +887,8 @@ QPushButton#layersToggleBtn:pressed {
     border-color: @popupBorder;
 }
 #parentRow[selected="true"] {
-    background-color: #26364A;
-    border-color: @selBlue;
+    background-color: transparent;
+    border-color: @boxStroke;
 }
 
 #layerName {
@@ -899,18 +897,21 @@ QPushButton#layersToggleBtn:pressed {
     font-size: s(18)px;
     font-weight: 400;
 }
-#layerRow[selected="true"] #layerName {
-    color: #FFFFFF;
-    font-weight: 400;
-}
 
+/* Clamped to 24×24 real px — same fixed size as every other icon button
+   (#iconBtn) — so the hover shape reads consistently across the row instead
+   of the smaller scaled box (Ui::px(30)) C++ sets it to. */
 QPushButton#eyeBtn {
     background: transparent;
     border: none;
     border-radius: 4px;
+    min-width:  24px;
+    min-height: 24px;
+    max-width:  24px;
+    max-height: 24px;
 }
 QPushButton#eyeBtn:hover {
-    background-color: rgba(255, 255, 255, 28);
+    border-image: url(:/icons/hover_shape.svg) 0 0 0 0 stretch stretch;
 }
 
 /* Trash: an svg box, transparent by default like every other box, but keeps

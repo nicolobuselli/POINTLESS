@@ -1,19 +1,19 @@
-# ULTRATOOL
+# POINTLESS
 
 **A real-time halftone, dithering, and ASCII-art renderer for images and video.**
 
-ULTRATOOL turns photos and footage into dot screens, error-diffusion dithers,
+POINTLESS turns photos and footage into dot screens, error-diffusion dithers,
 ASCII glyph art, mosaic tile grids, and canonical 4-color CMYK halftone
 separations — live, with layers, blend modes, per-parameter localization, and
 a full keyframe animation timeline. It's a native C++/Qt6 desktop app: no
 browser, no subscription, no upload.
 
-<!-- ![ULTRATOOL screenshot](assets/screenshot.png) -->
+<!-- ![POINTLESS screenshot](assets/screenshot.png) -->
 
 ## Why
 
 Most dithering/halftone tools are either a one-shot filter (apply once, done)
-or a web toy with no layers and no video support. ULTRATOOL treats these
+or a web toy with no layers and no video support. POINTLESS treats these
 effects as a real compositing pipeline: stack multiple rendering modes as
 layers, blend them, mask and scale individual parameters over regions of the
 canvas, animate any of it on a timeline, and export straight to mp4.
@@ -48,14 +48,14 @@ canvas, animate any of it on a timeline, and export straight to mp4.
 - mp4 import/export via bundled FFmpeg; PNG sequence import.
 
 **Project files**
-- Full session save/load (`.ultra`, JSON) — frame, layers, transforms,
+- Full session save/load (`.less`, JSON) — frame, layers, transforms,
   animation, and an embedded still-image library.
 
 ## Download
 
 Grab the latest Windows build from the
 [Releases page](https://github.com/nicolobuselli/ULTRATOOL/releases/latest):
-download the zip, extract it anywhere, and run `ULTRATOOL.exe`. No Qt,
+download the zip, extract it anywhere, and run `POINTLESS.exe`. No Qt,
 CMake, or other install required — the zip already bundles the Qt DLLs and
 FFmpeg.
 

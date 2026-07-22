@@ -5,6 +5,7 @@
 #include <QRectF>
 #include <memory>
 #include <unordered_map>
+#include <functional>
 #include "../gpu/GpuFramePackage.h"
 
 class QRhi;

@@ -3,6 +3,7 @@
         <file alias="style.qss">../assets/style.qss</file>
         <file alias="fonts/FunnelDisplay.ttf">../assets/fonts/FunnelDisplay.ttf</file>
         <file alias="logo.png">../assets/logo.png</file>
+        <file alias="logo_wordmark.svg">../assets/logo_wordmark.svg</file>
         <file alias="icons/plus.svg">../assets/icons/plus.svg</file>
         <file alias="icons/add_image.svg">../assets/icons/add_image.svg</file>
         <file alias="icons/minus.svg">../assets/icons/minus.svg</file>
@@ -15,6 +16,15 @@
         <file alias="icons/corner_radius.svg">../assets/icons/corner_radius.svg</file>
         <file alias="icons/arrow.svg">../assets/icons/arrow.svg</file>
         <file alias="icons/arrow_up.svg">../assets/icons/arrow_up.svg</file>
+        <file alias="icons/arrow_mode.svg">../assets/icons/arrow_mode.svg</file>
+        <file alias="icons/arrow_up_mode.svg">../assets/icons/arrow_up_mode.svg</file>
+        <file alias="icons/mode_shape.svg">../assets/icons/mode_shape.svg</file>
+        <file alias="icons/mode_shape_hover.svg">../assets/icons/mode_shape_hover.svg</file>
+        <file alias="icons/tl_counter.svg">../assets/icons/tl_counter.svg</file>
+        <file alias="icons/cta_import.svg">../assets/icons/cta_import.svg</file>
+        <file alias="icons/cta_import_hover.svg">../assets/icons/cta_import_hover.svg</file>
+        <file alias="icons/import.svg">../assets/icons/import.svg</file>
+        <file alias="icons/hover_shape.svg">../assets/icons/hover_shape.svg</file>
         <file alias="icons/pick_color.svg">../assets/icons/pick_color.svg</file>
         <file alias="icons/color_picker.svg">../assets/icons/color_picker.svg</file>
         <file alias="icons/layers.svg">../assets/icons/layers.svg</file>

@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QMatrix4x4>
 #include <QSet>
+#include <QtMath>
 #include <algorithm>
 #include <cmath>
 #include <cstring>

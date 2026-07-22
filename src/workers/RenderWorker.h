@@ -54,12 +54,6 @@ public:
     // (which is downscaled to the same size), making the swap near-invisible.
     void setInteractivePreviewPx(int px) { m_interactivePx = qBound(256, px, 2000); }
 
-    // Supersample the full pass when the user has zoomed in, so the (vector)
-    // symbols are rendered at the displayed resolution instead of upscaling a
-    // frame-sized raster. 1.0 = render at frame resolution. Capped in launchFull.
-    void setFullQualityScale(float s) { m_fullQualityScale = qBound(1.0f, s, 6.0f); }
-    static constexpr int FULL_QUALITY_MAX_PX = 4096;   // budget cap for the full pass
-
     static constexpr int FAST_MAX_PX        = 600;   // preview res for the playback cache
     static constexpr int INTERACTIVE_MAX_PX = 900;   // default live drag preview cap
     static constexpr int FULL_DELAY_MS      = 120;   // ms idle before full render
@@ -176,7 +170,6 @@ private:
     QHash<int, QImage> scaledLayerSrcCached(const QHash<int, QImage>& src, float scale);
 
     int   m_interactivePx     = INTERACTIVE_MAX_PX;
-    float m_fullQualityScale  = 1.0f;   // zoom-driven supersample for the full pass
 
     QFutureWatcher<QImage> m_fastWatcher;
     QFutureWatcher<QImage> m_fullWatcher;

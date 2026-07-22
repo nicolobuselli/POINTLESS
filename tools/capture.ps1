@@ -1,5 +1,5 @@
 param(
-    [string]$Exe = "build\Desktop_Qt_6_11_1_MinGW_64_bit-Debug\ULTRA_Ditherer.exe",
+    [string]$Exe = "build\Desktop_Qt_6_11_1_MinGW_64_bit-Debug\POINTLESS.exe",
     [string]$Out = "capture.png",
     [int]$WaitMs = 2500,
     [switch]$Reuse
@@ -55,10 +55,10 @@ public class Win {
 
 $proc = $null
 if ($Reuse) {
-    $proc = Get-Process -Name "ULTRA_Ditherer" -ErrorAction SilentlyContinue | Select-Object -First 1
+    $proc = Get-Process -Name "POINTLESS" -ErrorAction SilentlyContinue | Select-Object -First 1
 }
 if (-not $proc) {
-    Stop-Process -Name "ULTRA_Ditherer" -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name "POINTLESS" -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 300
     $proc = Start-Process -FilePath $Exe -PassThru
     Start-Sleep -Milliseconds $WaitMs

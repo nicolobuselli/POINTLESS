@@ -17,6 +17,7 @@ class MosaicPage;
 class HalftonePage;
 class TonalControlsWidget;
 class FillSwatch;
+class QScrollArea;
 
 /**
  * ModePanel (right column)
@@ -69,6 +70,11 @@ public:
     // Active mode page's control widgets → ParamId, for hover-to-keyframe.
     QHash<QWidget*, ParamId> paramWidgets() const;
 
+    // Scrolls the section stack back to its top row — called whenever the
+    // active layer/mode changes, so the column always starts flush with its
+    // title instead of keeping whatever offset the previous mode left.
+    void scrollToTop();
+
 signals:
     void paramsChanged();
     void tonalChanged();
@@ -88,6 +94,7 @@ private:
     DragSpinBox* m_noModeOpacity = nullptr;
     QWidget*     m_mosaicTextsSection = nullptr;   // Texts section (Mosaic only, between Fill and Background)
     PopupPicker* m_modePick = nullptr;   // mode dropdown (replaced the tab row)
+    QScrollArea* m_scroll   = nullptr;   // section stack viewport — see scrollToTop()
 
     DotGridPage*  m_dotGridPage  = nullptr;
     DitherPage*   m_ditherPage   = nullptr;

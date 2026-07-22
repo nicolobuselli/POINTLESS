@@ -137,9 +137,10 @@ public:
         hl->setSpacing(0);
 
         const int lh = Ui::px(34);
+        const int lw = qRound(lh * (827.0 / 337.0));   // logo_wordmark.svg aspect ratio
         auto* logo = new QLabel;
         logo->setObjectName("titleLogo");
-        logo->setPixmap(QIcon(":/logo.png").pixmap(QSize(lh, lh)));
+        logo->setPixmap(QIcon(":/logo_wordmark.svg").pixmap(QSize(lw, lh)));
         logo->setAttribute(Qt::WA_TransparentForMouseEvents);  // drag through it
         hl->addWidget(logo);
         hl->addStretch(1);
@@ -187,7 +188,7 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_worker(new RenderWorker(this))
 {
-    setWindowTitle("ULTRATOOL");
+    setWindowTitle("POINTLESS");
     setWindowIcon(QIcon(":/logo.png"));
     setMinimumSize(1100, 680);
 
@@ -466,7 +467,11 @@ MainWindow::MainWindow(QWidget* parent)
             if (!animCanPlayLive()) {
                 m_playTimer.stop();
                 m_playLive = false;
-                if (!buildPlayCache() || m_playCache.isEmpty()) {
+                // Long delay: this rebuild happens silently mid-playback (a
+                // param edit made the mode CPU-only) — flashing a dialog for
+                // every quick rebuild here was the reported "popup on every
+                // click" bug. Only a genuinely stalled rebuild should surface it.
+                if (!buildPlayCache(2000) || m_playCache.isEmpty()) {
                     m_playing = false;
                     m_timeline->setPlayingSilent(false);
                     scheduleRender();
@@ -491,7 +496,10 @@ MainWindow::MainWindow(QWidget* parent)
         if (!m_playCacheValid || m_playCache.isEmpty()
             || img.state != m_playCacheParams || img.anim != m_playCacheAnim) {
             m_playTimer.stop();
-            if (!buildPlayCache() || m_playCache.isEmpty()) {
+            // Long delay — see the m_playLive branch above: this fires on every
+            // edit/scrub while a play loop is already running, so a short
+            // minimumDuration flashed the dialog constantly.
+            if (!buildPlayCache(2000) || m_playCache.isEmpty()) {
                 m_playing = false;
                 m_timeline->setPlayingSilent(false);
                 scheduleRender();
@@ -580,19 +588,10 @@ MainWindow::MainWindow(QWidget* parent)
         syncLayersPanel();
     });
 
-    // Re-render at the zoomed resolution once the user stops scrolling, so the
-    // vector symbols sharpen up (the existing raster is shown upscaled meanwhile).
-    m_zoomRenderTimer.setSingleShot(true);
-    m_zoomRenderTimer.setInterval(150);
-    connect(&m_zoomRenderTimer, &QTimer::timeout, this, [this]() {
-        // Nothing to gain (zoomed out, or a dither layer that mustn't re-process)
-        // and a full frame is already shown → keep it, don't re-render.
-        if (zoomQualityScale() <= 1.01f
-            && (!m_lastRender.isNull() || m_lastPkgRender.valid)) return;
-        scheduleRender(/*previewOnly=*/false, /*qualityOnly=*/true);
-    });
-    connect(m_preview, &PreviewWidget::zoomChanged, this,
-            [this]() { m_zoomRenderTimer.start(); });
+    // Zoom no longer drives a re-render: the full pass always renders at
+    // native frame resolution and the canvas just scales the raster on
+    // screen (see RenderWorker::launchFull for why the old zoom-driven
+    // supersample was removed).
 
     // ── Shortcuts ────────────────────────────────────────────
     auto addShortcut = [this](const QKeySequence& seq, auto slot) {
@@ -1246,6 +1245,9 @@ void MainWindow::setPlayhead(int frame)
         syncLayersPanel();
     }
     m_timeline->setPlayheadSilent(frame);
+    // No keyframes and no video frames: the rendered image is identical at
+    // every frame, so scrubbing the playhead has nothing to re-render.
+    if (!img.anim.hasAnimation() && img.frames.isEmpty()) return;
     scheduleRender();
 }
 
@@ -1372,7 +1374,7 @@ void MainWindow::onPlayToggled(bool playing)
 
 // Pre-render every frame at preview resolution so playback is smooth. Returns
 // false if there's nothing to play or the user canceled.
-bool MainWindow::buildPlayCache()
+bool MainWindow::buildPlayCache(int dialogDelayMs)
 {
     if (m_current < 0) return false;
     SessionImage& img = m_images[m_current];
@@ -1385,14 +1387,14 @@ bool MainWindow::buildPlayCache()
     const int f0 = img.anim.frameStart;
     const int f1 = qMax(f0, img.anim.frameEnd);
     const int count = f1 - f0 + 1;
-    if (count <= 1 && !img.anim.hasAnimation() && img.frames.isEmpty())
-        return false;   // single still, nothing to animate
+    if (!img.anim.hasAnimation() && img.frames.isEmpty())
+        return false;   // no keyframes, no video frames: every frame is identical
 
     m_playCache.clear();
     m_playCache.reserve(count);
 
     AnimProgressDialog progress("Preparing playback…", count, this);
-    progress.setMinimumDuration(300);
+    progress.setMinimumDuration(dialogDelayMs);
 
     for (int i = 0; i < count; ++i) {
         progress.setValue(i);
@@ -1438,6 +1440,8 @@ void MainWindow::selectLayerInternal(int layerId, bool makeVisible)
     }
 
     applyParams(st);
+    m_left->scrollToTop();
+    m_right->scrollToTop();
     syncLayersPanel();
     scheduleRender();
     m_undoTimer.start();
@@ -1519,6 +1523,7 @@ void MainWindow::onModeSelected(RenderMode m)
     }
 
     applyParams(st);
+    m_right->scrollToTop();   // new mode's section stack starts fresh
     syncLayersPanel();
     scheduleRender();
     m_undoTimer.start();
@@ -1571,6 +1576,8 @@ void MainWindow::onLayerRangeRequested(int layerId)
 
     st.activeLayerId = layerId;
     applyParams(st);
+    m_left->scrollToTop();
+    m_right->scrollToTop();
     syncLayersPanel();
     scheduleRender();
 }
@@ -1709,6 +1716,17 @@ void MainWindow::onLayerTransformChanged(const LayerTransform& t)
     m_undoTimer.start();
 }
 
+// locParamKind(p) alone rejects LayerKind::Original, since Original has no
+// mode-specific settings struct of its own — but maskParamFor() above still
+// routes its whole-layer mask point to DgMask, borrowing dotGrid.loc (see
+// layerLocMap below), so Original must be accepted for that one param too —
+// otherwise Localize is a dead toggle on a mode-less layer.
+static bool locParamMatchesLayer(LayerKind kind, LocParam p)
+{
+    if (kind == LayerKind::Original) return p == LocParam::DgMask;
+    return kind == locParamKind(p);
+}
+
 // The LocMap holding LocParam p's point on layer l (settings struct by kind).
 static LocMap& layerLocMap(Layer& l, LocParam p)
 {
@@ -1727,7 +1745,7 @@ void MainWindow::onLocalizationChanged(LocParam p, const LocPoint& pt)
 {
     if (m_current < 0) return;
     Layer* l = activeLayer();
-    if (!l || l->kind != locParamKind(p)) return;
+    if (!l || !locParamMatchesLayer(l->kind, p)) return;
     LocMap& m = layerLocMap(*l, p);
     if (locPointOr(m, p) == pt) return;
 
@@ -1751,7 +1769,7 @@ void MainWindow::onLocalizationToggleRequested(LocParam p)
 {
     if (m_current < 0) return;
     Layer* l = activeLayer();
-    if (!l || l->kind != locParamKind(p)) return;
+    if (!l || !locParamMatchesLayer(l->kind, p)) return;
 
     LocPoint& pt = layerLocMap(*l, p)[p];
     pt.enabled = !pt.enabled;
@@ -1867,7 +1885,9 @@ void MainWindow::pushPreviewTransform()
             case LayerKind::Dither:   m = &l->dither.loc;   break;
             case LayerKind::Ascii:    m = &l->ascii.loc;    break;
             case LayerKind::Mosaic:   m = &l->mosaic.loc;   break;
-            default: break;
+            // Original (mode-less) borrows dotGrid.loc too — see
+            // locParamMatchesLayer()/layerLocMap() above.
+            default: m = &l->dotGrid.loc; break;
         }
         if (m)
             for (const auto& [p, pt] : *m)
@@ -2172,23 +2192,6 @@ void MainWindow::onDeleteParentRequested(int mediaId)
     commitStructuralChange();
 }
 
-// Supersample factor for the full pass at the current zoom. 1.0 = render at the
-// native frame resolution (preview just upscales it).
-float MainWindow::zoomQualityScale() const
-{
-    // Supersample the full-quality pass to match how big the frame actually
-    // shows on screen (canvas zoom AND a layer's own Transform Scale both
-    // land here, since currentViewScale() is measured post-fit). Debounced
-    // via m_zoomRenderTimer (150ms after the last zoomChanged) so this never
-    // fires on every scroll tick — only once the zoom settles.
-    // ponytail: this resamples the WHOLE document uniformly, so Dither's
-    // pixel grid (defined in absolute frame px) shifts slightly when the
-    // supersample kicks in. Give Dither its own opt-out if that ever bugs
-    // someone in practice.
-    const double s = m_preview ? m_preview->currentViewScale() : 1.0;
-    return s > 0.0 ? float(s) : 1.0f;
-}
-
 void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
 {
     if (m_current < 0) return;
@@ -2246,13 +2249,15 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
                          qRound(m_preview->height() * dpr));
     // While dragging a layer on the canvas, render smaller so each interactive
     // pass is far cheaper (the full-res pass lands once the drag ends).
-    if (m_transformDragging) previewPx = qMax(360, previewPx / 2);
+    if (m_transformDragging) {
+        previewPx = qMax(360, previewPx / 2);
+    } else if (animCanPlayLive()) {
+        // Every layer renders live on GPU, so the interactive pass is cheap even
+        // at full frame resolution — run it there, instead of the preview
+        // "jumping" when the frame-res full pass lands.
+        previewPx = qMax(previewPx, qMax(params.frameW, params.frameH));
+    }
     m_worker->setInteractivePreviewPx(previewPx);
-
-    // Zoomed in → render the full pass larger so the vector symbols stay crisp
-    // instead of upscaling a frame-sized raster (the worker caps the budget).
-    // Skipped for dither (would change the pixel processing — see helper).
-    m_worker->setFullQualityScale(zoomQualityScale());
 
     const QHash<int, QImage> ls = layerSourcesAt(img, img.anim.playhead);
     if (qualityOnly)
@@ -2538,7 +2543,7 @@ int MainWindow::ensureBoard()
     return m_current;
 }
 
-// Ctrl+S. Video sources aren't supported by the .ultra file yet: any layer,
+// Ctrl+S. Video sources aren't supported by the .less file yet: any layer,
 // parent group, and animation track that draws from a video media entry is
 // silently dropped from what's written (the library still holds the video —
 // only the saved file is missing it).
@@ -2550,11 +2555,11 @@ bool MainWindow::saveProject(bool forceDialog)
     QString path = m_projectPath;
     if (forceDialog || path.isEmpty()) {
         const QString suggested = path.isEmpty()
-            ? (img.title.isEmpty() ? "untitled.ultra" : img.title + ".ultra") : path;
+            ? (img.title.isEmpty() ? "untitled.less" : img.title + ".less") : path;
         path = QFileDialog::getSaveFileName(this, "Save project", suggested,
-                                            "ULTRATOOL project (*.ultra)");
+                                            "POINTLESS project (*.less)");
         if (path.isEmpty()) return false;
-        if (!path.endsWith(".ultra", Qt::CaseInsensitive)) path += ".ultra";
+        if (!path.endsWith(".less", Qt::CaseInsensitive)) path += ".less";
     }
 
     QSet<int> stillMediaIds;
@@ -2613,13 +2618,13 @@ bool MainWindow::saveProject(bool forceDialog)
 void MainWindow::openProject()
 {
     const QString path = QFileDialog::getOpenFileName(this, "Open project", "",
-                                                       "ULTRATOOL project (*.ultra)");
+                                                       "POINTLESS project (*.less)");
     if (path.isEmpty()) return;
     openProjectFromPath(path);
 }
 
 // Shared by the Ctrl+O dialog and a path handed in on the command line
-// (double-clicking a .ultra file once file association is registered).
+// (double-clicking a .less file once file association is registered).
 void MainWindow::openProjectFromPath(const QString& path)
 {
     ProjectIO::ProjectData data;
@@ -2794,6 +2799,8 @@ void MainWindow::switchToImage(int index)
     m_right->setSourceImage(m_images[index].source);
     m_left->setFileName(m_images[index].title);
     applyParams(m_images[index].state);
+    m_left->scrollToTop();
+    m_right->scrollToTop();
     m_filmstrip->setActive(index);
     m_left->setAddLayerVisible(true);
     m_layersPanel->setVisible(true);

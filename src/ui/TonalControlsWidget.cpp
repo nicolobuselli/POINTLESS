@@ -361,7 +361,10 @@ public:
         save->setObjectName("accentBtn");
         save->setFixedHeight(Ui::px(36));
         save->setMinimumWidth(Ui::px(92));
-        save->setStyleSheet(QString("QPushButton#accentBtn{min-height:%1px;padding:0 %2px;font-size:%3px;}")
+        save->setStyleSheet(QString("QPushButton#accentBtn{min-height:%1px;padding:0 %2px;font-size:%3px;"
+                                     "background-color:#D2FC51;color:#1E1E1E;}"
+                                     "QPushButton#accentBtn:hover{background-color:#DFFF7A;}"
+                                     "QPushButton#accentBtn:pressed{background-color:#B9DE3F;}")
                                 .arg(Ui::px(36)).arg(Ui::px(16)).arg(Ui::px(15)));
         save->setCursor(Qt::PointingHandCursor);
         br->addWidget(save);
@@ -571,6 +574,15 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
 
 void TonalControlsWidget::setSettings(const TonalSettings& s)
 {
+    // applyParams() pushes the active layer's tonal settings back into this
+    // panel on almost every edit (any param change, timeline scrub — see
+    // MainWindow::applyParams), even when tonal itself didn't change.
+    // rebuildRows() below destroys and recreates every swatch/slider, which
+    // if the mouse happens to be hovering one (only possible in multi-tone
+    // Palette/FixedTones layouts, since a single tone hides its slider)
+    // yanks a live widget out from under a native hover/tooltip and flashes
+    // a phantom tooltip window. Skip the whole rebuild when nothing changed.
+    if (s == m_settings) return;
     m_settings = s;
     if (m_settings.tones.empty())
         m_settings.tones = defaultTones(1);

@@ -414,16 +414,16 @@ void LevelsWidget::drawHandle(QPainter& p, float x, Handle h, bool active)
     QColor fill, stroke;
     switch (h) {
         case Handle::Black:
-            fill   = QColor(0x0A, 0x0A, 0x0A);
-            stroke = active ? QColor("#D0D0D0") : QColor("#5D5D5D");
+            fill   = QColor("#2B3313");
+            stroke = QColor("#607817");
             break;
         case Handle::Mid:
-            fill   = QColor(0x82, 0x82, 0x82);
-            stroke = active ? QColor("#E0E0E0") : QColor("#A0A0A0");
+            fill   = QColor("#607817");
+            stroke = QColor("#607817");
             break;
         case Handle::White:
-            fill   = QColor(0xFF, 0xFF, 0xFF);
-            stroke = active ? QColor("#FFFFFF") : QColor("#909090");
+            fill   = QColor("#D2FC51");
+            stroke = QColor("#89A928");
             break;
         default: return;
     }
@@ -476,8 +476,13 @@ void LevelsWidget::paintEvent(QPaintEvent*)
             p.save();
             p.setClipPath(boxPath);
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor(0xD9, 0xD9, 0xD9));
+            p.setBrush(QColor(210, 252, 81, 51));
             p.drawPolygon(poly);
+            // Stroke only the top curve (skip the baseline corners) so the
+            // box's own gray bottom border isn't painted over in lime.
+            p.setPen(QPen(QColor("#A0C03F"), 1.5));
+            p.setBrush(Qt::NoBrush);
+            p.drawPolyline(poly.constData() + 1, poly.size() - 2);
             p.restore();
         }
     }
@@ -1403,7 +1408,7 @@ UnsavedChangesDialog::UnsavedChangesDialog(const QString& documentName, QWidget*
     auto* barL = new QHBoxLayout(bar);
     barL->setContentsMargins(Ui::px(24), 0, 0, 0);
     barL->setSpacing(0);
-    auto* title = new QLabel("ULTRATOOL");
+    auto* title = new QLabel("POINTLESS");
     title->setObjectName("miniTitleText");
     barL->addWidget(title);
     barL->addStretch(1);
@@ -1500,7 +1505,7 @@ StyledMessageBox::StyledMessageBox(const QString& message, QWidget* parent,
     auto* barL = new QHBoxLayout(bar);
     barL->setContentsMargins(Ui::px(24), 0, 0, 0);
     barL->setSpacing(0);
-    auto* title = new QLabel("ULTRATOOL");
+    auto* title = new QLabel("POINTLESS");
     title->setObjectName("miniTitleText");
     barL->addWidget(title);
     barL->addStretch(1);
@@ -1803,18 +1808,23 @@ void PopupPicker::setPlaceholder(const QString& text)
 
 void PopupPicker::setAccent(bool on)
 {
+    m_accent = on;
     setObjectName(on ? "algoBoxAccent" : "algoBox");
     m_label->setObjectName(on ? "algoBoxLabelAccent" : "algoBoxLabel");
     style()->unpolish(this);
     style()->polish(this);
     style()->unpolish(m_label);
     style()->polish(m_label);
+    setArrowOpen(m_arrow->property("open").toBool());
 }
 
 void PopupPicker::setArrowOpen(bool open)
 {
-    m_arrow->setPixmap(QIcon(open ? ":/icons/arrow_up.svg" : ":/icons/arrow.svg")
-                           .pixmap(Ui::px(14), Ui::px(8)));
+    m_arrow->setProperty("open", open);
+    const QString res = m_accent
+        ? (open ? ":/icons/arrow_up_mode.svg" : ":/icons/arrow_mode.svg")
+        : (open ? ":/icons/arrow_up.svg"      : ":/icons/arrow.svg");
+    m_arrow->setPixmap(QIcon(res).pixmap(Ui::px(14), Ui::px(8)));
 }
 
 void PopupPicker::updateElide()

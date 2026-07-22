@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ULTRATOOL VERSION 1.0.0 LANGUAGES CXX)
+project(POINTLESS VERSION 1.0.0 LANGUAGES CXX)
 
 # ── C++ standard ────────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD 17)
@@ -87,15 +87,15 @@ set(SOURCES
 
 # ── Executable ───────────────────────────────────────────────────────────────
 if(WIN32)
-    add_executable(ULTRATOOL WIN32 ${SOURCES})
+    add_executable(POINTLESS WIN32 ${SOURCES})
 else()
-    add_executable(ULTRATOOL ${SOURCES})
+    add_executable(POINTLESS ${SOURCES})
 endif()
 
 # ── GPU shaders (baked to portable .qsb via Qt ShaderTools) ─────────────────
 # GLSL floor raised to 300es/330: dot.vert folds a uint constant ≥ 2^31
 # (PCG hash increment) that the default 100es/120 targets cannot express.
-qt_add_shaders(ULTRATOOL "ultratool_shaders"
+qt_add_shaders(POINTLESS "pointless_shaders"
     PREFIX "/shaders"
     BASE "src/gpu/shaders"
     GLSL "300es,330"
@@ -121,7 +121,7 @@ qt_add_shaders(ULTRATOOL "ultratool_shaders"
 )
 
 # ── Link Qt ──────────────────────────────────────────────────────────────────
-target_link_libraries(ULTRATOOL
+target_link_libraries(POINTLESS
     PRIVATE
         Qt6::Core
         Qt6::Gui
@@ -130,19 +130,19 @@ target_link_libraries(ULTRATOOL
         Qt6::Concurrent
 )
 
-# Shell32: SHChangeNotify (main.cpp's .ultra file-association registration).
+# Shell32: SHChangeNotify (main.cpp's .less file-association registration).
 if(WIN32)
-    target_link_libraries(ULTRATOOL PRIVATE Shell32)
+    target_link_libraries(POINTLESS PRIVATE Shell32)
 endif()
 
 # ── Include paths ────────────────────────────────────────────────────────────
-target_include_directories(ULTRATOOL PRIVATE src)
+target_include_directories(POINTLESS PRIVATE src)
 
 # QRhi "semi-public" headers (rhi/qrhi.h) live in QtGui's versioned private
 # include dirs; this kit exports neither a Qt6::GuiPrivate target nor a
 # populated Qt6Gui_PRIVATE_INCLUDE_DIRS, so derive the paths from Qt6_DIR.
 get_filename_component(_qt_include_root "${Qt6_DIR}/../../../include" ABSOLUTE)
-target_include_directories(ULTRATOOL PRIVATE
+target_include_directories(POINTLESS PRIVATE
     "${_qt_include_root}/QtGui/${Qt6_VERSION}"
     "${_qt_include_root}/QtGui/${Qt6_VERSION}/QtGui"
 )
@@ -154,11 +154,11 @@ if(WIN32)
     find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS "${_qt_bin_dir}")
 
     if(WINDEPLOYQT_EXECUTABLE)
-        add_custom_command(TARGET ULTRATOOL POST_BUILD
+        add_custom_command(TARGET POINTLESS POST_BUILD
             COMMAND "${WINDEPLOYQT_EXECUTABLE}"
                     --no-translations
                     --no-opengl-sw
-                    "$<TARGET_FILE:ULTRATOOL>"
+                    "$<TARGET_FILE:POINTLESS>"
             COMMENT "Running windeployqt..."
             VERBATIM
         )
@@ -166,10 +166,10 @@ if(WIN32)
 
     # Bundle ffmpeg.exe next to the app so video import/export works out of the box.
     if(EXISTS "${CMAKE_SOURCE_DIR}/tools/ffmpeg.exe")
-        add_custom_command(TARGET ULTRATOOL POST_BUILD
+        add_custom_command(TARGET POINTLESS POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${CMAKE_SOURCE_DIR}/tools/ffmpeg.exe"
-                    "$<TARGET_FILE_DIR:ULTRATOOL>/ffmpeg.exe"
+                    "$<TARGET_FILE_DIR:POINTLESS>/ffmpeg.exe"
             COMMENT "Bundling ffmpeg.exe..."
             VERBATIM
         )
@@ -178,7 +178,7 @@ endif()
 
 # ── Compiler warnings ─────────────────────────────────────────────────────────
 if(MSVC)
-    target_compile_options(ULTRATOOL PRIVATE /W3)
+    target_compile_options(POINTLESS PRIVATE /W3)
 else()
-    target_compile_options(ULTRATOOL PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(POINTLESS PRIVATE -Wall -Wextra -Wpedantic)
 endif()

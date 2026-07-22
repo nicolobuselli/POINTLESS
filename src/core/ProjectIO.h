@@ -8,7 +8,7 @@
 
 // ============================================================
 //  ProjectIO — save/load one composition to a self-contained
-//  .ultra JSON file (frame, layers, parents, animation, and the
+//  .less JSON file (frame, layers, parents, animation, and the
 //  still-image library, each image embedded as base64 PNG).
 //
 //  Video clips aren't supported: callers should strip any layer,

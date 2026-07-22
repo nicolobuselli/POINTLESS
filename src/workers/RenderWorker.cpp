@@ -10,25 +10,11 @@
 #include <QPainter>
 #include <QSvgGenerator>
 #include <QtConcurrent/QtConcurrent>
-#include <QCoreApplication>
-#include <QElapsedTimer>
-#include <QFile>
+#include <algorithm>
 #include <climits>
 #include <cmath>
 
 namespace {
-
-// ponytail: temporary perf probe (perf.log next to the exe) — remove once the
-// GPU phasing is settled. Only slow frames are logged, so it stays small.
-void perfLog(const QString& line)
-{
-    static QMutex mx;               // fast + full pass can run concurrently
-    QMutexLocker lock(&mx);
-    QFile f(QCoreApplication::applicationDirPath() + "/perf.log");
-    if (f.size() > 512 * 1024) return;   // cap, don't grow unbounded
-    if (f.open(QIODevice::Append | QIODevice::Text))
-        f.write((line + "\n").toUtf8());
-}
 
 float symbolSupersampleFactor(const Layer& layer, const QSize& size)
 {
@@ -88,7 +74,26 @@ void RenderWorker::renderLayerInto(QPainter& painter, const QImage& adjusted,
             // opacity into the mode render instead.
             const qreal prevOpacity = painter.opacity();
             painter.setOpacity(prevOpacity * qBound(0.0f, layer.opacity, 1.0f));
-            painter.drawImage(0, 0, adjusted);
+
+            // Localize has no mode-specific settings struct to borrow a loc
+            // map from here, so it reuses dotGrid.loc (maskParamFor() already
+            // routes a mode-less layer's mask point there) — same spotlight
+            // fade every mode renderer applies to its own output.
+            const LocMask lm = locMask(layer.dotGrid.loc, float(adjusted.width()), float(adjusted.height()));
+            if (lm.on) {
+                QImage masked = adjusted.convertToFormat(QImage::Format_ARGB32);
+                for (int y = 0; y < masked.height(); ++y) {
+                    QRgb* line = reinterpret_cast<QRgb*>(masked.scanLine(y));
+                    for (int x = 0; x < masked.width(); ++x) {
+                        const QRgb px = line[x];
+                        const float m = lm.mask(float(x), float(y));
+                        line[x] = qRgba(qRed(px), qGreen(px), qBlue(px), qRound(qAlpha(px) * m));
+                    }
+                }
+                painter.drawImage(0, 0, masked);
+            } else {
+                painter.drawImage(0, 0, adjusted);
+            }
             painter.setOpacity(prevOpacity);
             break;
         }
@@ -458,7 +463,6 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
     pkg.bg = bg;
 
     struct Job { QImage origSrc; Layer origLayer; QImage rendered; bool gpuAdjust = false;
-                 qint64 renderMs = 0;
                  bool instanced = false; float spacingScale = 1.0f; bool halftone = false;
                  bool adjChain = false; bool ditherScr = false; bool mosaicScr = false;
                  bool asciiScr = false; };
@@ -467,7 +471,10 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
         if (!it->visible) continue;
         QImage src = layerSrc.contains(it->id) ? layerSrc.value(it->id) : source;
         if (src.isNull()) continue;
-        Job j{ src, *it, {}, gpuAdjustableLayer(*it) };
+        Job j;
+        j.origSrc = src;
+        j.origLayer = *it;
+        j.gpuAdjust = gpuAdjustableLayer(*it);
         j.adjChain  = gpuAdjustChainLayer(*it);
         j.instanced = (it->kind == LayerKind::DotGrid
                        && DotGridRenderer::gpuRenderable(it->dotGrid));
@@ -481,9 +488,6 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
                        && AsciiRenderer::gpuRenderable(it->ascii));
         jobs.push_back(std::move(j));
     }
-
-    QElapsedTimer pkgTimer;
-    pkgTimer.start();
 
     QtConcurrent::blockingMap(jobs, [this](Job& j) {
         // Same cache key discipline as renderDocumentImpl.
@@ -525,7 +529,6 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
             }
         }
         if (!hit) {
-            QElapsedTimer t; t.start();
             if (j.gpuAdjust || j.adjChain) {
                 j.rendered = j.origSrc;
             } else if (j.halftone || j.instanced || j.ditherScr || j.mosaicScr
@@ -556,7 +559,6 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
                 prerenderAtFrameRes(wsrc, wlayer);
                 j.rendered = renderLayer(wsrc, wlayer);
             }
-            j.renderMs = t.elapsed();
             // Upload format, converted HERE (worker, parallel, cached) so the
             // GUI thread never pays a per-frame swizzle in ensureLayerTextures.
             // Adjust-chain inputs (screen sources + neighborhood-op Originals)
@@ -625,22 +627,6 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
         pkg.layers.append(gl);
     }
     pkg.valid = true;
-
-    const qint64 total = pkgTimer.elapsed();
-    if (total > 8) {   // pure cache-hit packages are sub-ms noise
-        QString detail;
-        for (const Job& j : jobs)
-            if (j.renderMs > 0) {
-                const QSize sz = j.rendered.size();
-                detail += QString(" [id %1 kind %2%3: %4ms %5x%6]")
-                    .arg(j.origLayer.id).arg(int(j.origLayer.kind))
-                    .arg(j.instanced ? QStringLiteral(" inst") : QString())
-                    .arg(j.renderMs).arg(sz.width()).arg(sz.height());
-            }
-        perfLog(QString("pkg %1x%2 %3 layers %4ms%5")
-                .arg(outSize.width()).arg(outSize.height())
-                .arg(pkg.layers.size()).arg(total).arg(detail));
-    }
     return pkg;
 }
 
@@ -1035,23 +1021,19 @@ void RenderWorker::launchFull()
 {
     if (m_sourceImage.isNull()) return;
 
-    QImage src = m_sourceImage;
-    SessionParams p = m_latestParams;
-    QHash<int,QImage> ls = m_layerSrc;
-
-    // Zoom-driven supersample: render the whole document larger so the vector
-    // symbols (halftone dots / ascii glyphs) are drawn at the displayed
-    // resolution instead of upscaling a frame-sized raster. Capped to a pixel
-    // budget so a deep zoom can't blow up memory / stall the export-grade pass.
-    const int frameMax = qMax(1, qMax(p.frameW, p.frameH));
-    const float ss = qMin(m_fullQualityScale, float(FULL_QUALITY_MAX_PX) / float(frameMax));
-    if (ss > 1.01f) {
-        src = m_sourceImage.scaled(qMax(1, qRound(m_sourceImage.width()  * ss)),
-                                   qMax(1, qRound(m_sourceImage.height() * ss)),
-                                   Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        p  = scaledForPreview(m_latestParams, ss);   // frame + per-pixel params up
-        ls = scaledLayerSrc(m_layerSrc, ss);          // per-layer media up
-    }
+    // Full pass always renders at native frame resolution. This used to
+    // supersample larger for crisper vector symbols (halftone dots / ascii
+    // glyphs) the deeper the canvas was zoomed in, but rescaling per-pixel
+    // params (dither pixelSize, mosaic spacing, dot/halftone spacing) by a
+    // continuously-varying zoom factor meant every zoom tick landed on a
+    // different rounded pixel grid: raster-quantized modes (Dither, Mosaic)
+    // visibly changed color/pattern while zooming, and re-rendering at an
+    // ever-larger supersampled size on every tick was slow. Removed rather
+    // than patched per-mode — native resolution is simpler and correct for
+    // all modes; only extra crispness at deep zoom is given up.
+    const QImage src = m_sourceImage;
+    const SessionParams p = m_latestParams;
+    const QHash<int,QImage> ls = m_layerSrc;
 
     emit renderStarted(false);
 

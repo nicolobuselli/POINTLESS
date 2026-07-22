@@ -80,6 +80,7 @@ struct GpuLayer {
     // Effects (non-square only)/Braille/Palette → CPU (AsciiRenderer::
     // gpuRenderable).
     AsciiSettings asciiSettings;
+
     QSize          contentSize;   // raster size for both paths (== image.size() when raster)
 };
 

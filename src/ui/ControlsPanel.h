@@ -56,6 +56,9 @@ public:
     // Control widget → ParamId (Parameters + Transform), for hover-to-keyframe.
     QHash<QWidget*, ParamId> paramWidgets() const;
 
+    // Forwards to AdjustmentsPanel::scrollToTop() — see its doc comment.
+    void scrollToTop();
+
 signals:
     void adjustmentsChanged();
     void resetRequested();

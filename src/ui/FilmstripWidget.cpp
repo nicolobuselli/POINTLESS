@@ -43,17 +43,18 @@ QStringList imagePathsFromMime(const QMimeData* mime)
 
 } // namespace
 
-// ── Orange "add image" button (SVG asset) ────────────────────
+// ── "Import" button (import.svg) ─────────────────────────────
 // Square, resized by the grid (setSquareSize) to match a thumbnail cell —
 // same convention as FilmstripThumb — so it reads as the same height as the
-// row of images beside it instead of a short, oddly-proportioned icon.
+// row of images beside it. The artwork is itself square, so it fills the
+// whole cell (just a hairline of breathing room), not a small inset icon.
 
 class AddImageButton : public QAbstractButton {
 public:
     explicit AddImageButton(QWidget* parent = nullptr) : QAbstractButton(parent) {
         setFixedSize(Ui::px(96), Ui::px(96));
         setCursor(Qt::PointingHandCursor);
-        setToolTip("Add images (or drop them anywhere)");
+        setToolTip("Import images");
     }
 
     void setSquareSize(int px) {
@@ -64,22 +65,59 @@ public:
     }
 
 protected:
+    void enterEvent(QEnterEvent*) override { update(); }
+    void leaveEvent(QEvent*) override       { update(); }
+
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         p.setRenderHint(QPainter::SmoothPixmapTransform);
 
-        static QSvgRenderer renderer(QString(":/icons/add_image.svg"));
+        static QSvgRenderer renderer(QString(":/icons/import.svg"));
 
-        // Fit the 147×186 artwork inside the button, centred,
-        // with a slight grow on hover.
-        const QSizeF art(147.0, 186.0);
-        const qreal pad   = underMouse() ? 4.0 : 8.0;
+        const qreal pad   = underMouse() ? 3.0 : 2.0;
         const QRectF area = QRectF(rect()).adjusted(pad, pad, -pad, -pad);
-        QSizeF s = art.scaled(area.size(), Qt::KeepAspectRatio);
+        QSizeF s = QSizeF(377.0, 371.0).scaled(area.size(), Qt::KeepAspectRatio);
         QRectF target(QPointF(area.center().x() - s.width()  / 2.0,
                               area.center().y() - s.height() / 2.0), s);
         renderer.render(&p, target);
+    }
+};
+
+// ── Empty-state "import" CTA button (cta_import.svg) ─────────
+// Shown only when the library is empty, in place of everything else — the
+// scalloped pill from cta_import.svg as the button chrome, "import" text
+// on top in the same lime the shape's own bevel uses.
+
+class ImportCTAButton : public QAbstractButton {
+public:
+    explicit ImportCTAButton(QWidget* parent = nullptr) : QAbstractButton(parent) {
+        setFixedSize(Ui::px(120), qRound(Ui::px(120) * 118.0 / 349.0));
+        setCursor(Qt::PointingHandCursor);
+    }
+
+protected:
+    void enterEvent(QEnterEvent*) override { update(); }
+    void leaveEvent(QEvent*) override       { update(); }
+
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+
+        // Hover swaps in a variant with the bevel/stroke path lightened —
+        // same "stroke brightens on hover" language as the standard box
+        // system (@boxStroke → @boxStrokeHover).
+        static QSvgRenderer renderer(QString(":/icons/cta_import.svg"));
+        static QSvgRenderer hoverRenderer(QString(":/icons/cta_import_hover.svg"));
+        (underMouse() ? hoverRenderer : renderer).render(&p, QRectF(rect()));
+
+        QFont f = p.font();
+        f.setPixelSize(Ui::px(15));
+        f.setBold(true);
+        p.setFont(f);
+        p.setPen(QColor("#D2FC51"));
+        p.drawText(rect(), Qt::AlignCenter, "import");
     }
 };
 
@@ -132,7 +170,7 @@ protected:
         p.restore();
 
         if (m_active) {
-            p.setPen(QPen(QColor("#F95B1E"), 2));
+            p.setPen(QPen(QColor("#3D3D3D"), 1));   // @boxStroke — same gray as every normal box
             p.setBrush(Qt::NoBrush);
             p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 8, 8);
         }
@@ -235,6 +273,9 @@ FilmstripWidget::FilmstripWidget(QWidget* parent)
     m_addBtn = new AddImageButton;
     connect(m_addBtn, &QAbstractButton::clicked, this, &FilmstripWidget::addRequested);
     hl->addWidget(m_addBtn, 0, Qt::AlignTop);
+    // Extra gap (on top of the regular inter-cell spacing) so the import
+    // tile doesn't read as just another thumbnail in the grid.
+    hl->addSpacing(Ui::px(kAddGapExtraFigmaPx));
 
     // Square grid, vertically scrollable — starts right where the add button
     // ends and stretches to the panel's right edge (the same span the
@@ -261,27 +302,31 @@ FilmstripWidget::FilmstripWidget(QWidget* parent)
     m_thumbLayout->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     m_thumbRow->installEventFilter(this);
 
-    // Shown only while the library is empty; centred on the whole section
-    // (add button + grid area), not just the grid, so it reads as the
-    // section's placeholder rather than something squeezed next to the "+".
-    // Parented to `this` (not m_thumbRow) and kept in sync with this
-    // widget's own size in resizeEvent below.
-    m_emptyHint = new QLabel("Drop images here or on the frame", this);
-    m_emptyHint->setObjectName("filmstripEmptyHint");
-    m_emptyHint->setAlignment(Qt::AlignCenter);
-    m_emptyHint->setWordWrap(true);
-    m_emptyHint->setAttribute(Qt::WA_TransparentForMouseEvents);
-    // Its geometry spans the whole widget (see comment above), overlapping
-    // the always-visible "+" button. Without this, Qt's opaque-widget
-    // stacking assumes the raised label fully covers that region and skips
-    // repainting the button underneath — the SVG icon goes invisible until
-    // something else forces a repaint (e.g. the hint hiding on first import).
-    m_emptyHint->setAttribute(Qt::WA_TranslucentBackground);
-
     m_scroll->setWidget(m_thumbRow);
     installOverlayScrollbar(m_scroll);
     hl->addWidget(m_scroll, 1);
-    m_emptyHint->raise();
+
+    // Shown only while the library is empty, in place of the add button and
+    // the grid — not overlaid on top of them (a bare drop hint used to share
+    // space with the "+" icon; now nothing else should be visible at all).
+    // Parented to `this` and kept in sync with this widget's own size in
+    // resizeEvent below.
+    m_emptyState = new QWidget(this);
+    auto* evl = new QVBoxLayout(m_emptyState);
+    evl->setContentsMargins(Ui::px(20), Ui::px(24), Ui::px(20), 0);
+    auto* label = new QLabel("let's ruin a perfectly good image");
+    label->setObjectName("filmstripEmptyHint");
+    label->setAlignment(Qt::AlignCenter);
+    evl->addWidget(label, 0, Qt::AlignHCenter);
+    evl->addSpacing(Ui::px(16));
+    auto* cta = new ImportCTAButton;
+    connect(cta, &QAbstractButton::clicked, this, &FilmstripWidget::addRequested);
+    evl->addWidget(cta, 0, Qt::AlignHCenter);
+    evl->addStretch(1);   // sticky to the top — only the trailing space stretches
+
+    m_addBtn->hide();
+    m_scroll->hide();
+    m_emptyState->raise();
 }
 
 void FilmstripWidget::addThumb(int mediaId, const QImage& source, const QString& name)
@@ -302,7 +347,11 @@ void FilmstripWidget::addThumb(int mediaId, const QImage& source, const QString&
         drag->exec(Qt::CopyAction);
     };
 
-    m_emptyHint->hide();
+    if (m_thumbs.size() == 1) {
+        m_emptyState->hide();
+        m_addBtn->show();
+        m_scroll->show();
+    }
     relayoutGrid();
 }
 
@@ -313,7 +362,11 @@ void FilmstripWidget::removeThumb(int mediaId)
         FilmstripThumb* t = m_thumbs.takeAt(i);
         m_thumbLayout->removeWidget(t);
         t->deleteLater();
-        m_emptyHint->setVisible(m_thumbs.isEmpty());
+        if (m_thumbs.isEmpty()) {
+            m_addBtn->hide();
+            m_scroll->hide();
+            m_emptyState->show();
+        }
         relayoutGrid();
         return;
     }
@@ -326,7 +379,9 @@ void FilmstripWidget::clear()
         t->deleteLater();
     }
     m_thumbs.clear();
-    m_emptyHint->show();
+    m_addBtn->hide();
+    m_scroll->hide();
+    m_emptyState->show();
     relayoutGrid();
 }
 
@@ -345,7 +400,9 @@ void FilmstripWidget::setActive(int mediaId)
 // widget's own width only changes from an actual outer resize, so deriving
 // everything from it keeps the add button and every thumbnail cell exactly
 // equal, in one pass, every time.
-int FilmstripWidget::hMargins() const { return Ui::px(16) + Ui::px(10); }   // hl's own left+right content margins
+int FilmstripWidget::hMargins() const {
+    return Ui::px(16) + Ui::px(10) + Ui::px(kAddGapExtraFigmaPx);   // hl's own left+right content margins + the import tile's extra gap
+}
 
 // Columns grow past kMinColumns once the viewport is wide enough that
 // kMinColumns squares would each exceed kMaxCellFigmaPx — so a big monitor
@@ -396,8 +453,8 @@ void FilmstripWidget::applyCellSizesOnly()
 void FilmstripWidget::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
-    applyCellSizes();   // also sizes the add button when the library is empty
-    m_emptyHint->setGeometry(rect());
+    applyCellSizes();
+    m_emptyState->setGeometry(rect());
 }
 
 bool FilmstripWidget::eventFilter(QObject* obj, QEvent* event)

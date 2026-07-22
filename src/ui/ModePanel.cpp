@@ -1,10 +1,11 @@
-#include "ModePanel.h"
+﻿#include "ModePanel.h"
 #include "TonalControlsWidget.h"
 #include "Theme.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QStackedWidget>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -820,6 +821,19 @@ struct AlgoEntry {
 // Groups and items in display order.
 // A null label / description marks a category header (disabled item).
 const AlgoEntry kAlgoEntries[] = {
+    { DitherAlgorithm::Bayer,               nullptr,               "Ordered Dithering" }, // header
+    { DitherAlgorithm::Bayer,               "Bayer",
+        "Recursive threshold matrix. Crisp geometric cross-hatch pattern; scales to any matrix size." },
+    { DitherAlgorithm::ClusteredDot,        "Clustered Dot",
+        "Dot-cluster threshold map. Mimics analog printing screens; strong halftone look." },
+    { DitherAlgorithm::BlueNoise,           "Blue Noise",
+        "64\303\22764 void-and-cluster mask. Spectrally optimal; natural, grain-like appearance." },
+    { DitherAlgorithm::VoidAndCluster,      "Void and Cluster",
+        "32\303\22732 Ulichney optimal mask. Minimal tiling artifacts; visually quiet noise floor." },
+    { DitherAlgorithm::LineHatch,           "Line Hatch",
+        "Parallel line screen: line thickness follows tone. Set the angle and spacing for an engraving / hatching look." },
+    { DitherAlgorithm::CustomPattern,       "Custom Pattern",
+        "Any image, tiled as the threshold matrix (rank-normalised). Pick a texture and the tones dither through it." },
     { DitherAlgorithm::FloydSteinberg,      nullptr,               "Error Diffusion"  },  // header
     { DitherAlgorithm::FloydSteinberg,      "Floyd\xe2\x80\x93Steinberg",
         "Classic 4-tap kernel. Balanced tonal accuracy with characteristic worm-pattern artifacts." },
@@ -841,19 +855,6 @@ const AlgoEntry kAlgoEntries[] = {
         "Variable-coefficient diffusion: weights adapt to each tone. Very clean, even gradients with few artifacts. (tables from libdither)" },
     { DitherAlgorithm::Riemersma,           "Riemersma",
         "Diffuses error along a Hilbert space-filling curve. Distinctive, locally-clustered grain with no directional banding. (method from libdither)" },
-    { DitherAlgorithm::Bayer,               nullptr,               "Ordered Dithering" }, // header
-    { DitherAlgorithm::Bayer,               "Bayer",
-        "Recursive threshold matrix. Crisp geometric cross-hatch pattern; scales to any matrix size." },
-    { DitherAlgorithm::ClusteredDot,        "Clustered Dot",
-        "Dot-cluster threshold map. Mimics analog printing screens; strong halftone look." },
-    { DitherAlgorithm::BlueNoise,           "Blue Noise",
-        "64\303\22764 void-and-cluster mask. Spectrally optimal; natural, grain-like appearance." },
-    { DitherAlgorithm::VoidAndCluster,      "Void and Cluster",
-        "32\303\22732 Ulichney optimal mask. Minimal tiling artifacts; visually quiet noise floor." },
-    { DitherAlgorithm::LineHatch,           "Line Hatch",
-        "Parallel line screen: line thickness follows tone. Set the angle and spacing for an engraving / hatching look." },
-    { DitherAlgorithm::CustomPattern,       "Custom Pattern",
-        "Any image, tiled as the threshold matrix (rank-normalised). Pick a texture and the tones dither through it." },
     { DitherAlgorithm::DotDiffusion,        nullptr,               "Other"            }, // header
     { DitherAlgorithm::DotDiffusion,        "Dot Diffusion",
         "Knuth (1987) class-matrix scan with error propagation. Clustered dot structure meets tonal accuracy." },
@@ -906,7 +907,7 @@ public:
 
             m_algorithm = new PopupPicker(1);
             m_algorithm->setEntries(algoPickerEntries());
-            m_algorithm->setValue(int(DitherAlgorithm::FloydSteinberg));
+            m_algorithm->setValue(int(DitherAlgorithm::Bayer));
             sl->addWidget(makeLabeledGroup("Algorithm", m_algorithm));
 
             // Per-algorithm description label.
@@ -2161,7 +2162,10 @@ ModePanel::ModePanel(QWidget* parent)
         // they do, no hand-balanced spacing/margin arithmetic to keep in
         // sync. The "X" floats past that margin (RightFloat below), lined up
         // with the section header icons instead.
-        tl->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(16), Ui::px(Ui::kColRight), Ui::px(12));
+        // Top/bottom 14/14 — same padding as the file-title row on the left
+        // column, so both reserve the same vertical space at the top of
+        // their panel.
+        tl->setContentsMargins(Ui::px(Ui::kColLeft), Ui::px(14), Ui::px(Ui::kColRight), Ui::px(14));
 
         m_modePick = new PopupPicker(1);
         m_modePick->setEntries({
@@ -2199,6 +2203,11 @@ ModePanel::ModePanel(QWidget* parent)
         new RightFloat(modeRow, clearBtn, Ui::px(14));
 
         outer->addWidget(modeRow);
+        // Sticky like modeRow itself (both live above the QScrollArea below):
+        // without this, the only divider between the mode picker and
+        // "Settings" is PanelSection's own top bandLine, which scrolls away
+        // with the content, leaving the pinned mode box with no bottom seam.
+        outer->addWidget(bandLine());
     }
 
     // ── Scrollable section stack ─────────────────────────────
@@ -2208,6 +2217,7 @@ ModePanel::ModePanel(QWidget* parent)
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scroll->setFrameShape(QFrame::NoFrame);
+    m_scroll = scroll;
 
     auto* content = new QWidget;
     content->setObjectName("controlRoot");
@@ -2498,6 +2508,11 @@ void ModePanel::setFromLayer(const Layer& layer)
     m_fillSection->setVisible(hasMode);
 
     m_updating = false;
+}
+
+void ModePanel::scrollToTop()
+{
+    if (m_scroll) m_scroll->verticalScrollBar()->setValue(0);
 }
 
 void ModePanel::setAnimatedParams(const QSet<ParamId>& ids)

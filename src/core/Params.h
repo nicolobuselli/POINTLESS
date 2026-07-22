@@ -11,11 +11,11 @@
 // ============================================================
 
 enum class RenderMode {
-    DotGrid  = 0,
-    Dither   = 1,
-    Ascii    = 2,
-    Mosaic   = 3,
-    Halftone = 4    // canonical AM screen (CMYK) — NOT the old dot-grid mode
+    DotGrid    = 0,
+    Dither     = 1,
+    Ascii      = 2,
+    Mosaic     = 3,
+    Halftone   = 4    // canonical AM screen (CMYK) — NOT the old dot-grid mode
 };
 
 // ============================================================
@@ -23,12 +23,12 @@ enum class RenderMode {
 // ============================================================
 
 enum class LayerKind {
-    Original = 0,
-    DotGrid  = 1,
-    Dither   = 2,
-    Ascii    = 3,
-    Mosaic   = 4,
-    Halftone = 5    // canonical AM screen (CMYK) — NOT the old dot-grid mode
+    Original   = 0,
+    DotGrid    = 1,
+    Dither     = 2,
+    Ascii      = 3,
+    Mosaic     = 4,
+    Halftone   = 5    // canonical AM screen (CMYK) — NOT the old dot-grid mode
 };
 
 // Classic Photoshop blend modes, in Photoshop menu order.
@@ -44,34 +44,34 @@ enum class BlendMode {
 inline LayerKind layerKindForMode(RenderMode m)
 {
     switch (m) {
-        case RenderMode::Dither:   return LayerKind::Dither;
-        case RenderMode::Ascii:    return LayerKind::Ascii;
-        case RenderMode::Mosaic:   return LayerKind::Mosaic;
-        case RenderMode::Halftone: return LayerKind::Halftone;
-        default:                   return LayerKind::DotGrid;
+        case RenderMode::Dither:     return LayerKind::Dither;
+        case RenderMode::Ascii:      return LayerKind::Ascii;
+        case RenderMode::Mosaic:     return LayerKind::Mosaic;
+        case RenderMode::Halftone:   return LayerKind::Halftone;
+        default:                     return LayerKind::DotGrid;
     }
 }
 
 inline RenderMode modeForLayerKind(LayerKind k)
 {
     switch (k) {
-        case LayerKind::Dither:   return RenderMode::Dither;
-        case LayerKind::Ascii:    return RenderMode::Ascii;
-        case LayerKind::Mosaic:   return RenderMode::Mosaic;
-        case LayerKind::Halftone: return RenderMode::Halftone;
-        default:                  return RenderMode::DotGrid;
+        case LayerKind::Dither:     return RenderMode::Dither;
+        case LayerKind::Ascii:      return RenderMode::Ascii;
+        case LayerKind::Mosaic:     return RenderMode::Mosaic;
+        case LayerKind::Halftone:   return RenderMode::Halftone;
+        default:                    return RenderMode::DotGrid;
     }
 }
 
 inline QString layerKindName(LayerKind k)
 {
     switch (k) {
-        case LayerKind::Original: return QStringLiteral("Original");
-        case LayerKind::DotGrid:  return QStringLiteral("Dot Grid");
-        case LayerKind::Dither:   return QStringLiteral("Dither");
-        case LayerKind::Ascii:    return QStringLiteral("Ascii");
-        case LayerKind::Mosaic:   return QStringLiteral("Mosaic");
-        case LayerKind::Halftone: return QStringLiteral("Halftone");
+        case LayerKind::Original:   return QStringLiteral("Original");
+        case LayerKind::DotGrid:    return QStringLiteral("Dot Grid");
+        case LayerKind::Dither:     return QStringLiteral("Dither");
+        case LayerKind::Ascii:      return QStringLiteral("Ascii");
+        case LayerKind::Mosaic:     return QStringLiteral("Mosaic");
+        case LayerKind::Halftone:   return QStringLiteral("Halftone");
     }
     return {};
 }
@@ -174,11 +174,11 @@ inline std::vector<ToneEntry> defaultAccentTones(int n)
 {
     std::vector<ToneEntry> out;
     if (n <= 1) {
-        out.push_back({ QColor(0xFD, 0x5A, 0x1F), 0 });
+        out.push_back({ QColor(0xD2, 0xFC, 0x51), 0 });
         return out;
     }
 
-    const QColor accent(0xFD, 0x5A, 0x1F);
+    const QColor accent(0xD2, 0xFC, 0x51);
     for (int i = 0; i < n; ++i) {
         const float t = float(i) / float(n - 1);
         out.push_back({ accent, 255 - qRound(t * 255.0f) });
@@ -461,7 +461,7 @@ enum class DitherAlgorithm {
 };
 
 struct DitherSettings {
-    DitherAlgorithm algorithm = DitherAlgorithm::FloydSteinberg;
+    DitherAlgorithm algorithm = DitherAlgorithm::Bayer;
     int             bayerSize = 8;    // 2, 4, 8, 16
     int             pixelSize = 2;    // 1..100 — chunky pixels
     int             strength  = 50;   // 0..100

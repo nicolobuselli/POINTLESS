@@ -15,7 +15,7 @@
 #include <QSettings>
 #include <shlobj.h>
 
-// Registers ULTRATOOL as the handler for .ultra files under the CURRENT
+// Registers POINTLESS as the handler for .less files under the CURRENT
 // USER's registry hive (HKCU — no admin rights needed), pointing at
 // wherever this exe currently is, and gives the file type this exe's own
 // icon. Idempotent: re-checks every launch, only writes (and pokes the
@@ -26,9 +26,9 @@ static void registerFileAssociation()
     const QString exePath = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
     const QString wantedCmd  = "\"" + exePath + "\" \"%1\"";
     const QString wantedIcon = "\"" + exePath + "\",0";
-    const QString kProgId = "ULTRATOOL.Project";
+    const QString kProgId = "Pointless.Project";
 
-    QSettings ext("HKEY_CURRENT_USER\\Software\\Classes\\.ultra", QSettings::NativeFormat);
+    QSettings ext("HKEY_CURRENT_USER\\Software\\Classes\\.less", QSettings::NativeFormat);
     QSettings progid("HKEY_CURRENT_USER\\Software\\Classes\\" + kProgId, QSettings::NativeFormat);
     QSettings icon("HKEY_CURRENT_USER\\Software\\Classes\\" + kProgId + "\\DefaultIcon", QSettings::NativeFormat);
     QSettings cmd("HKEY_CURRENT_USER\\Software\\Classes\\" + kProgId + "\\shell\\open\\command", QSettings::NativeFormat);
@@ -39,7 +39,7 @@ static void registerFileAssociation()
         return;   // already correct — skip the writes and the shell refresh
 
     ext.setValue(".", kProgId);
-    progid.setValue(".", "ULTRATOOL Project");
+    progid.setValue(".", "POINTLESS Project");
     icon.setValue(".", wantedIcon);
     cmd.setValue(".", wantedCmd);
     for (QSettings* s : { &ext, &progid, &icon, &cmd }) s->sync();
@@ -95,12 +95,14 @@ static QString substitutePaletteTokens(QString css)
         { "boxStrokeActive", "#45556C" },  // border while editing a number / dropdown open / pressed
 
         // Special boxes (own colors instead of the default box system)
-        { "resetStroke",      "#864141" },
-        { "resetStrokeHover", "#AA6565" },
-        { "activeLayerFill",  "#434343" },
         { "modeFill",         "#46556C" },
         { "modeStroke",       "#2F3C50" },
         { "modeStrokeHover",  "#536074" },
+
+        // Select family (layer row, Timeline/Library tabs, Levels graph):
+        // lime fill @ 20% opacity, olive stroke/text
+        { "selectFill",   "rgba(210, 252, 81, 51)" },
+        { "selectStroke", "#A0C03F" },
 
         // Accent (orange CTA)
         { "accent",      "#FD5A1F" },
@@ -114,9 +116,6 @@ static QString substitutePaletteTokens(QString css)
         // Danger red
         { "danger",      "#FD231F" },
         { "dangerHover", "#FF3A36" },
-
-        // Timeline auto-key orange — kept distinct from the accent orange
-        { "keyOrange", "#FF6A00" },
 
         // Scrollbar
         { "scrollHandle",      "#8E8E8E" },
@@ -140,9 +139,9 @@ static QString substitutePaletteTokens(QString css)
 int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
-    app.setApplicationName("ULTRATOOL");
+    app.setApplicationName("POINTLESS");
     app.setApplicationVersion("2.0.0");
-    app.setOrganizationName("ULTRATOOL");
+    app.setOrganizationName("POINTLESS");
 
 #ifdef Q_OS_WIN
     registerFileAssociation();
@@ -184,13 +183,13 @@ int main(int argc, char* argv[])
         spike->show();
     }
 
-    // Double-clicking a .ultra file (once registerFileAssociation() has run
+    // Double-clicking a .less file (once registerFileAssociation() has run
     // at least once) launches us with its path as argv[1]. Deferred to the
     // next event-loop tick: called this early, the window hasn't been shown/
     // laid out yet, so widgets like the library grid still report a stale
     // (pre-layout) size and size themselves wrong.
     const QStringList args = app.arguments();
-    if (args.size() > 1 && args[1].endsWith(".ultra", Qt::CaseInsensitive)) {
+    if (args.size() > 1 && args[1].endsWith(".less", Qt::CaseInsensitive)) {
         const QString startupPath = args[1];
         QTimer::singleShot(150, &w, [&w, startupPath]() { w.openProjectFromPath(startupPath); });
     }

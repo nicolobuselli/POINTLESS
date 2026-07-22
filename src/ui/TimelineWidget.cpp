@@ -88,8 +88,8 @@ void drawDiamond(QPainter& p, int x, int y, Easing e, bool selected)
 {
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
-    const int r = Ui::px(8);
-    const QColor fill = selected ? QColor("#FF6A00") : QColor("#E8E8E8");
+    const int r = Ui::px(10);
+    const QColor fill = selected ? QColor("#D2FC51") : QColor("#E8E8E8");
     p.setBrush(fill);
     p.setPen(QPen(QColor("#101010"), 1));
     if (e == Easing::Hold) {
@@ -242,30 +242,34 @@ protected:
                             a.tracks[size_t(i)].keys[size_t(ki)].easing, isSelected(i, ki));
         }
 
-        // ── Playhead: orange flag (with frame number) + bar ─────
+        // ── Playhead: lime counter (tl_counter.svg cap) + bar ───
         const int px = frameToX(a.playhead);
         if (px >= gut) {
+            static QSvgRenderer counterSvg(QStringLiteral(":/icons/tl_counter.svg"));
             p.setRenderHint(QPainter::Antialiasing, true);
             QFont hf = p.font(); hf.setPixelSize(Ui::px(12)); hf.setBold(true); p.setFont(hf);
             const QString fnum = QString::number(a.playhead);
-            const int tw = p.fontMetrics().horizontalAdvance(fnum);
+            // Static width — sized for 3 digits (frame 100+) so it doesn't
+            // resize as the frame number grows/shrinks digits.
+            const int tw = p.fontMetrics().horizontalAdvance(QStringLiteral("888"));
             const int fw = std::max(Ui::px(22), tw + Ui::px(12));
-            const int fh = Ui::px(20);
+            const int fh = fw;   // cap is square (tl_counter.svg viewBox is 324 wide)
             const QRectF flag(px - fw / 2.0, 0, fw, fh);
-            p.setPen(Qt::NoPen);
-            p.setBrush(QColor("#FF6A00"));
-            p.drawRoundedRect(flag, Ui::px(3), Ui::px(3));
-            p.setPen(QColor("#FFFFFF"));
+            p.save();
+            p.setClipRect(flag);
+            counterSvg.render(&p, QRectF(flag.topLeft(), QSizeF(fw, fw * 2224.0 / 324.0)));
+            p.restore();
+            p.setPen(QColor("#607817"));
             p.drawText(flag, Qt::AlignCenter, fnum);
-            p.fillRect(QRectF(px - Ui::px(1), fh - Ui::px(2), Ui::px(2), height() - fh + Ui::px(2)),
-                       QColor("#FF6A00"));
+            p.fillRect(QRectF(px - Ui::px(1), fh, Ui::px(2), height() - fh),
+                       QColor("#D2FC51"));
         }
 
         // ── Rubber-band selection rectangle ──────────────────────
         if (m_banding) {
             p.setRenderHint(QPainter::Antialiasing, false);
-            p.setPen(QPen(QColor("#FF6A00"), 1, Qt::DashLine));
-            p.setBrush(QColor(255, 106, 0, 40));
+            p.setPen(QPen(QColor("#8E8E8E"), 1, Qt::DashLine));
+            p.setBrush(QColor(142, 142, 142, 40));
             p.drawRect(m_bandRect);
         }
     }

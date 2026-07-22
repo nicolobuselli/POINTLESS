@@ -41,9 +41,9 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
-    // Loads a .ultra file, replacing the current composition — used for the
+    // Loads a .less file, replacing the current composition — used for the
     // Ctrl+O dialog and for a path handed in on the command line (double-
-    // clicking a .ultra file once file association is registered).
+    // clicking a .less file once file association is registered).
     void openProjectFromPath(const QString& path);
 
 private slots:
@@ -139,7 +139,6 @@ private:
     void syncLayersPanel();
     void pasteLayerBelowActive();   // Ctrl+V on a focused layer row: paste right under it
     void scheduleRender(bool previewOnly = false, bool qualityOnly = false);
-    float zoomQualityScale() const;   // full-pass supersample for the current zoom
     QHash<int, QImage> layerSourcesAt(const SessionImage& img, int frame) const;
     void pushUndoSnapshot();
     QVector<int> addImages(const QStringList& paths);   // load files into the library only; returns new media ids
@@ -157,7 +156,12 @@ private:
     void syncTimeline();                  // push current image's anim → timeline widget
     void onTimelineEdited();              // timeline → state (keyframes moved/changed)
     void onPlayToggled(bool playing);
-    bool buildPlayCache();                // pre-render all frames for smooth playback
+    // pre-render all frames for smooth playback. `dialogDelayMs` gates how long
+    // a rebuild must take before the progress dialog shows — the initial Play
+    // press wants quick feedback (short delay), a silent rebake mid-playback
+    // (state edited while already looping) should stay invisible unless it's
+    // genuinely slow, or it flashes on every edit/scrub.
+    bool buildPlayCache(int dialogDelayMs = 300);
     // True when every visible layer's mode is GPU-renderable (see each
     // *Renderer::gpuRenderable) and the GPU compositor is active — playback
     // can then render each frame live instead of pre-baking the whole range.
@@ -213,9 +217,8 @@ private:
     bool   m_locDragging = false;         // live loc-dot drag → cheap preview only
     QTimer m_undoTimer;
     QTimer m_previewTimer;   // debounce live preview until param edits settle
-    QTimer m_zoomRenderTimer; // debounce re-render at higher res after zooming
 
-    QString       m_projectPath;    // last save/open .ultra path; empty → Ctrl+S prompts Save As
+    QString       m_projectPath;    // last save/open .less path; empty → Ctrl+S prompts Save As
     SessionParams m_savedParams;    // state as of the last save/load/empty-board — isDirty() diffs against this
     Animation     m_savedAnim;
 

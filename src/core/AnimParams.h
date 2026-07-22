@@ -16,7 +16,9 @@
 //  display conversions); ranges below are in those raw units.
 // ============================================================
 
-enum class ParamScope { AllLayers, DotGrid, Dither, Ascii, Mosaic, Halftone, Tonal, Document };
+enum class ParamScope {
+    AllLayers, DotGrid, Dither, Ascii, Mosaic, Halftone, Tonal, Document
+};
 
 // Max animatable per-colour thresholds (matches the tonal UI's kMaxTones).
 constexpr int kMaxToneLevels = 8;

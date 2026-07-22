@@ -12,6 +12,8 @@
 class QPushButton;
 class QVBoxLayout;
 class QLabel;
+class QScrollArea;
+class CheckSquare;
 
 /**
  * AdjustmentsPanel (left column)
@@ -54,6 +56,11 @@ public:
     // Adjustments viewport.
     void prependWidget(QWidget* w);
 
+    // Scrolls the internal viewport back to its top row — called whenever
+    // the active layer/mode changes, so the column always starts flush with
+    // its title instead of keeping whatever offset the previous layer left.
+    void scrollToTop();
+
 signals:
     void adjustmentsChanged();
     void resetRequested();
@@ -75,7 +82,7 @@ private:
     SliderRow* m_sharpenRadius    = nullptr;
     SliderRow* m_edgeEnhancement  = nullptr;
     QPushButton* m_invert         = nullptr;
-    QLabel*      m_invertSquare   = nullptr;   // checkmark indicator, see setAdjustments()
+    CheckSquare* m_invertSquare   = nullptr;   // checkmark indicator, see setAdjustments()
     SliderRow* m_blur             = nullptr;
     SliderRow* m_grain            = nullptr;
 
@@ -87,7 +94,8 @@ private:
     SliderRow* m_threshold = nullptr;
 
     QPushButton* m_localize       = nullptr;
-    QLabel*      m_localizeSquare = nullptr;   // checkmark indicator, see setLocalizeChecked()
+    CheckSquare* m_localizeSquare = nullptr;   // checkmark indicator, see setLocalizeChecked()
 
-    QVBoxLayout* m_vlay = nullptr;   // scrollable content layout — see prependWidget()
+    QVBoxLayout* m_vlay   = nullptr;   // scrollable content layout — see prependWidget()
+    QScrollArea* m_scroll = nullptr;   // see scrollToTop()
 };

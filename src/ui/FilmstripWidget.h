@@ -53,6 +53,7 @@ protected:
 private:
     static constexpr int kMinColumns      = 6;     // floor, even on a narrow window
     static constexpr int kMaxCellFigmaPx  = 150;    // cap on a cell's side; wide windows add columns instead
+    static constexpr int kAddGapExtraFigmaPx = 80;  // extra gap after the import tile, on top of the regular cell spacing
 
     int  hMargins() const;         // hl's own left+right content margins
     int  computeColumns() const;   // column count for the current viewport width
@@ -64,7 +65,7 @@ private:
     QWidget*               m_thumbRow    = nullptr;
     QGridLayout*           m_thumbLayout = nullptr;
     AddImageButton*        m_addBtn      = nullptr;
-    QLabel*                m_emptyHint   = nullptr;
+    QWidget*               m_emptyState  = nullptr;
     QList<FilmstripThumb*> m_thumbs;
     int                    m_columns     = kMinColumns;
 };

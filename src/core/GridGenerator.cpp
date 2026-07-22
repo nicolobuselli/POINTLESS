@@ -218,13 +218,24 @@ void genPhyllotaxis(const GridSettings& g, const QTransform& t, const BBox& b,
     }
 }
 
-// ── single-entry cache ─────────────────────────────────────────────────────
+// ── small LRU cache ─────────────────────────────────────────────────────
+// Multiple grid layers (Dot Grid / Mosaic / Ascii) can render concurrently
+// via QtConcurrent, each with different settings — a single-entry cache
+// thrashed every call. A handful of slots lets them coexist; linear scan is
+// fine at this size (ponytail: bump kSlots if a document ever needs more
+// than a few distinct grid configs live at once).
+constexpr int kSlots = 8;
 
-QMutex                  s_mutex;
-GridSettings            s_lastG;
-int                     s_lastW = -1, s_lastH = -1;
-bool                    s_valid = false;
-std::vector<GridSample> s_cache;
+struct CacheEntry {
+    bool                     valid = false;
+    GridSettings             g;
+    int                      w = -1, h = -1;
+    std::vector<GridSample>  samples;
+};
+
+QMutex     s_mutex;
+CacheEntry s_slots[kSlots];
+int        s_nextEvict = 0;
 
 } // namespace
 
@@ -233,8 +244,11 @@ std::vector<GridSample> GridGenerator::generate(const GridSettings& g, int imgW,
     if (imgW <= 0 || imgH <= 0) return {};
 
     QMutexLocker lock(&s_mutex);
-    if (s_valid && s_lastW == imgW && s_lastH == imgH && s_lastG == g)
-        return s_cache;
+    for (CacheEntry& e : s_slots) {
+        if (e.valid && e.w == imgW && e.h == imgH && e.g == g)
+            return e.samples;
+    }
+    lock.unlock();
 
     const QTransform t   = buildTransform(g, imgW, imgH);
     const QTransform inv = t.inverted();
@@ -250,9 +264,12 @@ std::vector<GridSample> GridGenerator::generate(const GridSettings& g, int imgW,
         case GridType::Phyllotaxis: genPhyllotaxis(g, t, b, imgW, imgH, out); break;
     }
 
-    s_lastG = g; s_lastW = imgW; s_lastH = imgH; s_valid = true;
-    s_cache = std::move(out);
-    return s_cache;
+    lock.relock();
+    CacheEntry& slot = s_slots[s_nextEvict];
+    s_nextEvict = (s_nextEvict + 1) % kSlots;
+    slot.valid = true; slot.g = g; slot.w = imgW; slot.h = imgH;
+    slot.samples = out;
+    return out;
 }
 
 GridGpuLayout GridGenerator::computeGpuLayout(const GridSettings& g, int imgW, int imgH)

@@ -301,18 +301,31 @@ QPointF PreviewWidget::imageOrigin() const
                    (height() - vs.height()) / 2.0 + m_panOffset.y());
 }
 
+// Per-axis scale, not imageScale()'s single width-derived factor: vs is
+// supposed to share the frame's aspect ratio exactly, but QSize::scaled()
+// rounds to integers, so the height ratio can drift a hair from the width
+// ratio. Reusing one k for both axes turned that hairline drift into a
+// position error that grew with distance from the origin — most visible on
+// the localization dot, which walked away from its true centre the further
+// it sat from the horizontal mid-line. Each axis gets its own factor here.
 QPointF PreviewWidget::frameToWidget(QPointF f) const
 {
-    const double k = imageScale();
-    return imageOrigin() + QPointF(f.x() * k, f.y() * k);
+    const QSize vs = viewSizePx();
+    if (vs.isEmpty() || m_frame.width() <= 0 || m_frame.height() <= 0) return imageOrigin();
+    const double kx = double(vs.width())  / m_frame.width();
+    const double ky = double(vs.height()) / m_frame.height();
+    return imageOrigin() + QPointF(f.x() * kx, f.y() * ky);
 }
 
 QPointF PreviewWidget::widgetToFrame(QPointF w) const
 {
-    const double k = imageScale();
-    if (k <= 0.0) return {};
+    const QSize vs = viewSizePx();
+    if (vs.isEmpty() || m_frame.width() <= 0 || m_frame.height() <= 0) return {};
+    const double kx = double(vs.width())  / m_frame.width();
+    const double ky = double(vs.height()) / m_frame.height();
+    if (kx <= 0.0 || ky <= 0.0) return {};
     const QPointF o = imageOrigin();
-    return QPointF((w.x() - o.x()) / k, (w.y() - o.y()) / k);
+    return QPointF((w.x() - o.x()) / kx, (w.y() - o.y()) / ky);
 }
 
 QPointF PreviewWidget::layerCentreFrame() const
@@ -1088,7 +1101,7 @@ void PreviewWidget::paintLocHandles(QPainter& p)
             const double outerR = locRadiusFramePx(lp) * imageScale();
             const double innerR = locInnerFramePx(lp)  * imageScale();
 
-            QPen outerPen(QColor("#FD5A1F"));
+            QPen outerPen(QColor("#D2FC51"));   // yellow, matches the Localize checkbox fill
             outerPen.setWidthF(1.4);
             p.setPen(outerPen);
             p.setBrush(Qt::NoBrush);
@@ -1117,7 +1130,7 @@ void PreviewWidget::paintLocHandles(QPainter& p)
             const QPointF at(centre.x() + 10.0, centre.y() - 8.0);
             p.setPen(QColor(0, 0, 0, 160));                   // soft halo
             p.drawText(at + QPointF(1, 1), label);
-            p.setPen(active ? QColor("#FD5A1F") : QColor("#F0F0F0"));
+            p.setPen(active ? QColor("#D2FC51") : QColor("#F0F0F0"));
             p.drawText(at, label);
         }
     }

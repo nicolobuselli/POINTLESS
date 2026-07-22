@@ -260,7 +260,10 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             quick->setObjectName("dragSpinBox");
             quick->setFixedHeight(Ui::px(Ui::kBoxH));
             auto* ql = new QHBoxLayout(quick);
-            ql->setContentsMargins(Ui::px(4), Ui::px(4), Ui::px(4), Ui::px(4));
+            // Top/bottom asymmetry nudges the three buttons — icon and hover
+            // box together, since the button IS the hover box — up 2 real px
+            // inside the fixed-height frame, staying fully inside it.
+            ql->setContentsMargins(Ui::px(4), Ui::px(4) - 2, Ui::px(4), Ui::px(4) + 2);
             ql->setSpacing(Ui::px(4));
 
             auto makeQuickBtn = [&](const QString& icon, const QString& tip, bool checkable) {
@@ -492,3 +495,4 @@ Adjustments ControlsPanel::adjustments() const          { return m_adjust->adjus
 void ControlsPanel::setAdjustments(const Adjustments& a) { m_adjust->setAdjustments(a); }
 void ControlsPanel::setSourceImage(const QImage& img)    { m_adjust->setSourceImage(img); }
 void ControlsPanel::setLocalizeChecked(bool on)          { m_adjust->setLocalizeChecked(on); }
+void ControlsPanel::scrollToTop()                        { m_adjust->scrollToTop(); }

@@ -185,6 +185,11 @@ public:
             " selection-background-color:#FD5A1F;").arg(Ui::px(18)));
         pl->addWidget(m_nameEdit, 1);
 
+        // Reserve the lock icon's footprint (30px) + a small gap so the name
+        // always elides a few px before the padlock's hover shape, instead of
+        // running text right up against it when the lock appears on hover.
+        pl->addSpacing(Ui::px(30) + Ui::px(8));
+
         hl->addWidget(m_pill, 1);
 
         connect(m_nameEdit, &QLineEdit::editingFinished, this, [this]() {
@@ -887,12 +892,14 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         m_rowsArea->onParentReorder = [this](int mid, int idx) { emit parentReordered(mid, idx); };
         m_rowsArea->onAddChild      = [this](int mid)          { emit addChildRequested(mid); };
         m_rowsArea->onMediaDropped  = [this](int mid)          { emit mediaDroppedAsLayer(mid); };
-        // Left margin aligns the thumbnail with the section titles (40px); the
-        // row's own 70px eye gutter sits flush against the right content edge.
+        // Left margin aligns the thumbnail with the section titles (kColLeft,
+        // 20px) — the pill itself already keeps 8px of its own left padding,
+        // so this only needs to make up the remaining 12. The row's own 70px
+        // eye gutter sits flush against the right content edge.
         // Top = 0: the "Layers" header already adds 12px below its title and each
         // row adds 2px above its pill → 14px gap, matching the right column's
         // section-title → first-control spacing (12 title pad + 2 body top).
-        m_rowsArea->rowsLayout()->setContentsMargins(Ui::px(32), 0, 0, Ui::px(2));
+        m_rowsArea->rowsLayout()->setContentsMargins(Ui::px(12), 0, 0, Ui::px(2));
         m_rowsArea->rowsLayout()->setSpacing(Ui::px(6));
         scroll->setWidget(m_rowsArea);
         // Floating scrollbar: reserves no width, so rows keep a constant width
