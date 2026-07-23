@@ -484,11 +484,11 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent)
     auto* vl = new QVBoxLayout(this);
     // No side margins: the dopesheet rows bleed edge-to-edge. The control bar
     // keeps its own horizontal padding.
-    vl->setContentsMargins(0, Ui::px(12), 0, Ui::px(10));
+    vl->setContentsMargins(0, Ui::px(6), 0, Ui::px(6));
     vl->setSpacing(Ui::px(10));
 
     auto* bar = new QHBoxLayout;
-    bar->setContentsMargins(Ui::px(20), 0, Ui::px(20), 0);
+    bar->setContentsMargins(Ui::px(16), 0, Ui::px(16), 0);
     bar->setSpacing(Ui::px(12));
 
     // ── Auto key (far left) ──────────────────────────────────

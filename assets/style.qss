@@ -51,7 +51,7 @@ QMainWindow {
 #winBtn, #winCloseBtn {
     background: transparent;
     border: none;
-    border-radius: s(6)px;
+    border-radius: 0px;
 }
 #winBtn:hover     { background-color: #4A4A4A; }
 #winBtn:pressed   { background-color: #555555; }
@@ -421,82 +421,17 @@ QPushButton#paletteHeader {
 QPushButton#paletteHeader:hover   { border-color: @boxStrokeHover; }
 QPushButton#paletteHeader:pressed { border-color: @boxStrokeActive; }
 
-QPushButton#paletteItem {
-    background-color: @surface3;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    text-align: left;
-}
-QPushButton#paletteItem:hover {
-    background-color: @surface2;
-    border-color: @popupBorder;
-}
-QPushButton#paletteItem[selected="true"] {
-    background-color: @selBlue;
-    border-color: @selBlue;
-}
-QPushButton#paletteItem[selected="true"]:hover {
-    background-color: @selBlueHover;
-}
-
 #saveEditBox {
     background-color: @surface3;
     border: 1px solid @popupBorder;
     border-radius: 8px;
 }
 
-/* Palette dropdown (floating popup over the controls) */
-#palettePopup {
-    background-color: @bgPanel;
-    border: 1px solid @popupBorder;
-    border-radius: 6px;
-}
-#palettePopupScroll, #palettePopupBody { background: transparent; border: none; }
-
-/* Palette-row trash: no box (unlike the layers trash); red tint only on hover. */
-QPushButton#paletteTrash {
-    background-color: transparent;
-    border: none;
-    border-radius: 6px;
-}
-QPushButton#paletteTrash:hover   { background-color: #4A2422; }
-QPushButton#paletteTrash:pressed { background-color: #3B1F19; }
-
 /* Save-palette popup */
 #savePopup {
     background-color: #2A2A2A;
     border: 1px solid @popupBorder;
     border-radius: s(12)px;
-}
-
-/* Inline delete confirmation inside the palette popup */
-#paletteConfirm {
-    background-color: #3A2422;
-    border: 1px solid @danger;
-    border-radius: 6px;
-}
-QPushButton#ghostMini {
-    background-color: @surface2;
-    border: 1px solid @popupBorder;
-    border-radius: 4px;
-    color: @textBody;
-    font-size: 8pt;
-    padding: 0 10px;
-}
-QPushButton#ghostMini:hover {
-    border-color: #828282;
-}
-QPushButton#dangerMini {
-    background-color: @danger;
-    border: none;
-    border-radius: 4px;
-    color: #FFFFFF;
-    font-size: 8pt;
-    font-weight: 600;
-    padding: 0 10px;
-}
-QPushButton#dangerMini:hover {
-    background-color: @dangerHover;
 }
 
 /* ── Icon-only buttons (+/−) ─────────────────────────────────── */
@@ -657,9 +592,13 @@ QFrame#algoPopup {
     border-radius: 8px;
 }
 #algoPopupScroll, #algoPopupBody { background: transparent; border: none; }
+/* Title between two hairlines — name, all options below (same language as
+   the left column's titleBand), instead of the old grey pill fill. */
 QLabel#algoHeader {
-    background-color: @surface2;
-    border-radius: s(8)px;
+    background: transparent;
+    border: none;
+    border-top: 1px solid @surface2;
+    border-bottom: 1px solid @surface2;
     color: @textTitle;
     font-size: s(18)px;
     font-weight: 700;
@@ -675,7 +614,8 @@ QPushButton#algoCell {
     text-align: left;
 }
 QPushButton#algoCell:hover   { border-color: #555555; background-color: @surface3; }
-QPushButton#algoCell:checked { background-color: @surface2; border-color: #555555; }
+QPushButton#algoCell:checked,
+QPushButton#algoCell[selected="true"] { background-color: @surface2; border-color: #555555; }
 
 QComboBox QAbstractItemView {
     background-color: @bgPanel;
@@ -831,6 +771,12 @@ QScrollBar::handle:vertical:hover {
 }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical { height: 0; }
+/* PopupPicker-style dropdowns (Fusion, Dither, Palette): scrollbar starts
+   flush with the grid's own top inset (where the text begins), not the
+   popup frame's outer edge. */
+QScrollArea#algoPopupScroll QScrollBar:vertical {
+    margin: s(12)px 0 s(12)px 0;
+}
 QScrollBar::add-page:vertical,
 QScrollBar::sub-page:vertical { background: transparent; }
 QScrollBar:horizontal { height: 0; }

@@ -17,6 +17,7 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QStyle>
+#include <QMenu>
 
 namespace {
 constexpr int kMaxTones = 8;
@@ -70,9 +71,12 @@ private:
 // ============================================================
 //  PalettePopup — floating dropdown over the controls below.
 //
-//  Lists the saved palette library; selecting a row loads it.
-//  The trash button turns that row into an inline confirm strip
-//  (red Delete / Cancel) so no nested popup is needed.
+//  Same shell as the shared PopupPicker dropdowns (Fusion/Dither): rounded
+//  #algoPopup frame, #algoPopupScroll scroll area, #algoPopupBody grid
+//  margins. Rows carry a swatch preview so they stay a bespoke widget
+//  instead of the plain-text PopupPicker, but the chrome matches.
+//  Deleting a saved palette is a right-click → "Delete palette" menu
+//  entry (no trash icon, no inline confirm row).
 // ============================================================
 
 class PalettePopup : public QFrame
@@ -85,27 +89,27 @@ public:
     explicit PalettePopup(QWidget* parent = nullptr)
         : QFrame(parent, Qt::Popup)
     {
-        setObjectName("palettePopup");
+        setObjectName("algoPopup");
         setAttribute(Qt::WA_StyledBackground, true);
 
         // Rows live inside a scroll area so the popup stays short and the saved
         // palettes scroll (vertical bar appears only when they overflow).
         auto* outer = new QVBoxLayout(this);
-        outer->setContentsMargins(Ui::px(6), Ui::px(6), Ui::px(6), Ui::px(6));
+        outer->setContentsMargins(0, 0, 0, 0);
         outer->setSpacing(0);
 
         m_scroll = new QScrollArea(this);
-        m_scroll->setObjectName("palettePopupScroll");
+        m_scroll->setObjectName("algoPopupScroll");
         m_scroll->setWidgetResizable(true);
         m_scroll->setFrameShape(QFrame::NoFrame);
         m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
         auto* body = new QWidget;
-        body->setObjectName("palettePopupBody");
+        body->setObjectName("algoPopupBody");
         m_layout = new QVBoxLayout(body);
-        m_layout->setContentsMargins(0, 0, Ui::px(6), 0);   // gap before the bar
-        m_layout->setSpacing(Ui::px(8));                    // breathing room per item
+        m_layout->setContentsMargins(Ui::px(12), Ui::px(12), Ui::px(12), Ui::px(12));
+        m_layout->setSpacing(Ui::px(10));   // same rhythm as the Dither/Fusion grid
         m_scroll->setWidget(body);
         outer->addWidget(m_scroll);
     }
@@ -118,7 +122,6 @@ public:
     // the narrow column.
     void showLeftOfColumn(QWidget* anchor)
     {
-        m_pendingDelete = -1;
         reload();
         build();
         setFixedWidth(Ui::px(330));
@@ -170,14 +173,14 @@ private:
         // Top action: extract a palette from the current image.
         {
             auto* row = new QPushButton;
-            row->setObjectName("paletteItem");
+            row->setObjectName("algoCell");
             row->setCursor(Qt::PointingHandCursor);
             row->setFixedHeight(Ui::px(46));
             auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(Ui::px(12), 0, Ui::px(10), 0);
+            hl->setContentsMargins(Ui::px(15), 0, Ui::px(15), 0);
             auto* name = new QLabel("Extract from image");
             name->setAttribute(Qt::WA_TransparentForMouseEvents);
-            name->setStyleSheet(QString("background:transparent; color:#E3E3E3; font-size:%1px; font-weight:500;").arg(Ui::px(16)));
+            name->setStyleSheet(QString("background:transparent; color:#E3E3E3; font-size:%1px; font-weight:500;").arg(Ui::px(18)));
             hl->addWidget(name);
             hl->addStretch(1);
             connect(row, &QPushButton::clicked, this, [this]() {
@@ -191,15 +194,15 @@ private:
         // matches none of the saved ones.
         if (m_currentName == "Custom") {
             auto* row = new QPushButton;
-            row->setObjectName("paletteItem");
+            row->setObjectName("algoCell");
             row->setProperty("selected", true);
             row->setCursor(Qt::PointingHandCursor);
             row->setFixedHeight(Ui::px(46));
             auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(Ui::px(12), 0, Ui::px(10), 0);
+            hl->setContentsMargins(Ui::px(15), 0, Ui::px(15), 0);
             auto* name = new QLabel("Custom");
             name->setAttribute(Qt::WA_TransparentForMouseEvents);
-            name->setStyleSheet(QString("background:transparent; color:#FFFFFF; font-size:%1px; font-weight:500;").arg(Ui::px(16)));
+            name->setStyleSheet(QString("background:transparent; color:#FFFFFF; font-size:%1px; font-weight:500;").arg(Ui::px(18)));
             hl->addWidget(name);
             hl->addStretch(1);
             connect(row, &QPushButton::clicked, this, [this]() { hide(); });
@@ -213,8 +216,7 @@ private:
             m_layout->addWidget(empty);
         } else {
             for (int i = 0; i < int(m_library.size()); ++i)
-                m_layout->addWidget(i == m_pendingDelete ? buildConfirmRow(i)
-                                                         : buildItemRow(i));
+                m_layout->addWidget(buildItemRow(i));
         }
         adjustSize();
     }
@@ -225,31 +227,27 @@ private:
         const bool selected = (pal.name == m_currentName);
 
         auto* row = new QPushButton;
-        row->setObjectName("paletteItem");
+        row->setObjectName("algoCell");
         row->setProperty("selected", selected);
         row->setCursor(Qt::PointingHandCursor);
         row->setFixedHeight(Ui::px(46));
+        row->setContextMenuPolicy(Qt::CustomContextMenu);
 
         auto* hl = new QHBoxLayout(row);
-        hl->setContentsMargins(Ui::px(12), 0, Ui::px(8), 0);
+        hl->setContentsMargins(Ui::px(15), 0, Ui::px(15), 0);
         hl->setSpacing(Ui::px(8));
 
         auto* name = new QLabel(pal.name);
         name->setAttribute(Qt::WA_TransparentForMouseEvents);
         name->setStyleSheet(QString("background:transparent; color:%1; font-size:%2px; font-weight:500;")
-                            .arg(selected ? "#FFFFFF" : "#E3E3E3").arg(Ui::px(16)));
+                            .arg(selected ? "#FFFFFF" : "#E3E3E3").arg(Ui::px(18)));
 
         auto* strip = new SwatchStrip(Ui::px(20));
         strip->setColors(pal.colors);
 
-        auto* trash = makeIconButton(":/icons/trash.svg");
-        trash->setObjectName("paletteTrash");   // no box; red tint on hover
-        trash->setCursor(Qt::PointingHandCursor);
-
         hl->addWidget(name);
         hl->addStretch(1);
         hl->addWidget(strip);
-        hl->addWidget(trash);
 
         const std::vector<QColor> colors = pal.colors;
         const QString             nm     = pal.name;
@@ -257,51 +255,15 @@ private:
             if (onSelect) onSelect(colors, nm);
             hide();
         });
-        connect(trash, &QPushButton::clicked, this, [this, i]() {
-            m_pendingDelete = i;
-            build();
-        });
-        return row;
-    }
-
-    QWidget* buildConfirmRow(int i)
-    {
-        auto* row = new QFrame;
-        row->setObjectName("paletteConfirm");
-        row->setAttribute(Qt::WA_StyledBackground, true);
-        row->setFixedHeight(Ui::px(34));
-
-        auto* hl = new QHBoxLayout(row);
-        hl->setContentsMargins(Ui::px(10), 0, Ui::px(6), 0);
-        hl->setSpacing(Ui::px(6));
-
-        auto* lbl = new QLabel("Delete?");
-        lbl->setStyleSheet("background:transparent; color:#E3E3E3; font-size:9pt;");
-
-        auto* cancel = new QPushButton("Cancel");
-        cancel->setObjectName("ghostMini");
-        cancel->setCursor(Qt::PointingHandCursor);
-        cancel->setFixedHeight(Ui::px(24));
-
-        auto* del = new QPushButton("Delete");
-        del->setObjectName("dangerMini");
-        del->setCursor(Qt::PointingHandCursor);
-        del->setFixedHeight(Ui::px(24));
-
-        hl->addWidget(lbl);
-        hl->addStretch(1);
-        hl->addWidget(cancel);
-        hl->addWidget(del);
-
-        connect(cancel, &QPushButton::clicked, this, [this]() {
-            m_pendingDelete = -1;
-            build();
-        });
-        connect(del, &QPushButton::clicked, this, [this, i]() {
-            PaletteStore::remove(i);
-            m_pendingDelete = -1;
-            reload();
-            build();
+        connect(row, &QWidget::customContextMenuRequested, this, [this, row, i](QPoint pos) {
+            QMenu menu(row);
+            QAction* del = menu.addAction("Delete palette");
+            connect(del, &QAction::triggered, this, [this, i]() {
+                PaletteStore::remove(i);
+                reload();
+                build();
+            });
+            menu.exec(row->mapToGlobal(pos));
         });
         return row;
     }
@@ -309,7 +271,6 @@ private:
     QScrollArea*               m_scroll = nullptr;
     QVBoxLayout*               m_layout = nullptr;
     std::vector<PalettePreset> m_library;
-    int                        m_pendingDelete = -1;
     QString                    m_currentName;   // highlight the active palette
 };
 
@@ -555,10 +516,13 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
             // Picking a count is the explicit way back to luminosity tones.
             m_settings.mode = ToneMode::FixedTones;
             const int n = idx;
-            // Preserve existing colors, re-space the levels evenly.
+            // Preserve existing colors (+ ink trim), re-space the levels evenly.
             std::vector<ToneEntry> fresh = defaultTones(n);
-            for (int i = 0; i < n && i < int(m_settings.tones.size()); ++i)
+            for (int i = 0; i < n && i < int(m_settings.tones.size()); ++i) {
                 fresh[i].color = m_settings.tones[i].color;
+                fresh[i].flood = m_settings.tones[i].flood;
+                fresh[i].gain  = m_settings.tones[i].gain;
+            }
             m_settings.tones = fresh;
         }
         rebuildRows();
@@ -693,7 +657,51 @@ void TonalControlsWidget::rebuildRows()
         hl->setContentsMargins(0, 0, 0, 0);
         hl->setSpacing(Ui::px(10));
 
-        auto* swatch = new FillSwatch(m_settings.tones[i].color, m_settings.tones[i].opacity, /*showOpacity*/ true);
+        // Ink-trim rows are already crowded (swatch + Flood + Gain); drop the
+        // opacity chip there so the colour itself stays readable at a glance
+        // — opacity is still editable via the colour dialog (openTonePicker).
+        auto* swatch = new FillSwatch(m_settings.tones[i].color, m_settings.tones[i].opacity,
+                                      /*showOpacity*/ !m_inkTrim);
+
+        if (m_inkTrim) {
+            // One rotated screen per tone: trim its dot size the same way a
+            // fixed CMYK ink does, instead of a posterize luminosity boundary.
+            auto* flood = new DragSpinBox(QString(), -100, 100, qRound(m_settings.tones[i].flood * 100), "");
+            flood->setTextLabel("F");
+            flood->setToolTip("Flood: flat dot-size offset for this tone's screen.");
+            auto* gain = new DragSpinBox(QString(), -100, 100, qRound(m_settings.tones[i].gain * 100), "");
+            gain->setTextLabel("G");
+            gain->setToolTip("Gain: proportional dot-size gain for this tone's screen.");
+
+            hl->addWidget(swatch, 2);
+            hl->addWidget(flood, 1);
+            hl->addWidget(gain, 1);
+            rvl->addLayout(hl);
+
+            m_rowsLayout->addWidget(rowWidget);
+            m_rows.push_back({ swatch, nullptr, flood, gain });
+
+            swatch->onClicked = [this, i, swatch]() { openTonePicker(i, swatch); };
+            swatch->onColorEdited = [this, i](QColor c) {
+                if (i >= int(m_settings.tones.size())) return;
+                m_settings.tones[i].color = c;
+                markCustom();
+                emitChanged();
+            };
+            flood->onValueChanged = [this, i](int v) {
+                if (m_updating || i >= int(m_settings.tones.size())) return;
+                m_settings.tones[i].flood = v / 100.0f;
+                markCustom();
+                emitChanged();
+            };
+            gain->onValueChanged = [this, i](int v) {
+                if (m_updating || i >= int(m_settings.tones.size())) return;
+                m_settings.tones[i].gain = v / 100.0f;
+                markCustom();
+                emitChanged();
+            };
+            continue;
+        }
 
         auto* slider = new NoWheelSlider(Qt::Horizontal);
         slider->setRange(0, 255);
@@ -713,7 +721,7 @@ void TonalControlsWidget::rebuildRows()
         rvl->addLayout(hl);
 
         m_rowsLayout->addWidget(rowWidget);
-        m_rows.push_back({ swatch, slider });
+        m_rows.push_back({ swatch, slider, nullptr, nullptr });
 
         swatch->onClicked = [this, i, swatch]() { openTonePicker(i, swatch); };
         swatch->onColorEdited = [this, i](QColor c) {
@@ -731,6 +739,13 @@ void TonalControlsWidget::rebuildRows()
             }
         });
     }
+}
+
+void TonalControlsWidget::setInkTrimMode(bool on)
+{
+    if (m_inkTrim == on) return;
+    m_inkTrim = on;
+    rebuildRows();
 }
 
 void TonalControlsWidget::openTonePicker(int idx, QWidget* anchor)

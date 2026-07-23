@@ -58,13 +58,16 @@ GridSettings gridFromJson(const QJsonObject& o) {
 
 // ── ToneEntry / TonalSettings ───────────────────────────────
 QJsonObject toJson(const ToneEntry& t) {
-    return { { "color", colorToJson(t.color) }, { "level", t.level }, { "opacity", t.opacity } };
+    return { { "color", colorToJson(t.color) }, { "level", t.level }, { "opacity", t.opacity },
+             { "flood", t.flood }, { "gain", t.gain } };
 }
 ToneEntry toneFromJson(const QJsonObject& o) {
     ToneEntry t;
     t.color   = colorFromJson(o["color"]);
     t.level   = o["level"].toInt(t.level);
     t.opacity = float(o["opacity"].toDouble(t.opacity));
+    t.flood   = float(o["flood"].toDouble(t.flood));
+    t.gain    = float(o["gain"].toDouble(t.gain));
     return t;
 }
 QJsonObject toJson(const TonalSettings& t) {

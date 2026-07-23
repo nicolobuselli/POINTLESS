@@ -92,7 +92,7 @@ protected:
 class ImportCTAButton : public QAbstractButton {
 public:
     explicit ImportCTAButton(QWidget* parent = nullptr) : QAbstractButton(parent) {
-        setFixedSize(Ui::px(120), qRound(Ui::px(120) * 118.0 / 349.0));
+        setFixedSize(Ui::px(145), qRound(Ui::px(145) * 118.0 / 349.0));
         setCursor(Qt::PointingHandCursor);
     }
 
@@ -267,7 +267,7 @@ FilmstripWidget::FilmstripWidget(QWidget* parent)
     setAcceptDrops(true);
 
     auto* hl = new QHBoxLayout(this);
-    hl->setContentsMargins(Ui::px(16), Ui::px(10), Ui::px(10), Ui::px(10));
+    hl->setContentsMargins(Ui::px(12), Ui::px(6), Ui::px(8), Ui::px(6));
     hl->setSpacing(Ui::px(10));
 
     m_addBtn = new AddImageButton;

@@ -128,12 +128,13 @@ public:
     {
         setObjectName("windowTitleBar");
         setAttribute(Qt::WA_StyledBackground, true);
-        setFixedHeight(Ui::px(44));
+        const int barH = Ui::px(44);
+        setFixedHeight(barH);
 
         auto* hl = new QHBoxLayout(this);
-        // Left gutter 40 = left column gutter. Right gutter pulled in from the
-        // screen edge (the controls sit at the maximized window's corner).
-        hl->setContentsMargins(Ui::px(Ui::kColLeft), 0, Ui::px(30), 0);
+        // Left gutter 40 = left column gutter. Right = 0: close button sits
+        // flush against the window's right edge.
+        hl->setContentsMargins(Ui::px(Ui::kColLeft), 0, 0, 0);
         hl->setSpacing(0);
 
         const int lh = Ui::px(34);
@@ -149,7 +150,7 @@ public:
             auto* b = new QPushButton;
             b->setObjectName(obj);
             b->setCursor(Qt::PointingHandCursor);
-            b->setFixedSize(Ui::px(48), Ui::px(32));
+            b->setFixedSize(Ui::px(48), barH);   // full bar height: hover/press fill top-to-bottom
             b->setIcon(QIcon(icon));
             b->setIconSize(QSize(Ui::px(20), Ui::px(20)));
             return b;
@@ -230,7 +231,7 @@ MainWindow::MainWindow(QWidget* parent)
     auto* tabRow = new QWidget;
     tabRow->setObjectName("bottomTabRow");
     auto* trl = new QHBoxLayout(tabRow);
-    trl->setContentsMargins(Ui::px(20), Ui::px(10), Ui::px(20), Ui::px(10));
+    trl->setContentsMargins(Ui::px(16), Ui::px(6), Ui::px(16), Ui::px(6));
     trl->setSpacing(Ui::px(6));
     auto* tabTimeline = new QPushButton("Timeline");
     auto* tabLibrary  = new QPushButton("Library");

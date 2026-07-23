@@ -1897,8 +1897,10 @@ private:
 
 // ============================================================
 //  HalftonePage — canonical AM screen (CMYK): shape, spacing,
-//  four per-channel screen angles, gamma. No tonal palette and
-//  no localization in v1 (inks derive from the source colours).
+//  four per-channel screen angles, gamma. Its CMYK ink editor lives
+//  inside the shared "Fill" section (ModePanel mounts fillExtra()
+//  there), shown only in Image colors mode; Palette/FixedTones reuse
+//  Fill's own ink-trim rows instead. No localization in v1.
 // ============================================================
 
 class HalftonePage : public QWidget
@@ -1955,12 +1957,40 @@ public:
         }
         vl->addWidget(settingsSec);
 
-        // ── Inks (per-channel colour + flood/gain trims, + paper) ──
-        // Knob set modeled after paper-design/shaders' halftone-cmyk
-        // (Apache-2.0, github.com/paper-design/shaders).
-        auto* inksSec = new PanelSection("Inks", /*collapsible*/ false, true);
+        // ── Appearance (Fusion + Opacity) ──────────────────────
+        auto* appearance = new PanelSection("Appearance", /*collapsible*/ false, true);
         {
-            auto* il = inksSec->body();
+            auto* al = appearance->body();
+            m_fusion = new PopupPicker(1);
+            m_fusion->setEntries(blendPickerEntries());
+            m_fusion->setValue(int(BlendMode::Normal));
+            m_fusion->onSelected = [this](QVariant) {
+                if (!m_updating && onBlendChanged) onBlendChanged();
+            };
+            al->addWidget(makeLabeledGroup("Fusion", m_fusion));
+
+            m_opacity = new DragSpinBox(":/icons/opacity.svg", 0, 100, 100, "%");
+            m_opacity->onValueChanged = [this](int) { fire(); };
+            al->addWidget(makeLabeledGroup("Opacity", m_opacity));
+        }
+        vl->addWidget(appearance);
+
+        // ── Fill content: per-channel CMYK colour + flood/gain trims (Image
+        // colors only), + Paper (always on, every mode composites onto it).
+        // Knob set modeled after paper-design/shaders' halftone-cmyk
+        // (Apache-2.0, github.com/paper-design/shaders). Neither widget is
+        // added to `vl` — ModePanel mounts both inside the shared "Fill"
+        // section (right after the Image colors/Palette selector); only the
+        // CMYK rows toggle with the ink-trim Fill rows (the two ink colour
+        // systems are never both on screen), Paper stays visible in both.
+        m_inksWidget = new QWidget;
+        {
+            auto* il = new QVBoxLayout(m_inksWidget);
+            // Top gap comes from fill->body()'s own row spacing (this sits
+            // right below the Image colors/Palette selector, kGutterComp
+            // right margin matches TonalControlsWidget's own rows).
+            il->setContentsMargins(0, 0, Ui::px(Ui::kColRight - 14), 0);
+            il->setSpacing(Ui::px(Ui::kGapRows));
             static const char* names[4] = { "Cyan", "Magenta", "Yellow", "Black" };
             for (int i = 0; i < 4; ++i) {
                 auto* row = new QHBoxLayout;
@@ -1988,31 +2018,17 @@ public:
                 row->addWidget(m_gain[i], 1);
                 il->addWidget(makeLabeledGroup(names[i], row));
             }
+        }
 
+        m_paperWidget = new QWidget;
+        {
+            auto* pl = new QVBoxLayout(m_paperWidget);
+            pl->setContentsMargins(0, 0, Ui::px(Ui::kColRight - 14), 0);
             m_paper = new FillSwatch(QColor(Qt::white), 1.0f, /*showOpacity*/ false);
             m_paper->onColorEdited = [this](QColor) { fire(); };
             m_paper->onClicked = [this]() { openInkPicker(m_paper); };
-            il->addWidget(makeLabeledGroup("Paper", m_paper));
+            pl->addWidget(makeLabeledGroup("Paper", m_paper));
         }
-        vl->addWidget(inksSec);
-
-        // ── Appearance (Fusion + Opacity) ──────────────────────
-        auto* appearance = new PanelSection("Appearance", /*collapsible*/ false, true);
-        {
-            auto* al = appearance->body();
-            m_fusion = new PopupPicker(1);
-            m_fusion->setEntries(blendPickerEntries());
-            m_fusion->setValue(int(BlendMode::Normal));
-            m_fusion->onSelected = [this](QVariant) {
-                if (!m_updating && onBlendChanged) onBlendChanged();
-            };
-            al->addWidget(makeLabeledGroup("Fusion", m_fusion));
-
-            m_opacity = new DragSpinBox(":/icons/opacity.svg", 0, 100, 100, "%");
-            m_opacity->onValueChanged = [this](int) { fire(); };
-            al->addWidget(makeLabeledGroup("Opacity", m_opacity));
-        }
-        vl->addWidget(appearance);
     }
 
     HalftoneSettings settings() const
@@ -2104,6 +2120,15 @@ public:
     BlendMode blend() const { return BlendMode(m_fusion->value().toInt()); }
     void setBlend(BlendMode m) { m_fusion->setValue(int(m)); }
 
+    // Widgets ModePanel mounts inside the shared "Fill" section. Fixed CMYK
+    // ink editor only applies to ToneMode::ImageColors — the ink-trim Fill
+    // rows (TonalControlsWidget::setInkTrimMode) take over for
+    // FixedTones/Palette, so the two ink colour systems are never shown at
+    // once. Paper is independent of that toggle — always on.
+    QWidget* fillExtra() const { return m_inksWidget; }
+    QWidget* paperExtra() const { return m_paperWidget; }
+    void setInksVisible(bool on) { m_inksWidget->setVisible(on); }
+
 private:
     void fire() { if (!m_updating && onChanged) onChanged(); }
 
@@ -2135,6 +2160,8 @@ private:
     DragSpinBox* m_gain[4]  = {};
     PopupPicker* m_fusion  = nullptr;
     DragSpinBox* m_opacity = nullptr;
+    QWidget*     m_inksWidget = nullptr;
+    QWidget*     m_paperWidget = nullptr;
     bool m_updating = false;
 };
 
@@ -2308,9 +2335,17 @@ ModePanel::ModePanel(QWidget* parent)
         if (m_updating) return;
         // Mosaic's per-tone text rows track the Fill palette size live.
         m_mosaicPage->syncToneCount(int(m_tonal->settings().tones.size()));
+        // Halftone's fixed-CMYK "Inks" section only applies in Image colors
+        // mode; the ink-trim Fill rows take over otherwise.
+        if (m_mode == RenderMode::Halftone)
+            m_halftonePage->setInksVisible(m_tonal->settings().mode == ToneMode::ImageColors);
         emit tonalChanged();
     };
     fill->body()->addWidget(m_tonal);
+    fill->body()->addWidget(m_halftonePage->fillExtra());   // hidden outside Halftone/Image colors
+    fill->body()->addWidget(m_halftonePage->paperExtra());  // Halftone only, but always on within it
+    m_halftonePage->setInksVisible(false);
+    m_halftonePage->paperExtra()->setVisible(false);
     // The "−" removes the fill (collapsed = no fill); "+" restores it.
     m_setFillOpen = [fill](bool open) { fill->setOpen(open); };
     fill->onToggled = [this](bool open) {
@@ -2452,6 +2487,10 @@ void ModePanel::setMode(RenderMode m)
     m_halftonePage->setVisible(m == RenderMode::Halftone);
     m_mosaicTextsSection->setVisible(m == RenderMode::Mosaic);
     m_modePick->setValue(int(m));
+    m_tonal->setInkTrimMode(m == RenderMode::Halftone);
+    m_halftonePage->setInksVisible(m == RenderMode::Halftone
+                                 && m_tonal->settings().mode == ToneMode::ImageColors);
+    m_halftonePage->paperExtra()->setVisible(m == RenderMode::Halftone);
 }
 
 void ModePanel::setFromLayer(const Layer& layer)

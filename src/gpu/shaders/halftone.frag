@@ -147,6 +147,8 @@ void main()
             if (distance(p, ctr) > 2.2 * sp) continue;             // outside any reach
 
             float cov = shapeCov(coverageAt(ctr, s), s);
+            if (shape != 3 && grain > 0.005)                        // Round/Square/Line:
+                cov = clamp(cov + (valueNoise(ctr * kGrainScale) - 0.5) * grain * 0.7, 0.0, 1.0);
 
             if (shape == 3) {                                      // Ink: accumulate field
                 if (cov <= 0.005) continue;
@@ -217,8 +219,9 @@ void main()
         color *= mix(vec3(1.0), inks[s].rgb, a);                   // Multiply over paper
     }
 
-    // Grain only wobbles the blob edges above (organic displacement); no
-    // visible speckle overlay here — it made high grain values too noisy.
+    // Grain: Round/Square/Line get a per-dot coverage nudge above (dot size
+    // varies cell-to-cell); Ink wobbles the accumulated blob field instead.
+    // No separate raster speckle overlay — that made high grain too noisy.
 
     float op = clamp(pB.x, 0.0, 1.0);
     fragColor = vec4(color * op, op);   // premultiplied, layer alpha = opacity

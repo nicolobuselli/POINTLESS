@@ -88,6 +88,10 @@ set(SOURCES
 # ── Executable ───────────────────────────────────────────────────────────────
 if(WIN32)
     add_executable(POINTLESS WIN32 ${SOURCES})
+    # app.rc.obj non dipende da logo.ico secondo make: senza questo, sostituire
+    # logo.ico non forza il recompile della risorsa e l'exe tiene l'icona vecchia.
+    set_source_files_properties(src/app.rc PROPERTIES OBJECT_DEPENDS
+        "${CMAKE_SOURCE_DIR}/assets/logo.ico")
 else()
     add_executable(POINTLESS ${SOURCES})
 endif()

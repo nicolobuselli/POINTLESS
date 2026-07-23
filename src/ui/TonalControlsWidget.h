@@ -51,6 +51,11 @@ public:
     // Source image for the "Extract from image" palette generator.
     void setSourceImage(const QImage& img) { m_sourceImage = img; }
 
+    // Halftone only: each tone row trades its level slider for the same
+    // Flood/Gain ink-trim pair as a fixed CMYK screen (one rotated screen
+    // per tone) instead of a posterize luminosity boundary.
+    void setInkTrimMode(bool on);
+
 private:
     // Tone rows / mode
     void rebuildRows();
@@ -119,9 +124,12 @@ private:
 
     struct Row {
         FillSwatch*    swatch = nullptr;
-        NoWheelSlider* slider = nullptr;       // level slider
+        NoWheelSlider* slider = nullptr;       // level slider (nullptr in ink-trim mode)
+        DragSpinBox*   flood  = nullptr;       // ink-trim mode only
+        DragSpinBox*   gain   = nullptr;       // ink-trim mode only
     };
     std::vector<Row> m_rows;
 
     bool m_updating = false;
+    bool m_inkTrim  = false;
 };

@@ -134,10 +134,17 @@ struct ToneEntry {
     QColor color = QColor(0xD9, 0xD9, 0xD9);
     int    level = 128;      // 0..255 luminosity anchor
     float  opacity = 1.0f;   // 0.0..1.0 per-tone opacity
+    // Halftone-only ink trim (ignored by every other consumer of tones):
+    // Halftone's ink-trim Fill rows edit these instead of the level slider,
+    // one rotated screen per tone reusing the same Flood/Gain knobs as the
+    // fixed CMYK inks (see HalftoneSettings).
+    float  flood = 0.0f;     // -1..1
+    float  gain  = 0.0f;     // -1..1
 };
 
 inline bool operator==(const ToneEntry& a, const ToneEntry& b) {
-    return a.color == b.color && a.level == b.level && a.opacity == b.opacity;
+    return a.color == b.color && a.level == b.level && a.opacity == b.opacity
+        && a.flood == b.flood && a.gain == b.gain;
 }
 
 struct TonalSettings {

@@ -258,6 +258,13 @@ void renderChannel(ChannelJob& job)
         float cov = cellCoverage(job, cx, cy, cw, ch);
         cov = std::pow(qBound(0.0f, cov, 1.0f), invGamma);
         cov = qBound(0.0f, cov * (1.0f + job.gain) + job.flood, 1.0f);
+        if (p.grain > 0.005f) {
+            // Same paper-fibre noise as the Ink style, applied per-dot
+            // instead of to an accumulated field: nudges each dot's own
+            // coverage so size varies slightly cell-to-cell.
+            const float n = valueNoise(px * kGrainScale, py * kGrainScale) - 0.5f;
+            cov = qBound(0.0f, cov + n * p.grain * 0.7f, 1.0f);
+        }
         if (cov <= 0.001f) continue;
 
         QTransform t;
@@ -371,6 +378,8 @@ void HalftoneRenderer::render(const QImage& input, QPainter& output,
             QColor ink = tones[size_t(i)].color;
             ink.setAlphaF(qBound(0.0f, tones[size_t(i)].opacity, 1.0f));
             j.ink   = ink;
+            j.flood = qBound(-1.0f, tones[size_t(i)].flood, 1.0f);
+            j.gain  = qBound(-1.0f, tones[size_t(i)].gain, 1.0f);
             j.angle = (i < 4) ? angles[i]
                               : std::fmod(params.angleK + float(i) * 37.5f, 180.0f);
         }
