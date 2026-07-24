@@ -775,6 +775,15 @@ void GpuCanvasWidget::initialize(QRhiCommandBuffer* cb)
     layoutSrb->create();
     m_blitPipeline->setShaderResourceBindings(layoutSrb.get());
     m_blitPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    // Premultiplied over: without this, transparent source pixels overwrite
+    // the #1E1E1E clear outright instead of letting it show through.
+    QRhiGraphicsPipeline::TargetBlend tb;
+    tb.enable   = true;
+    tb.srcColor = QRhiGraphicsPipeline::One;
+    tb.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    tb.srcAlpha = QRhiGraphicsPipeline::One;
+    tb.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    m_blitPipeline->setTargetBlends({ tb });
     m_blitPipeline->create();
 }
 

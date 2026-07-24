@@ -1,5 +1,6 @@
 #include "TimelineWidget.h"
 #include "Theme.h"
+#include "Widgets.h"
 #include "../core/AnimParams.h"
 
 #include <QHBoxLayout>
@@ -608,11 +609,27 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent)
     mkInner(m_endSpin, "end", 1, 1000000, m_anim.frameEnd);
     bar->addWidget(rangeBox);
 
-    // FPS kept alive (hidden) so export keeps a frame rate.
-    m_fpsSpin = new QSpinBox;
-    m_fpsSpin->setRange(1, 240);
-    m_fpsSpin->setValue(m_anim.fps);
-    m_fpsSpin->setVisible(false);
+    // ── FPS dropdown — frame-hold effect: quantizes which native frame gets
+    // rendered (stutter/stop-motion look), duration and export length are
+    // untouched (see Animation::steppedFrame).
+    auto* fpsLbl = new QLabel("fps");
+    fpsLbl->setObjectName("tlRangeLbl");
+    bar->addWidget(fpsLbl);
+
+    m_fpsPicker = new PopupPicker(1);
+    m_fpsPicker->setMinimumWidth(Ui::px(60));
+    m_fpsPicker->setEntries({
+        { 24, "24" },
+        { 15, "15" },
+        { 12, "12" },
+        { 8,  "8"  },
+    });
+    m_fpsPicker->onSelected = [this](QVariant v) {
+        if (m_updating) return;
+        m_anim.stepFps = v.toInt();
+        emitEdited();
+    };
+    bar->addWidget(m_fpsPicker);
 
     vl->addLayout(bar);
 
@@ -683,7 +700,7 @@ void TimelineWidget::syncControls()
     m_frameSpin->setValue(m_anim.playhead);
     m_startSpin->setValue(m_anim.frameStart);
     m_endSpin->setValue(m_anim.frameEnd);
-    m_fpsSpin->setValue(m_anim.fps);
+    m_fpsPicker->setValue(m_anim.stepFps);
     m_updating = prev;
 }
 

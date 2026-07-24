@@ -52,7 +52,15 @@ public:
     // Live drag preview resolution, set by the UI to the preview widget's
     // on-screen pixel size — so the fast pass already looks like the final
     // (which is downscaled to the same size), making the swap near-invisible.
-    void setInteractivePreviewPx(int px) { m_interactivePx = qBound(256, px, 2000); }
+    // Upper bound is the app's usual sane working-res ceiling (matches the
+    // 6000px caps elsewhere in this file), NOT the old 2000: MainWindow bumps
+    // this to the full frame size when every visible layer is GPU-renderable
+    // (animCanPlayLive()), since that pass is nearly free on GPU — a 2000 cap
+    // used to silently truncate that bump for any frame bigger than 2000px
+    // (common: phone photos import at native res), forcing a downscaled —
+    // and therefore blurry/wrong-scale — interactive pass even though the
+    // full-res one would have been just as cheap.
+    void setInteractivePreviewPx(int px) { m_interactivePx = qBound(256, px, 6000); }
 
     static constexpr int FAST_MAX_PX        = 600;   // preview res for the playback cache
     static constexpr int INTERACTIVE_MAX_PX = 900;   // default live drag preview cap
@@ -134,10 +142,6 @@ private:
         QSize       srcSize;
         const void* srcBits = nullptr; // identity check only, never dereferenced
         QImage      rendered;
-        // GPU halftone/Dot Grid entries only: spacing multiplier the bake
-        // applied (compensateSymbolScale + prerenderAtFrameRes), needed to
-        // build UBO settings on cache hits.
-        float       spacingScale = 1.0f;
     };
     static QImage renderDocumentImpl(const QImage& source, const SessionParams& params,
                                      const QHash<int, QImage>& layerSrc,

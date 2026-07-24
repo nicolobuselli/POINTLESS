@@ -6,6 +6,7 @@
 
 class QSpinBox;
 class QPushButton;
+class PopupPicker;
 class TimelineCanvas;
 
 /**
@@ -54,6 +55,6 @@ private:
     QSpinBox*    m_frameSpin  = nullptr;   // current frame (scrubs)
     QSpinBox*    m_startSpin  = nullptr;
     QSpinBox*    m_endSpin    = nullptr;
-    QSpinBox*    m_fpsSpin    = nullptr;   // kept (hidden) for export fps
+    PopupPicker* m_fpsPicker  = nullptr;   // Native / 24 / 15 / 12 / 8 fps
     TimelineCanvas* m_canvas  = nullptr;
 };

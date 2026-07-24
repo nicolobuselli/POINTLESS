@@ -65,7 +65,7 @@ QFrame* bandLine()
 // icon looking bottom-aligned against the visually-shorter text. Wrap the
 // icon in a slightly taller box, icon pinned to its top, so centering the
 // *box* nudges the icon up to match the text's optical centre instead.
-QWidget* titleGutterIcon(QWidget* icon)
+QWidget* titleGutterIcon(QWidget* icon, const QLabel* title)
 {
     // Force the stylesheet polish now (QEvent::Polish normally waits for
     // first show): #iconBtn's QSS clamps to a literal 24×24 regardless of
@@ -76,7 +76,21 @@ QWidget* titleGutterIcon(QWidget* icon)
     icon->ensurePolished();
     auto* wrap = new QWidget;
     const int h = icon->height();
-    const int nudge = Ui::px(6);
+    // The nudge only helps titles with no descender (g/p/q/y/j): the font's
+    // reserved descent space then goes unused, so the ink's optical centre
+    // sits above the label box's centre and needs the extra px to match the
+    // icon. Titles WITH a descender ("Background", "Export") already use
+    // that space — box centre and ink centre coincide — so nudging on top
+    // of that overshoots and the icon reads too high. Skip it for those.
+    // (A QFontMetrics tight-bbox check was tried first but a shallow glyph
+    // like 'g' can hint-round to zero descent at small sizes while 'p'
+    // doesn't — unreliable. A plain character check is exact regardless of
+    // font/size.)
+    const QString lower = title->text().toLower();
+    bool hasDescender = false;
+    for (const QChar& c : lower)
+        if (c == 'g' || c == 'j' || c == 'p' || c == 'q' || c == 'y') { hasDescender = true; break; }
+    const int nudge = hasDescender ? 0 : Ui::px(6);
     wrap->setFixedSize(icon->width(), h + nudge);
     auto* wl = new QVBoxLayout(wrap);
     wl->setContentsMargins(0, 0, 0, 0);
@@ -200,7 +214,8 @@ public:
         // stretching to match a 26px header button sibling (+/toggle) — every
         // section title (with or without a header button) then renders at
         // the exact same size, no per-section drift.
-        tl->addWidget(makeSectionTitle(title), 1, Qt::AlignVCenter);
+        m_titleLabel = makeSectionTitle(title);
+        tl->addWidget(m_titleLabel, 1, Qt::AlignVCenter);
         m_titleLayout = tl;
 
         if (collapsible) {
@@ -215,7 +230,7 @@ public:
             m_toggle->setFixedSize(btnPx, btnPx);
             m_toggle->setIconSize(QSize(btnPx - 2 * pad, btnPx - 2 * pad));
             connect(m_toggle, &QPushButton::clicked, this, [this]() { setOpen(!m_open); });
-            tl->addWidget(titleGutterIcon(m_toggle), 0, Qt::AlignVCenter);
+            tl->addWidget(titleGutterIcon(m_toggle, m_titleLabel), 0, Qt::AlignVCenter);
         }
         root->addWidget(titleRow);
 
@@ -253,7 +268,7 @@ public:
         b->setFixedSize(btnPx, btnPx);
         b->setIcon(QIcon(iconRes));
         b->setIconSize(QSize(btnPx - 2 * pad, btnPx - 2 * pad));
-        m_titleLayout->addWidget(titleGutterIcon(b), 0, Qt::AlignVCenter);
+        m_titleLayout->addWidget(titleGutterIcon(b, m_titleLabel), 0, Qt::AlignVCenter);
         return b;
     }
 
@@ -274,6 +289,7 @@ private:
     QWidget*     m_content = nullptr;
     QVBoxLayout* m_body    = nullptr;
     QHBoxLayout* m_titleLayout = nullptr;
+    QLabel*      m_titleLabel  = nullptr;
 };
 
 // Floats a fixed-size child at a fixed right-margin offset of its parent,
@@ -2228,6 +2244,7 @@ ModePanel::ModePanel(QWidget* parent)
         clearBtn->setToolTip("Clear mode (show original)");
         connect(clearBtn, &QPushButton::clicked, this, &ModePanel::clearModeRequested);
         new RightFloat(modeRow, clearBtn, Ui::px(14));
+        m_clearModeBtn = clearBtn;
 
         outer->addWidget(modeRow);
         // Sticky like modeRow itself (both live above the QScrollArea below):
@@ -2422,6 +2439,20 @@ ModePanel::ModePanel(QWidget* parent)
     scroll->setWidget(content);
     installOverlayScrollbar(scroll);   // floats → dividers reach the panel edge
     outer->addWidget(scroll, 1);
+
+    // Before any layer/image exists (or import), match the no-mode state
+    // setFromLayer() would apply for an Original layer — otherwise the panel
+    // sits at its construction-time defaults (Dot Grid) with nothing behind it.
+    m_modePick->setPlaceholder("Select mode…");
+    m_dotGridPage->setVisible(false);
+    m_ditherPage->setVisible(false);
+    m_asciiPage->setVisible(false);
+    m_mosaicPage->setVisible(false);
+    m_halftonePage->setVisible(false);
+    m_mosaicTextsSection->setVisible(false);
+    m_noModeSection->setVisible(true);
+    m_clearModeBtn->setVisible(false);
+    m_fillSection->setVisible(false);
 }
 
 // ── Fill / Background / source ───────────────────────────────
@@ -2544,6 +2575,7 @@ void ModePanel::setFromLayer(const Layer& layer)
         m_noModeOpacity->setValue(int(qRound(layer.opacity * 100.0f)));
     }
     m_noModeSection->setVisible(!hasMode);
+    m_clearModeBtn->setVisible(hasMode);
     m_fillSection->setVisible(hasMode);
 
     m_updating = false;

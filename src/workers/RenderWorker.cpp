@@ -237,22 +237,38 @@ static float effectivePlacementScalePct(LayerKind kind, float scalePct, QSize sr
     return float(scalePct / rs);
 }
 
-static void prerenderAtFrameRes(QImage& src, Layer& layer)
+// Settings-only half of the frame-res bake: rescales symbol pitch + drops
+// placement scale to match, WITHOUT touching any pixel data. GPU screen
+// shaders (halftone/DotGrid/dither/mosaic/ascii) bake their pattern straight
+// into a content-pass render target sized off the returned QSize — the raw
+// source texture is sampled via mip/textureLod regardless of its own
+// resolution (GpuCanvasWidget), so it never needs to be pre-upscaled on the
+// CPU. Only the pure-CPU raster path (prerenderAtFrameRes below) still needs
+// real pixel work, for QPainter antialiasing quality.
+static QSize frameResBakeSize(Layer& layer, QSize srcSize)
 {
-    if (layer.kind == LayerKind::Original || src.isNull()) return;
-    const float newScale = effectivePlacementScalePct(layer.kind, layer.transform.scalePct, src.size());
-    if (newScale >= layer.transform.scalePct) return;   // not enlarged → nothing to gain
+    if (layer.kind == LayerKind::Original || srcSize.isEmpty()) return srcSize;
+    const float newScale = effectivePlacementScalePct(layer.kind, layer.transform.scalePct, srcSize);
+    if (newScale >= layer.transform.scalePct) return srcSize;   // not enlarged → nothing to gain
     const double rs = double(layer.transform.scalePct) / double(newScale);
 
-    src = src.scaled(qMax(1, qRound(src.width()  * rs)),
-                     qMax(1, qRound(src.height() * rs)),
-                     Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    const QSize bake(qMax(1, qRound(srcSize.width()  * rs)),
+                      qMax(1, qRound(srcSize.height() * rs)));
     layer.dotGrid.grid.spacing = qMax(2.0f, layer.dotGrid.grid.spacing * float(rs));
     layer.ascii.cellSize        = qMax(3,    int(layer.ascii.cellSize    * rs));
     layer.dither.pixelSize      = qMax(1,    qRound(layer.dither.pixelSize * rs));
     layer.mosaic.spacing        = qMax(2.0f, layer.mosaic.spacing * float(rs));
     layer.halftone.spacing      = qMax(2.0f, layer.halftone.spacing * float(rs));
     layer.transform.scalePct    = newScale;
+    return bake;
+}
+
+static void prerenderAtFrameRes(QImage& src, Layer& layer)
+{
+    if (src.isNull()) return;
+    const QSize bake = frameResBakeSize(layer, src.size());
+    if (bake == src.size()) return;
+    src = src.scaled(bake, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 }
 
 // Symbol sizes (halftone spacing, ascii cell, dither pixel) are authored in
@@ -429,6 +445,31 @@ static bool gpuAdjustChainLayer(const Layer& l)
     return l.kind == LayerKind::Original && !adjPointOnly(l.adjustments);
 }
 
+// True when every visible layer's content is fully GPU-driven: raw source
+// uploaded untouched, pattern/adjustments computed by the shader from
+// uniforms (see renderLayersPackage's j.origSrc-passthrough branches below).
+// For these layers, the SOURCE image's raw pixel size costs nothing — no CPU
+// resample ever happens — only the FRAME (document canvas) size matters.
+static bool layerGpuCheap(const Layer& l)
+{
+    switch (l.kind) {
+        case LayerKind::Original: return true;   // adjust chain or point-op, both GPU
+        case LayerKind::DotGrid:  return DotGridRenderer::gpuRenderable(l.dotGrid);
+        case LayerKind::Halftone: return HalftoneRenderer::gpuRenderable(l.halftone);
+        case LayerKind::Dither:   return DitherRenderer::gpuRenderable(l.dither);
+        case LayerKind::Mosaic:   return MosaicRenderer::gpuRenderable(l.mosaic);
+        case LayerKind::Ascii:    return AsciiRenderer::gpuRenderable(l.ascii);
+    }
+    return false;
+}
+
+static bool allVisibleLayersGpuCheap(const SessionParams& params)
+{
+    for (const Layer& l : params.layers)
+        if (l.visible && !layerGpuCheap(l)) return false;
+    return true;
+}
+
 // ImageAdjuster's step-1 resize (sizePct), replicated for GpuLayer.contentSize:
 // the GPU adjust chain resamples the raw source to this size in its first pass.
 static QSize sizePctScaled(QSize s, int sizePct)
@@ -522,8 +563,7 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
                 auto sizeIt = layerIt->find(sizeKey);
                 if (sizeIt != layerIt->end() && sizeIt->key == contentKey
                     && sizeIt->srcBits == srcBits) {
-                    j.rendered     = sizeIt->rendered;
-                    j.spacingScale = sizeIt->spacingScale;
+                    j.rendered = sizeIt->rendered;
                     hit = true;
                 }
             }
@@ -533,25 +573,11 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
                 j.rendered = j.origSrc;
             } else if (j.halftone || j.instanced || j.ditherScr || j.mosaicScr
                        || j.asciiScr) {
-                QImage wsrc = j.origSrc;
-                Layer  wlayer = j.origLayer;
-                compensateSymbolScale(wlayer);
-                prerenderAtFrameRes(wsrc, wlayer);
-                j.rendered = wsrc;   // RAW: the GPU adjust chain does the rest
-                j.spacingScale = j.halftone
-                    ? wlayer.halftone.spacing
-                      / qMax(0.01f, j.origLayer.halftone.spacing)
-                    : j.instanced
-                    ? wlayer.dotGrid.grid.spacing
-                      / qMax(0.01f, j.origLayer.dotGrid.grid.spacing)
-                    : j.mosaicScr
-                    ? wlayer.mosaic.spacing
-                      / qMax(0.01f, j.origLayer.mosaic.spacing)
-                    : j.asciiScr
-                    ? float(wlayer.ascii.cellSize)
-                      / qMax(1, j.origLayer.ascii.cellSize)
-                    : float(wlayer.dither.pixelSize)
-                      / qMax(1, j.origLayer.dither.pixelSize);
+                // RAW native-res source, no CPU resample: the GPU content
+                // pass bakes the pattern directly at frame resolution (see
+                // gl.contentSize below) and samples this texture via mip/
+                // textureLod regardless of its size.
+                j.rendered = j.origSrc;
             } else {
                 QImage wsrc = j.origSrc;
                 Layer  wlayer = j.origLayer;
@@ -571,7 +597,7 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
                 j.rendered = j.rendered.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
             QMutexLocker lock(&m_layerCacheMutex);
             m_layerCache[j.origLayer.id][sizeKey] =
-                { contentKey, j.origSrc.size(), srcBits, j.rendered, j.spacingScale };
+                { contentKey, j.origSrc.size(), srcBits, j.rendered };
         }
     });
 
@@ -591,9 +617,32 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
         gl.gpuAdjust   = j.gpuAdjust;
         gl.adjustChain = j.adjChain || j.halftone || j.instanced || j.ditherScr
                        || j.mosaicScr || j.asciiScr;
+
+        // Bake size + symbol-pitch scale: pure arithmetic on settings (no
+        // pixel data), so recomputed fresh here regardless of cache hit —
+        // frees the layer cache from needing to store spacingScale at all.
+        QSize bakeBase = j.rendered.size();
+        if (j.halftone || j.instanced || j.ditherScr || j.mosaicScr || j.asciiScr) {
+            Layer wlayer = j.origLayer;
+            compensateSymbolScale(wlayer);
+            bakeBase = frameResBakeSize(wlayer, j.origSrc.size());
+            j.spacingScale = j.halftone
+                ? wlayer.halftone.spacing
+                  / qMax(0.01f, j.origLayer.halftone.spacing)
+                : j.instanced
+                ? wlayer.dotGrid.grid.spacing
+                  / qMax(0.01f, j.origLayer.dotGrid.grid.spacing)
+                : j.mosaicScr
+                ? wlayer.mosaic.spacing
+                  / qMax(0.01f, j.origLayer.mosaic.spacing)
+                : j.asciiScr
+                ? float(wlayer.ascii.cellSize)
+                  / qMax(1, j.origLayer.ascii.cellSize)
+                : float(wlayer.dither.pixelSize)
+                  / qMax(1, j.origLayer.dither.pixelSize);
+        }
         if (gl.adjustChain)   // chain's first pass resamples raw → this size
-            gl.contentSize = sizePctScaled(j.rendered.size(),
-                                           j.origLayer.adjustments.sizePct);
+            gl.contentSize = sizePctScaled(bakeBase, j.origLayer.adjustments.sizePct);
         gl.placement   = layerMatrix(placementTf, gl.contentSize, outSize);
         if (j.instanced) {
             gl.dotScreen   = true;
@@ -964,9 +1013,19 @@ void RenderWorker::launchFast()
 
     // Downscale the whole document so neither the source render nor the frame
     // composite exceeds the interactive budget — both are capped.
+    // Exception: when every visible layer is GPU-cheap (see layerGpuCheap),
+    // the source's raw pixel size is irrelevant to interactive cost — only
+    // the frame matters. Including srcMax there used to shrink the FRAME
+    // (and every per-pixel param riding on it: spacing, cell size, …) down
+    // to match a large imported photo's resolution even though the frame
+    // itself was small and cheap — a big photo in a small-frame document
+    // made every interactive pass render at a fraction of the frame's
+    // actual size, then visibly "resettle" (sharper + differently-scaled
+    // pattern) once the full pass landed at true native frame resolution.
     const int srcMax   = qMax(m_sourceImage.width(), m_sourceImage.height());
     const int frameMax = qMax(qMax(1, m_latestParams.frameW), m_latestParams.frameH);
-    const int docMax   = qMax(srcMax, frameMax);
+    const bool gpuLiveDoc = m_gpuPackages && allVisibleLayersGpuCheap(m_latestParams);
+    const int docMax   = gpuLiveDoc ? frameMax : qMax(srcMax, frameMax);
     const float k = (docMax > m_interactivePx) ? float(m_interactivePx) / float(docMax) : 1.0f;
 
     QImage src = m_sourceImage;

@@ -1950,13 +1950,25 @@ void PopupPicker::openPopup()
 
     // Right-aligned to the right column's left edge, top-aligned with the
     // box, so the popup sits over the canvas rather than overlapping the
-    // (narrow) column.
+    // (narrow) column. Pickers outside that column (e.g. the timeline's fps
+    // dropdown) have no "sidePanel" ancestor — fall back to a plain combo-box
+    // opening: right below the button.
     QWidget* column = this;
-    while (column->parentWidget() && column->objectName() != "sidePanel")
+    bool foundSidePanel = false;
+    while (column->parentWidget()) {
+        if (column->objectName() == "sidePanel") { foundSidePanel = true; break; }
         column = column->parentWidget();
-    const int columnLeftGlobalX = column->mapToGlobal(QPoint(0, 0)).x();
+    }
 
-    QPoint pos(columnLeftGlobalX - pop->width(), mapToGlobal(QPoint(0, 0)).y());
+    QPoint pos;
+    if (foundSidePanel) {
+        const int columnLeftGlobalX = column->mapToGlobal(QPoint(0, 0)).x();
+        pos = QPoint(columnLeftGlobalX - pop->width(), mapToGlobal(QPoint(0, 0)).y());
+    } else {
+        pos = mapToGlobal(QPoint(0, height()));
+        if (pos.x() + pop->width() > avail.right())
+            pos.setX(mapToGlobal(QPoint(width(), 0)).x() - pop->width());
+    }
     if (pos.y() + pop->height() > avail.bottom())
         pos.setY(avail.bottom() - pop->height());
     if (pos.y() < avail.top())

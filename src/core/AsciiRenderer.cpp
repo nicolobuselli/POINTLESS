@@ -190,7 +190,13 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
 {
     const int imgW  = rgb.width();
     const int imgH  = rgb.height();
-    const int cellH = qBound(4, params.cellSize, 128);
+    // Upper bound is generous (not the slider's own 4..100 range): a layer
+    // whose source is much bigger than the frame gets its cellSize inflated
+    // by compensateSymbolScale (1/placementScale) before it reaches here, so
+    // an authored value well inside the slider's range can still arrive as a
+    // large content-space pixel size. See gpuAtlas's identical clamp below
+    // for the full explanation.
+    const int cellH = qBound(4, params.cellSize, 512);
 
     QFont font = settingsFont(params, cellH);
     if (!QFontMetricsF(font).inFontUcs4(0x28FF)) {
@@ -288,7 +294,14 @@ const AsciiGpuAtlas& AsciiRenderer::gpuAtlas(const AsciiSettings& s)
     static QHash<QString, AsciiGpuAtlas> cache;
     QMutexLocker lock(&mutex);
 
-    const int     cellH   = qBound(3, s.cellSize, 128);
+    // 512 not the slider's 4..100: compensateSymbolScale (RenderWorker) divides
+    // cellSize by the layer's placement scale before it reaches here, so a big
+    // source photo fit into a small frame (placementScale well under 1) can
+    // inflate a modest authored cellSize past a tight cap — atlas/font size
+    // would then stop growing with the slider well short of its max, freezing
+    // the on-screen glyph size (reported: authored cellSize 38 already hit a
+    // 128 cap here after ~3.7x compensation from a large-photo/small-frame doc).
+    const int     cellH   = qBound(3, s.cellSize, 512);
     const QFont   font    = settingsFont(s, cellH);
     const QString charset = s.effectiveCharset();
     const QFontMetricsF fm(font);
@@ -370,7 +383,8 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
 
     const int imgW  = rgb.width();
     const int imgH  = rgb.height();
-    const int cellH = qBound(3, params.cellSize, 128);
+    // 512 not the slider's 4..100 — see gpuAtlas's identical clamp above.
+    const int cellH = qBound(3, params.cellSize, 512);
 
     const QFont font = settingsFont(params, cellH);
 

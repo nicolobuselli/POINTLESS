@@ -94,6 +94,7 @@ private:
     DragSpinBox* m_noModeOpacity = nullptr;
     QWidget*     m_mosaicTextsSection = nullptr;   // Texts section (Mosaic only, between Fill and Background)
     PopupPicker* m_modePick = nullptr;   // mode dropdown (replaced the tab row)
+    QPushButton* m_clearModeBtn = nullptr; // "X" next to mode picker, hidden when no mode set
     QScrollArea* m_scroll   = nullptr;   // section stack viewport — see scrollToTop()
 
     DotGridPage*  m_dotGridPage  = nullptr;

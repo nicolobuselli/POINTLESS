@@ -459,7 +459,7 @@ QJsonObject toJson(const Animation& a) {
     for (const Track& t : a.tracks) tracks.append(toJson(t));
     return {
         { "tracks", tracks }, { "frameStart", a.frameStart },
-        { "frameEnd", a.frameEnd }, { "fps", a.fps },
+        { "frameEnd", a.frameEnd }, { "fps", a.fps }, { "stepFps", a.stepFps },
     };
 }
 Animation animFromJson(const QJsonObject& o) {
@@ -469,6 +469,7 @@ Animation animFromJson(const QJsonObject& o) {
     a.frameStart = o["frameStart"].toInt(a.frameStart);
     a.frameEnd   = o["frameEnd"].toInt(a.frameEnd);
     a.fps        = o["fps"].toInt(a.fps);
+    a.stepFps    = o["stepFps"].toInt(a.stepFps);
     return a;
 }
 

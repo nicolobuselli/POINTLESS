@@ -1253,18 +1253,9 @@ void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
         const int x = (width()  - m_scaled.width())  / 2 + m_panOffset.x();
         const int y = (height() - m_scaled.height()) / 2 + m_panOffset.y();
 
-        // Checkerboard under transparent output
-        if (m_scaled.hasAlphaChannel()) {
-            const int cs = 8;
-            const QRect imgRect(x, y, m_scaled.width(), m_scaled.height());
-            for (int yy = 0; yy < imgRect.height(); yy += cs)
-                for (int xx = 0; xx < imgRect.width(); xx += cs)
-                    p.fillRect(x + xx, y + yy,
-                               qMin(cs, imgRect.width() - xx),
-                               qMin(cs, imgRect.height() - yy),
-                               ((xx / cs + yy / cs) % 2) ? QColor("#2A2A2A") : QColor("#242424"));
-        }
-
+        // Transparent output falls through to the #1E1E1E already filled
+        // above, so frame background matches canvas background exactly
+        // instead of showing a checkerboard.
         p.drawImage(x, y, m_scaled);
     }
 

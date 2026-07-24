@@ -1401,7 +1401,7 @@ bool MainWindow::buildPlayCache(int dialogDelayMs)
         progress.setValue(i);
         if (progress.wasCanceled()) { m_playCache.clear(); return false; }
 
-        const int frame = f0 + i;
+        const int frame = steppedFrame(img.anim, f0 + i);
         QImage src = img.source;
         if (!img.frames.isEmpty())
             src = img.frames[qBound(0, frame - f0, img.frames.size() - 1)];
@@ -2228,11 +2228,15 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
     if (!qualityOnly) { m_lastRender = {}; m_lastPkgRender = {}; }
 
     const SessionImage& img = m_images[m_current];
+    // The fps dropdown's frame-hold: content (source pixels + baked params)
+    // samples this quantized frame, while img.anim.playhead itself always
+    // stays the raw native frame (scrubbing/keyframes never see the hold).
+    const int frame = steppedFrame(img.anim, img.anim.playhead);
 
     // Source: a clip uses the playhead's frame; a still uses its image.
     QImage source = img.source;
     if (!img.frames.isEmpty()) {
-        const int fi = qBound(0, img.anim.playhead - img.anim.frameStart,
+        const int fi = qBound(0, frame - img.anim.frameStart,
                               img.frames.size() - 1);
         source = img.frames[fi];
     }
@@ -2240,7 +2244,7 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
     // Parameters: bake the animation at the current playhead, then fold each
     // parent group's master visibility into its children.
     const SessionParams params = bakeGroupVisibility(img.anim.hasAnimation()
-        ? paramsAtFrame(img.state, img.anim, img.anim.playhead)
+        ? paramsAtFrame(img.state, img.anim, frame)
         : img.state);
 
     // Render the live preview at the size it's actually shown on screen, so the
@@ -2260,7 +2264,7 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
     }
     m_worker->setInteractivePreviewPx(previewPx);
 
-    const QHash<int, QImage> ls = layerSourcesAt(img, img.anim.playhead);
+    const QHash<int, QImage> ls = layerSourcesAt(img, frame);
     if (qualityOnly)
         // Full pass only — no fast preview pass to flash/jitter during zoom.
         m_worker->requestFullRender(source, params, ls);
@@ -2439,7 +2443,7 @@ void MainWindow::copyToClipboard()
         // through the untouched CPU path (rare operation, exact output).
         const SessionImage& img = m_images[m_current];
         const QImage flat = RenderWorker::renderDocument(
-            img.source, img.state, layerSourcesAt(img, img.anim.playhead));
+            img.source, img.state, layerSourcesAt(img, steppedFrame(img.anim, img.anim.playhead)));
         if (!flat.isNull()) {
             QApplication::clipboard()->setImage(flat);
             m_preview->setStatus("Copied to clipboard");
@@ -2955,15 +2959,16 @@ void MainWindow::exportSvg(const QString& baseName)
     if (m_current < 0) return;
     const SessionImage& img = m_images[m_current];
 
+    const int frame = steppedFrame(img.anim, img.anim.playhead);
     QImage source = img.source;
     if (!img.frames.isEmpty()) {
-        const int fi = qBound(0, img.anim.playhead - img.anim.frameStart, img.frames.size() - 1);
+        const int fi = qBound(0, frame - img.anim.frameStart, img.frames.size() - 1);
         source = img.frames[fi];
     }
     const SessionParams params = bakeGroupVisibility(img.anim.hasAnimation()
-        ? paramsAtFrame(img.state, img.anim, img.anim.playhead)
+        ? paramsAtFrame(img.state, img.anim, frame)
         : img.state);
-    const QHash<int, QImage> ls = layerSourcesAt(img, img.anim.playhead);
+    const QHash<int, QImage> ls = layerSourcesAt(img, frame);
 
     // Heavy-render guard: a fine grid / small dither cell can produce hundreds of
     // thousands of shapes — a huge file that may lag or crash while writing.
@@ -3008,7 +3013,8 @@ void MainWindow::exportSequence(const QString& baseName)
         progress.setValue(i);
         if (progress.wasCanceled()) break;
 
-        const int frame = f0 + i;
+        const int rawFrame = f0 + i;
+        const int frame    = steppedFrame(img.anim, rawFrame);
         QImage src = img.source;
         if (!img.frames.isEmpty()) {
             const int fi = qBound(0, frame - f0, img.frames.size() - 1);
@@ -3020,7 +3026,7 @@ void MainWindow::exportSequence(const QString& baseName)
 
         const QImage canvas = m_worker->renderDocumentInteractive(src, p, layerSourcesAt(img, frame));
         const QString fn = QString("%1/%2_%3.png")
-            .arg(dir, baseName, QString::number(frame).rightJustified(digits, '0'));
+            .arg(dir, baseName, QString::number(rawFrame).rightJustified(digits, '0'));
         if (canvas.save(fn, "PNG")) ++written;
     }
     progress.setValue(count);
@@ -3058,7 +3064,7 @@ void MainWindow::exportVideoMp4(const QString& baseName)
         progress.setValue(i);
         if (progress.wasCanceled()) return;
 
-        const int frame = f0 + i;
+        const int frame = steppedFrame(img.anim, f0 + i);
         QImage src = img.source;
         if (!img.frames.isEmpty())
             src = img.frames[qBound(0, frame - f0, img.frames.size() - 1)];

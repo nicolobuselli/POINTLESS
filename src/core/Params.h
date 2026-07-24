@@ -742,14 +742,15 @@ inline int findLayerById(const std::vector<Layer>& layers, int id)
     return -1;
 }
 
-// Session default: active Dot Grid layer over the hidden Original.
+// Session default: visible no-mode layer (raw image, "Select mode…") over
+// the hidden Original.
 inline std::vector<Layer> defaultLayers()
 {
-    Layer dotGrid;
-    dotGrid.id      = 2;
-    dotGrid.kind    = LayerKind::DotGrid;
-    dotGrid.name    = layerKindName(LayerKind::DotGrid);
-    dotGrid.visible = true;
+    Layer top;
+    top.id      = 2;
+    top.kind    = LayerKind::Original;
+    top.name    = layerKindName(LayerKind::Original);
+    top.visible = true;
 
     Layer original;
     original.id      = 1;
@@ -757,7 +758,7 @@ inline std::vector<Layer> defaultLayers()
     original.name    = layerKindName(LayerKind::Original);
     original.visible = false;
 
-    return { dotGrid, original };
+    return { top, original };
 }
 
 // ============================================================
