@@ -39,8 +39,7 @@ browser, no subscription, no upload.
 
 ## Why
 
-Most dithering/halftone tools are either a one-shot filter (apply once, done)
-or a web toy with no layers and no video support. POINTLESS treats these
+Most dithering and halftone tools today are either simple one-click filters, restricted web experiments with no real workflow, or locked behind payments. POINTLESS treats these
 effects as a real compositing pipeline: stack multiple rendering modes as
 layers, blend them, mask and scale individual parameters over regions of the
 canvas, animate any of it on a timeline, and export straight to mp4.
