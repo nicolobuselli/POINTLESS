@@ -765,6 +765,20 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 #endif
     }
 
+    // Clicking anywhere that isn't the canvas or the panels that edit the
+    // selected layer (Transform/Parameters on the left, mode settings on the
+    // right) clears the on-canvas selection outline/handles — e.g. clicking
+    // the timeline, the library, or the title bar. The active layer (and its
+    // panels) stays put; only the canvas highlight goes away.
+    if (event->type() == QEvent::MouseButtonPress && !m_selection.isEmpty()) {
+        auto* w = qobject_cast<QWidget*>(obj);
+        const bool insideCanvas = w && (w == m_preview || (m_preview && m_preview->isAncestorOf(w)));
+        const bool insideLeft   = w && m_left  && (w == m_left  || m_left->isAncestorOf(w));
+        const bool insideRight  = w && m_right && (w == m_right || m_right->isAncestorOf(w));
+        if (w && !insideCanvas && !insideLeft && !insideRight)
+            onCanvasSelectionChanged(QSet<int>{}, -1);
+    }
+
     const bool editableFocus = qobject_cast<QLineEdit*>(QApplication::focusWidget()) != nullptr;
 
     if (!editableFocus) {
