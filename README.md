@@ -10,7 +10,7 @@
 
 POINTLESS turns photos and footage into dot screens, error-diffusion dithers,
 ASCII glyph art, mosaic tile grids, and canonical 4-color CMYK halftone
-separations — live, with layers, blend modes, per-parameter localization, and
+separations. It has layers, blend modes, per-parameter localization, and
 a full keyframe animation timeline. It's a native C++/Qt6 desktop app: no
 browser, no subscription, no upload.
 
@@ -39,10 +39,7 @@ browser, no subscription, no upload.
 
 ## Why
 
-Most dithering and halftone tools today are either simple one-click filters, restricted web experiments with no real workflow, or locked behind payments. POINTLESS treats these
-effects as a real compositing pipeline: stack multiple rendering modes as
-layers, blend them, mask and scale individual parameters over regions of the
-canvas, animate any of it on a timeline, and export straight to mp4.
+Most dithering and halftone tools today are either simple one-click filters, restricted web experiments with no real workflow, or locked behind payments. POINTLESS treats these effects as a real compositing pipeline: stack multiple rendering modes as layers, blend them, mask and scale individual parameters over regions of the canvas, animate any of it on a timeline, and export straight to mp4.
 
 ---
 
