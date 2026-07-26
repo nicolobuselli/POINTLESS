@@ -38,7 +38,6 @@
 // ============================================================
 
 void NoWheelSlider::wheelEvent(QWheelEvent* e)   { e->ignore(); }
-void NoWheelComboBox::wheelEvent(QWheelEvent* e) { e->ignore(); }
 
 // ============================================================
 //  DragSpinBox
@@ -414,16 +413,16 @@ void LevelsWidget::drawHandle(QPainter& p, float x, Handle h, bool active)
     QColor fill, stroke;
     switch (h) {
         case Handle::Black:
-            fill   = QColor("#2B3313");
-            stroke = QColor("#607817");
+            fill   = Ui::kColLocOliveDark;
+            stroke = Ui::kColLocOliveStroke;
             break;
         case Handle::Mid:
-            fill   = QColor("#607817");
-            stroke = QColor("#607817");
+            fill   = Ui::kColLocOliveStroke;
+            stroke = Ui::kColLocOliveStroke;
             break;
         case Handle::White:
-            fill   = QColor("#D2FC51");
-            stroke = QColor("#89A928");
+            fill   = Ui::kColLocLime;
+            stroke = Ui::kColLocOliveStroke2;
             break;
         default: return;
     }
@@ -444,8 +443,8 @@ void LevelsWidget::paintEvent(QPaintEvent*)
     const QRectF box(0.5, 0.5, w - 1.0, kLvHistH - 1.0);
     QPainterPath boxPath;
     boxPath.addRoundedRect(box, kLvRadius, kLvRadius);
-    p.setPen(QPen(QColor("#3B3B3B"), 1));
-    p.setBrush(QColor(0x27, 0x27, 0x27));
+    p.setPen(QPen(Ui::kColSurface2, 1));
+    p.setBrush(Ui::kColBgPanel);
     p.drawPath(boxPath);
 
     // Histogram (log-scaled, light fill rising from the bottom of the box)
@@ -480,7 +479,7 @@ void LevelsWidget::paintEvent(QPaintEvent*)
             p.drawPolygon(poly);
             // Stroke only the top curve (skip the baseline corners) so the
             // box's own gray bottom border isn't painted over in lime.
-            p.setPen(QPen(QColor("#A0C03F"), 1.5));
+            p.setPen(QPen(Ui::kColSelectStroke, 1.5));
             p.setBrush(Qt::NoBrush);
             p.drawPolyline(poly.constData() + 1, poly.size() - 2);
             p.restore();
@@ -594,11 +593,11 @@ void ChevronButton::paintEvent(QPaintEvent*)
 
     if (underMouse()) {
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor("#3B3B3B"));
+        p.setBrush(Ui::kColSurface2);
         p.drawRoundedRect(rect(), 4, 4);
     }
 
-    QPen pen(QColor("#B2B2B2"), 1.6);
+    QPen pen(Ui::kColTextLabel, 1.6);
     pen.setCapStyle(Qt::RoundCap);
     pen.setJoinStyle(Qt::RoundJoin);
     p.setPen(pen);
@@ -633,8 +632,9 @@ FillSwatch::FillSwatch(QColor color, float opacity, bool showOpacity, QWidget* p
     m_hexEdit->setMaxLength(7);   // allow leading '#'
     m_hexEdit->setCursor(Qt::IBeamCursor);
     m_hexEdit->setStyleSheet(QString(
-        "QLineEdit { background: transparent; border: none; color: #E3E3E3;"
-        " padding: 0; margin: 0; min-height: 0; font-size: %1px; font-weight:500; }").arg(Ui::px(16)));
+        "QLineEdit { background: transparent; border: none; color: %2;"
+        " padding: 0; margin: 0; min-height: 0; font-size: %1px; font-weight:500; }")
+        .arg(Ui::px(16)).arg(Ui::kColTextBody.name()));
     syncHexText();
 
     connect(m_hexEdit, &QLineEdit::returnPressed, m_hexEdit, [this]() {
@@ -728,10 +728,10 @@ void FillSwatch::paintEvent(QPaintEvent*)
     if (m_showOpacity) {
         int divH   = Ui::px(28);
         int divTop = (h - divH) / 2;
-        p.setPen(QPen(QColor("#272727"), 1));
+        p.setPen(QPen(Ui::kColBgPanel, 1));
         p.drawLine(divX, divTop, divX, divTop + divH);
 
-        p.setPen(QColor("#E3E3E3"));
+        p.setPen(Ui::kColTextBody);
         p.setFont(f);
         p.drawText(QRect(divX + 1, 0, width() - divX - 1 - padH, h),
                    Qt::AlignVCenter | Qt::AlignCenter,
@@ -993,7 +993,7 @@ private:
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(QColor(0, 0, 0, 130), Ui::px(4)));
         p.drawRoundedRect(box.adjusted(-1, -1, 1, 1), rad + 1, rad + 1);
-        p.setPen(QPen(QColor("#5D5D5D"), Ui::px(2)));
+        p.setPen(QPen(Ui::kColPopupBorder, Ui::px(2)));
         p.drawRoundedRect(box, rad, rad);
     }
 
@@ -1045,8 +1045,8 @@ void ColorPickerDialog::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(QPen(QColor("#5D5D5D"), 1));
-    p.setBrush(QColor("#1E1E1E"));
+    p.setPen(QPen(Ui::kColPopupBorder, 1));
+    p.setBrush(Ui::kColBgWindow);
     p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
 }
 
@@ -1067,10 +1067,11 @@ void ColorPickerDialog::mouseReleaseEvent(QMouseEvent* e)
 
 void ColorPickerDialog::buildUI(bool showOpacity)
 {
-    const QString kInputQss =
-        "QLineEdit{background:#272727;border:1px solid #5D5D5D;border-radius:6px;"
-        "color:#E3E3E3;font-size:9pt;padding:0 8px;min-height:34px;}"
-        "QLineEdit:focus{border-color:#828282;}";
+    const QString kInputQss = QString(
+        "QLineEdit{background:%1;border:1px solid %2;border-radius:6px;"
+        "color:%3;font-size:9pt;padding:0 8px;min-height:34px;}"
+        "QLineEdit:focus{border-color:#828282;}")
+        .arg(Ui::kColBgPanel.name(), Ui::kColPopupBorder.name(), Ui::kColTextBody.name());
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(Ui::px(16), Ui::px(16), Ui::px(16), Ui::px(16));
@@ -1155,7 +1156,7 @@ void ColorPickerDialog::buildUI(bool showOpacity)
             row->addWidget(m_opacityInput);
 
             auto* pct = new QLabel("%");
-            pct->setStyleSheet("color:#B2B2B2;font-size:9pt;background:transparent;");
+            pct->setStyleSheet(QString("color:%1;font-size:9pt;background:transparent;").arg(Ui::kColTextLabel.name()));
             row->addWidget(pct);
         }
         root->addLayout(row);
@@ -1383,8 +1384,8 @@ void AnimProgressDialog::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(QPen(QColor("#5D5D5D"), 1));
-    p.setBrush(QColor("#1E1E1E"));
+    p.setPen(QPen(Ui::kColPopupBorder, 1));
+    p.setBrush(Ui::kColBgWindow);
     p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
 }
 
@@ -1479,8 +1480,8 @@ void UnsavedChangesDialog::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(QPen(QColor("#5D5D5D"), 1));
-    p.setBrush(QColor("#1E1E1E"));
+    p.setPen(QPen(Ui::kColPopupBorder, 1));
+    p.setBrush(Ui::kColBgWindow);
     p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
 }
 
@@ -1572,8 +1573,8 @@ void StyledMessageBox::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(QPen(QColor("#5D5D5D"), 1));
-    p.setBrush(QColor("#1E1E1E"));
+    p.setPen(QPen(Ui::kColPopupBorder, 1));
+    p.setBrush(Ui::kColBgWindow);
     p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
 }
 
@@ -1874,7 +1875,7 @@ void PopupPicker::openPopup()
             if (row > 0) {   // nothing to divide from above the very first entry
                 auto* line = new QFrame;
                 line->setFixedHeight(1);
-                line->setStyleSheet("background:#5d5d5d;border:none;");
+                line->setStyleSheet(QString("background:%1;border:none;").arg(Ui::kColPopupBorder.name()));
                 gl->addWidget(line, row++, 0, 1, m_columns);
                 measureWidgets.push_back(line);
             }

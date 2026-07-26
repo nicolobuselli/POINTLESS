@@ -10,7 +10,7 @@
 
 class QVBoxLayout;
 class QPushButton;
-class NoWheelComboBox;
+class PopupPicker;
 class ChevronButton;
 class LayerRow;
 class ParentRow;
@@ -116,7 +116,7 @@ private:
     QList<LayerRow*>  m_rows;
     QList<ParentRow*> m_parentRows;
     QString           m_treeSig;     // structure signature → rebuild vs in-place
-    NoWheelComboBox* m_blendCombo   = nullptr;
+    PopupPicker*     m_blendCombo   = nullptr;
     TrashButton*     m_trashBtn     = nullptr;
     bool             m_isExpanded   = true;
     bool             m_updating     = false;

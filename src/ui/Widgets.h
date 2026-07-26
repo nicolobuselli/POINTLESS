@@ -35,13 +35,6 @@ protected:
     void wheelEvent(QWheelEvent* e) override;
 };
 
-class NoWheelComboBox : public QComboBox {
-public:
-    using QComboBox::QComboBox;
-protected:
-    void wheelEvent(QWheelEvent* e) override;
-};
-
 // ── DragSpinBox ──────────────────────────────────────────────
 // Numeric box: drag horizontally to change, double-click to type.
 

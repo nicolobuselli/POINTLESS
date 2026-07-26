@@ -40,7 +40,7 @@ void repolish(QWidget* w)
 }
 
 QPixmap roundedThumb(const QImage& source, const QSize& size, qreal radius,
-                      const QColor& background = QColor("#3B3B3B"), float opacity = 1.0f)
+                      const QColor& background = Ui::kColSurface2, float opacity = 1.0f)
 {
     QPixmap out(size);
     out.fill(Qt::transparent);
@@ -52,7 +52,7 @@ QPixmap roundedThumb(const QImage& source, const QSize& size, qreal radius,
     p.setClipPath(clip);
 
     QColor bg = background;
-    if (!bg.isValid()) bg = QColor("#3B3B3B");
+    if (!bg.isValid()) bg = Ui::kColSurface2;
     bg.setAlphaF(opacity);
 
     p.fillRect(out.rect(), bg);
@@ -181,8 +181,9 @@ public:
         m_nameEdit->setVisible(false);
         m_nameEdit->setStyleSheet(QString(
             "background:transparent; border:none; padding:0; margin:0; min-height:0;"
-            " color:#FFFFFF; font-size:%1px; font-weight:400;"
-            " selection-background-color:#FD5A1F;").arg(Ui::px(18)));
+            " color:%2; font-size:%1px; font-weight:400;"
+            " selection-background-color:%3;")
+            .arg(Ui::px(18)).arg(Ui::kColWhite.name()).arg(Ui::kColAccent.name()));
         pl->addWidget(m_nameEdit, 1);
 
         // Reserve the lock icon's footprint (30px) + a small gap so the name
@@ -492,7 +493,7 @@ protected:
 
         // Tree connector lines: from under each expanded parent down to its
         // children, with a horizontal stub into each child.
-        QPen line(QColor("#5D5D5D"));
+        QPen line(Ui::kColPopupBorder);
         line.setWidthF(1.2);
         p.setPen(line);
         for (int i = 0; i < m_model.size(); ++i) {
@@ -518,7 +519,7 @@ protected:
             const QRect r = groupRect(m_addChildMedia);
             if (r.isValid()) {
                 p.setPen(Qt::NoPen);
-                QColor c("#FD5A1F"); c.setAlpha(40);
+                QColor c(Ui::kColAccent); c.setAlpha(40);
                 p.setBrush(c);
                 p.drawRoundedRect(r.adjusted(1, 1, -1, -1), Ui::px(8), Ui::px(8));
             }
@@ -526,7 +527,7 @@ protected:
         // Reorder indicator line
         if (m_indicatorY >= 0) {
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor("#FD5A1F"));
+            p.setBrush(Ui::kColAccent);
             p.drawRoundedRect(QRectF(2, m_indicatorY - 1.5, width() - 4, 3), 1.5, 1.5);
         }
     }
@@ -686,8 +687,9 @@ public:
         m_nameEdit->setVisible(false);
         m_nameEdit->setStyleSheet(QString(
             "background:transparent; border:none; padding:0; margin:0; min-height:0;"
-            " color:#E3E3E3; font-size:%1px; font-weight:400;"
-            " selection-background-color:#FD5A1F;").arg(Ui::px(18)));
+            " color:%2; font-size:%1px; font-weight:400;"
+            " selection-background-color:%3;")
+            .arg(Ui::px(18)).arg(Ui::kColTextBody.name()).arg(Ui::kColAccent.name()));
         connect(m_nameEdit, &QLineEdit::editingFinished, this, [this]() { finishRename(); });
         bl->addWidget(m_nameEdit, 1);
 
@@ -959,20 +961,20 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
         footer->setContentsMargins(0, 0, 0, 0);
         footer->setSpacing(Ui::px(6));
 
-        m_blendCombo = new NoWheelComboBox;
-        m_blendCombo->setObjectName("blendCombo");
-        for (const auto& e : kBlendEntries) {
-            if (e.groupStart && m_blendCombo->count() > 0)
-            m_blendCombo->insertSeparator(m_blendCombo->count());
-            m_blendCombo->addItem(QString::fromUtf8(e.name), int(e.mode));
+        m_blendCombo = new PopupPicker(1);
+        {
+            QVector<PopupPickerEntry> entries;
+            for (const auto& e : kBlendEntries) {
+                if (e.groupStart) entries.push_back({ QVariant(), QString(), QString(), QString(), true });
+                entries.push_back({ int(e.mode), QString::fromUtf8(e.name), QString(), QString() });
+            }
+            m_blendCombo->setEntries(entries);
         }
-        connect(m_blendCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this](int) {
+        m_blendCombo->setValue(int(BlendMode::Normal));
+        m_blendCombo->onSelected = [this](QVariant v) {
             if (m_updating) return;
-            const QVariant v = m_blendCombo->currentData();
-            if (v.isValid())
-                emit blendModeChanged(m_activeId, static_cast<BlendMode>(v.toInt()));
-        });
+            emit blendModeChanged(m_activeId, static_cast<BlendMode>(v.toInt()));
+        };
         footer->addWidget(m_blendCombo, 1);
 
         m_trashBtn = new TrashButton;
@@ -1244,16 +1246,7 @@ void LayersPanel::syncFooter()
     const int idx = findLayerById(m_layers, m_activeId);
 
     m_updating = true;
-    if (idx >= 0) {
-        const int target = int(m_layers[idx].blend);
-        for (int i = 0; i < m_blendCombo->count(); ++i) {
-            const QVariant v = m_blendCombo->itemData(i);
-            if (v.isValid() && v.toInt() == target) {
-                m_blendCombo->setCurrentIndex(i);
-                break;
-            }
-        }
-    }
+    if (idx >= 0) m_blendCombo->setValue(int(m_layers[idx].blend));
     m_updating = false;
 
     m_blendCombo->setEnabled(idx >= 0);

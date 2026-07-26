@@ -10,6 +10,7 @@
 #include "ui/MainWindow.h"
 #include "ui/GpuCanvasWidget.h"
 #include "ui/UiScale.h"
+#include "ui/Theme.h"
 
 #ifdef Q_OS_WIN
 #include <QSettings>
@@ -72,25 +73,28 @@ static QString scaleStyleSheet(QString css)
 // rule that uses it follows, instead of hunting hex codes across the file.
 static QString substitutePaletteTokens(QString css)
 {
+    // Values shared with C++ paint code live in Ui::kCol* (ui/Theme.h) so a
+    // change there follows through to both style.qss and QPainter/setStyleSheet
+    // call sites. Roles only style.qss ever needs stay as plain hex here.
     static const QHash<QString, QString> kPalette = {
         // Base surfaces
-        { "bgWindow",    "#1E1E1E" },
-        { "bgPanel",     "#272727" },
-        { "surface2",    "#3B3B3B" },   // flat dark chrome: title bar, hairlines, checked tab, menus, popups
+        { "bgWindow",    Ui::kColBgWindow.name().toUpper() },
+        { "bgPanel",     Ui::kColBgPanel.name().toUpper() },
+        { "surface2",    Ui::kColSurface2.name().toUpper() },   // flat dark chrome: title bar, hairlines, checked tab, menus, popups
         { "surface3",    "#313131" },   // palette item / trash-idle bg
-        { "popupBorder", "#5D5D5D" },   // borders on floating popups/menus/panels (not the box system below)
+        { "popupBorder", Ui::kColPopupBorder.name().toUpper() },   // borders on floating popups/menus/panels (not the box system below)
         { "vlineColor",  "#161616" },
 
         // Text
-        { "textBody",  "#E3E3E3" },
-        { "textTitle", "#EEEEEE" },
-        { "textLabel", "#B2B2B2" },
+        { "textBody",  Ui::kColTextBody.name().toUpper() },
+        { "textTitle", Ui::kColTextTitle.name().toUpper() },
+        { "textLabel", Ui::kColTextLabel.name().toUpper() },
         { "textValue", "#A6A6A6" },
-        { "textDim",   "#8E8E8E" },
+        { "textDim",   Ui::kColTextDim.name().toUpper() },
 
         // Unified box system (every dropdown / number / text / svg box)
         { "boxFill",        "transparent" },
-        { "boxStroke",      "#3D3D3D" },
+        { "boxStroke",      Ui::kColBoxStroke.name().toUpper() },
         { "boxStrokeHover", "#616161" },
         { "boxStrokeActive", "#45556C" },  // border while editing a number / dropdown open / pressed
 
@@ -102,15 +106,15 @@ static QString substitutePaletteTokens(QString css)
         // Select family (layer row, Timeline/Library tabs, Levels graph):
         // lime fill @ 20% opacity, olive stroke/text
         { "selectFill",   "rgba(210, 252, 81, 51)" },
-        { "selectStroke", "#A0C03F" },
+        { "selectStroke", Ui::kColSelectStroke.name().toUpper() },
 
         // Accent (orange CTA)
-        { "accent",      "#FD5A1F" },
+        { "accent",      Ui::kColAccent.name().toUpper() },
         { "accentHover", "#FD6B35" },
         { "accentPress", "#E04E16" },
 
         // Selection blue
-        { "selBlue",      "#568AD9" },
+        { "selBlue",      Ui::kColSelBlue.name().toUpper() },
         { "selBlueHover", "#5E92E0" },
 
         // Danger red
@@ -118,7 +122,7 @@ static QString substitutePaletteTokens(QString css)
         { "dangerHover", "#FF3A36" },
 
         // Scrollbar
-        { "scrollHandle",      "#8E8E8E" },
+        { "scrollHandle",      Ui::kColTextDim.name().toUpper() },
         { "scrollHandleHover", "#A6A6A6" },
     };
     static const QRegularExpression re(R"(@([A-Za-z][A-Za-z0-9]*))");

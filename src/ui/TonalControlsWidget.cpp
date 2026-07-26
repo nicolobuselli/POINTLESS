@@ -56,7 +56,7 @@ protected:
         const int step = m_d - 6;
         float x = 0.5f;
         for (const QColor& c : m_colors) {
-            p.setPen(QPen(QColor("#272727"), 1.0));
+            p.setPen(QPen(Ui::kColBgPanel, 1.0));
             p.setBrush(c);
             p.drawEllipse(QRectF(x, 0.5f, m_d - 1.0f, m_d - 1.0f));
             x += step;
@@ -180,7 +180,8 @@ private:
             hl->setContentsMargins(Ui::px(15), 0, Ui::px(15), 0);
             auto* name = new QLabel("Extract from image");
             name->setAttribute(Qt::WA_TransparentForMouseEvents);
-            name->setStyleSheet(QString("background:transparent; color:#E3E3E3; font-size:%1px; font-weight:500;").arg(Ui::px(18)));
+            name->setStyleSheet(QString("background:transparent; color:%2; font-size:%1px; font-weight:500;")
+                                .arg(Ui::px(18)).arg(Ui::kColTextBody.name()));
             hl->addWidget(name);
             hl->addStretch(1);
             connect(row, &QPushButton::clicked, this, [this]() {
@@ -202,7 +203,8 @@ private:
             hl->setContentsMargins(Ui::px(15), 0, Ui::px(15), 0);
             auto* name = new QLabel("Custom");
             name->setAttribute(Qt::WA_TransparentForMouseEvents);
-            name->setStyleSheet(QString("background:transparent; color:#FFFFFF; font-size:%1px; font-weight:500;").arg(Ui::px(18)));
+            name->setStyleSheet(QString("background:transparent; color:%2; font-size:%1px; font-weight:500;")
+                                .arg(Ui::px(18)).arg(Ui::kColWhite.name()));
             hl->addWidget(name);
             hl->addStretch(1);
             connect(row, &QPushButton::clicked, this, [this]() { hide(); });
@@ -240,7 +242,7 @@ private:
         auto* name = new QLabel(pal.name);
         name->setAttribute(Qt::WA_TransparentForMouseEvents);
         name->setStyleSheet(QString("background:transparent; color:%1; font-size:%2px; font-weight:500;")
-                            .arg(selected ? "#FFFFFF" : "#E3E3E3").arg(Ui::px(18)));
+                            .arg((selected ? Ui::kColWhite : Ui::kColTextBody).name()).arg(Ui::px(18)));
 
         auto* strip = new SwatchStrip(Ui::px(20));
         strip->setColors(pal.colors);
@@ -297,13 +299,15 @@ public:
         auto* tr = new QHBoxLayout;
         tr->setContentsMargins(0, 0, 0, 0);
         auto* title = new QLabel("Save palette");
-        title->setStyleSheet(QString("background:transparent; color:#EEEEEE; font-size:%1px; font-weight:700;").arg(Ui::px(20)));
+        title->setStyleSheet(QString("background:transparent; color:%2; font-size:%1px; font-weight:700;")
+                             .arg(Ui::px(20)).arg(Ui::kColTextTitle.name()));
         auto* x = new QPushButton(QString::fromUtf8("\xC3\x97"));   // ×
         x->setObjectName("closeMini");
         x->setCursor(Qt::PointingHandCursor);
         x->setFixedSize(Ui::px(32), Ui::px(32));
-        x->setStyleSheet(QString("QPushButton#closeMini{background:transparent;border:none;color:#B2B2B2;font-size:%1px;font-weight:600;}"
-                                 "QPushButton#closeMini:hover{color:#FFFFFF;}").arg(Ui::px(28)));
+        x->setStyleSheet(QString("QPushButton#closeMini{background:transparent;border:none;color:%2;font-size:%1px;font-weight:600;}"
+                                 "QPushButton#closeMini:hover{color:%3;}")
+                                 .arg(Ui::px(28)).arg(Ui::kColTextLabel.name()).arg(Ui::kColWhite.name()));
         tr->addWidget(title, 1);
         tr->addWidget(x);
         v->addLayout(tr);
@@ -323,10 +327,12 @@ public:
         save->setFixedHeight(Ui::px(36));
         save->setMinimumWidth(Ui::px(92));
         save->setStyleSheet(QString("QPushButton#accentBtn{min-height:%1px;padding:0 %2px;font-size:%3px;"
-                                     "background-color:#D2FC51;color:#1E1E1E;}"
-                                     "QPushButton#accentBtn:hover{background-color:#DFFF7A;}"
-                                     "QPushButton#accentBtn:pressed{background-color:#B9DE3F;}")
-                                .arg(Ui::px(36)).arg(Ui::px(16)).arg(Ui::px(15)));
+                                     "background-color:%4;color:%5;}"
+                                     "QPushButton#accentBtn:hover{background-color:%6;}"
+                                     "QPushButton#accentBtn:pressed{background-color:%7;}")
+                                .arg(Ui::px(36)).arg(Ui::px(16)).arg(Ui::px(15))
+                                .arg(Ui::kColLocLime.name()).arg(Ui::kColBgWindow.name())
+                                .arg(Ui::kColLocLimeHover.name()).arg(Ui::kColLocLimePress.name()));
         save->setCursor(Qt::PointingHandCursor);
         br->addWidget(save);
         v->addLayout(br);

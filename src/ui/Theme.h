@@ -1,5 +1,6 @@
 #pragma once
 #include "UiScale.h"
+#include <QColor>
 
 // ============================================================
 //  Theme — the single source of truth for UI rhythm & chrome
@@ -35,5 +36,38 @@ inline constexpr int kCellW      = 58;  // slider value cell (kCellW × kBoxH)
 // Every horizontal rule is exactly 1 *logical* px (setFixedHeight(1)),
 // never Ui::px(1) — px() can round to 2 on large screens and the lines
 // stop matching each other.
+
+// ── Palette (colors used directly in C++ paint code / inline styles) ────
+// These mirror the @token values in main.cpp's substitutePaletteTokens(),
+// which is what style.qss draws from. Anything painted with QPainter or set
+// via setStyleSheet() in C++ (not routed through style.qss) must pull from
+// here instead of a bare hex literal, or a palette change misses that spot.
+inline const QColor kColBgWindow  {"#1E1E1E"};
+inline const QColor kColBgPanel   {"#272727"};
+inline const QColor kColSurface2  {"#3B3B3B"};   // hairlines, flat dark chrome
+inline const QColor kColBoxStroke {"#3D3D3D"};   // default box border
+inline const QColor kColPopupBorder {"#5D5D5D"}; // floating popup/panel border
+
+inline const QColor kColTextBody  {"#E3E3E3"};
+inline const QColor kColTextTitle {"#EEEEEE"};
+inline const QColor kColTextLabel {"#B2B2B2"};
+inline const QColor kColTextDim   {"#8E8E8E"};
+inline const QColor kColWhite     {"#FFFFFF"};
+
+inline const QColor kColAccent       {"#FD5A1F"};
+inline const QColor kColSelBlue      {"#568AD9"};
+inline const QColor kColSelectStroke {"#A0C03F"};
+
+// "Localize" per-parameter overlay accent (lime/olive family, canvas loc-dots
+// + their checkbox/confirm button) — not part of the orange/blue system above.
+inline const QColor kColLocLime      {"#D2FC51"};
+inline const QColor kColLocLimeHover {"#DFFF7A"};
+inline const QColor kColLocLimePress {"#B9DE3F"};
+inline const QColor kColLocOliveDark   {"#2B3313"};
+inline const QColor kColLocOliveStroke {"#607817"};
+inline const QColor kColLocOliveStroke2{"#89A928"};
+
+// Canvas overlay chrome (transform/selection handles, loc-dot rings).
+inline const QColor kColCanvasHandle {"#F0F0F0"};
 
 } // namespace Ui

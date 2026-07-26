@@ -62,8 +62,8 @@ protected:
         const QRectF full = rect();
 
         if (m_checked) {
-            p.drawPixmap(0, 0, tintedMask(cloverRenderer, QColor("#D2FC51"), full));
-            p.drawPixmap(0, 0, tintedMask(checkRenderer, QColor("#1E1E1E"),
+            p.drawPixmap(0, 0, tintedMask(cloverRenderer, Ui::kColLocLime, full));
+            p.drawPixmap(0, 0, tintedMask(checkRenderer, Ui::kColBgWindow,
                                           full.adjusted(5, 5, -5, -5)));
         } else {
             // Ring = outer clover minus a smaller inner clover (DestinationOut),
@@ -83,7 +83,7 @@ protected:
             QPixmap ring(size());
             ring.fill(Qt::transparent);
             QPainter rp(&ring);
-            rp.fillRect(ring.rect(), QColor("#3D3D3D"));   // @boxStroke
+            rp.fillRect(ring.rect(), Ui::kColBoxStroke);
             rp.setCompositionMode(QPainter::CompositionMode_DestinationIn);
             rp.drawPixmap(0, 0, outer);
             rp.end();

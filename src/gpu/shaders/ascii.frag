@@ -8,6 +8,13 @@
 // edge/hatch directional glyphs → coverage ramp. Braille and Palette stay
 // CPU (gpuRenderable gates them out). The 5 special glyphs (- / | \ #) live
 // at atlas indices nChars..nChars+4.
+//
+// Overflow: the atlas tile is 2x the cell pitch so glyphs (e.g. '@') can
+// overshoot their nominal box (see gpuAtlas in AsciiRenderer.cpp). A single
+// fragment's own home cell only covers the tile's centre strip, so main()
+// evaluates the 2x2 block of cells that could reach this fragment and
+// composites them in the CPU path's paint order (row-major) — otherwise
+// overshoot ink is computed into the atlas but never sampled by anyone.
 
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 fragColor;
@@ -107,15 +114,18 @@ int bandAt(int col, int row, int bands)
     return int(clamp(lumCell(col, row), 0.0, 0.999) * float(bands));
 }
 
-void main()
-{
-    vec2 fragPx = v_uv * dims.xy;
-    vec2 cellSz = dims.zw;
-    vec2 cellF  = floor(fragPx / cellSz);
-    int  col    = int(cellF.x);
-    int  row    = int(cellF.y);
+struct CellPick { float ink; vec4 pen; };
 
-    vec2 center = min((cellF + 0.5) * cellSz, dims.xy - 0.5);
+// Full glyph pick + atlas sample for one cell (col,row), sampled at fragPx.
+// fragPx may sit outside this cell's own box — that's the point: the atlas
+// tile is padded to 2x cell size so overshooting glyphs (ascenders, wide
+// bowls like '@') can be sampled by a neighbouring cell's fragments too.
+CellPick shadeCandidate(int col, int row, vec2 fragPx, vec2 cellSz)
+{
+    CellPick r; r.ink = 0.0; r.pen = vec4(0.0);
+    if (col < 0 || row < 0 || col >= int(grid.x) || row >= int(grid.y)) return r;
+
+    vec2 center = min((vec2(col, row) + 0.5) * cellSz, dims.xy - 0.5);
     vec3 lin     = textureLod(srcTex, center / dims.xy, grid.z).rgb;
     float lumLin = dot(lin, W);
     float lumPerc = lin2s(lumLin);
@@ -137,7 +147,7 @@ void main()
         int b = bandAt(col, row, bands);
         bool boundary = b != bandAt(col - 1, row, bands) || b != bandAt(col + 1, row, bands)
                      || b != bandAt(col, row - 1, bands) || b != bandAt(col, row + 1, bands);
-        if (!boundary) discard;
+        if (!boundary) return r;
     }
 
     // Glyph pick: edges → hatching → coverage ramp.
@@ -190,23 +200,22 @@ void main()
         }
     }
 
-    // Sample that glyph tile: cell-local offset → padded atlas-tile coords.
+    // Sample that glyph tile at this cell's own offset within the padded
+    // atlas tile — candCenterPx (not fragPx's home cell) is what anchors it,
+    // so a neighbour's overflow lands correctly relative to fragPx.
     vec2 glyphSz  = atlas.xy;
     vec2 texSize  = vec2(atlas.w, pB.y);
     int  cols     = int(atlas.z + 0.5);
-    vec2 cellLocal = fragPx - cellF * cellSz;
-    vec2 aLocal    = cellLocal - cellSz * 0.5 + glyphSz * 0.5;
-    float ink = 0.0;
-    if (all(greaterThanEqual(aLocal, vec2(0.0))) && all(lessThan(aLocal, glyphSz))) {
-        vec2 tileOrg = vec2(float(gidx % cols), float(gidx / cols)) * glyphSz;
-        ink = texture(atlasTex, (tileOrg + aLocal) / texSize).a;
-    }
+    vec2 candCenterPx = (vec2(col, row) + 0.5) * cellSz;
+    vec2 aLocal   = fragPx - candCenterPx + glyphSz * 0.5;
+    if (any(lessThan(aLocal, vec2(0.0))) || any(greaterThanEqual(aLocal, glyphSz))) return r;
+    vec2 tileOrg = vec2(float(gidx % cols), float(gidx / cols)) * glyphSz;
+    r.ink = texture(atlasTex, (tileOrg + aLocal) / texSize).a;
 
     // Pen colour: cell average (ImageColors) or nearest tone by luminosity.
-    vec4 pen;
     int nTones = int(pB.z + 0.5);
     if (pA.w > 0.5 || nTones < 1) {
-        pen = vec4(lin2s(lin.r), lin2s(lin.g), lin2s(lin.b), 1.0);
+        r.pen = vec4(lin2s(lin.r), lin2s(lin.g), lin2s(lin.b), 1.0);
     } else {
         int lum = int(round(lumPerc * 255.0));
         int best = 0;
@@ -215,9 +224,45 @@ void main()
             float d = abs(float(lum) - toneLevel[i >> 2][i & 3]);
             if (d < bd) { bd = d; best = i; }
         }
-        pen = toneColor[best];
+        r.pen = toneColor[best];
+    }
+    return r;
+}
+
+void main()
+{
+    vec2 fragPx = v_uv * dims.xy;
+    vec2 cellSz = dims.zw;
+    vec2 cellF  = floor(fragPx / cellSz);
+    int  col    = int(cellF.x);
+    int  row    = int(cellF.y);
+
+    // The atlas tile is 2x the cell pitch, so a glyph's overflow reaches at
+    // most half a cell beyond its own box — only the 2x2 block of cells
+    // straddling fragPx can possibly paint here. Which half of the home cell
+    // fragPx falls in picks which neighbour joins the other axis.
+    vec2 fracInCell = fragPx / cellSz - cellF;
+    int dx = fracInCell.x < 0.5 ? -1 : 1;
+    int dy = fracInCell.y < 0.5 ? -1 : 1;
+    int colLo = min(col, col + dx), colHi = max(col, col + dx);
+    int rowLo = min(row, row + dy), rowHi = max(row, row + dy);
+
+    // Composite in the same order the CPU path paints them (row-major,
+    // top-to-bottom then left-to-right), so later cells' overflow correctly
+    // overdraws earlier cells' in the overlap, matching AsciiRenderer::render.
+    vec3 accumRGB = vec3(0.0);
+    float accumA  = 0.0;
+    int rows2[2] = int[](rowLo, rowHi);
+    int cols2[2] = int[](colLo, colHi);
+    for (int ri = 0; ri < 2; ++ri) {
+        for (int ci = 0; ci < 2; ++ci) {
+            CellPick cp = shadeCandidate(cols2[ci], rows2[ri], fragPx, cellSz);
+            vec2 ctr = (vec2(cols2[ci], rows2[ri]) + 0.5) * cellSz;
+            float a = cp.ink * cp.pen.a * maskV(ctr) * grid.w;
+            accumRGB = cp.pen.rgb * a + accumRGB * (1.0 - a);
+            accumA   = a + accumA * (1.0 - a);
+        }
     }
 
-    float a = ink * pen.a * maskV(center) * grid.w;
-    fragColor = vec4(pen.rgb * a, a);   // premultiplied for the composite chain
+    fragColor = vec4(accumRGB, accumA);   // premultiplied for the composite chain
 }

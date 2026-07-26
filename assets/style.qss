@@ -884,12 +884,6 @@ QPushButton#trashBtn[dropHover="true"] {
     border-color: @danger;
 }
 
-QComboBox#blendCombo {
-    min-height: 30px;
-    background-color: @surface3;
-    font-size: 9pt;
-}
-
 /* ── Splitter ────────────────────────────────────────────────── */
 QSplitter::handle {
     background-color: @surface2;

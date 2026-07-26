@@ -1,6 +1,7 @@
 #include "FilmstripWidget.h"
 #include "Widgets.h"
 #include "UiScale.h"
+#include "Theme.h"
 
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -116,7 +117,7 @@ protected:
         f.setPixelSize(Ui::px(15));
         f.setBold(true);
         p.setFont(f);
-        p.setPen(QColor("#D2FC51"));
+        p.setPen(Ui::kColLocLime);
         p.drawText(rect(), Qt::AlignCenter, "import");
     }
 };
@@ -165,12 +166,12 @@ protected:
         clip.addRoundedRect(rect().adjusted(1, 1, -1, -1), 8, 8);
         p.save();
         p.setClipPath(clip);
-        p.fillRect(rect(), QColor("#3B3B3B"));
+        p.fillRect(rect(), Ui::kColSurface2);
         p.drawPixmap(1, 1, m_pixmap);
         p.restore();
 
         if (m_active) {
-            p.setPen(QPen(QColor("#3D3D3D"), 1));   // @boxStroke — same gray as every normal box
+            p.setPen(QPen(Ui::kColBoxStroke, 1));   // same gray as every normal box
             p.setBrush(Qt::NoBrush);
             p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 8, 8);
         }

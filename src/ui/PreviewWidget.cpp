@@ -1,6 +1,7 @@
 #include "PreviewWidget.h"
 #include "GpuCanvasWidget.h"
 #include "Widgets.h"
+#include "Theme.h"
 #include "../core/AnimParams.h"   // locParamLabel
 
 #include <QPainter>
@@ -1101,13 +1102,13 @@ void PreviewWidget::paintLocHandles(QPainter& p)
             const double outerR = locRadiusFramePx(lp) * imageScale();
             const double innerR = locInnerFramePx(lp)  * imageScale();
 
-            QPen outerPen(QColor("#D2FC51"));   // yellow, matches the Localize checkbox fill
+            QPen outerPen(Ui::kColLocLime);   // matches the Localize checkbox fill
             outerPen.setWidthF(1.4);
             p.setPen(outerPen);
             p.setBrush(Qt::NoBrush);
             p.drawEllipse(centre, outerR, outerR);
 
-            QPen innerPen(QColor("#F0F0F0"));
+            QPen innerPen(Ui::kColCanvasHandle);
             innerPen.setStyle(Qt::DashLine);
             innerPen.setWidthF(1.0);
             p.setPen(innerPen);
@@ -1115,7 +1116,7 @@ void PreviewWidget::paintLocHandles(QPainter& p)
         }
 
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor("#F0F0F0"));
+        p.setBrush(Ui::kColCanvasHandle);
         const double dotR = (!active && hovered) ? 6.0 : 4.0;
         p.drawEllipse(centre, dotR, dotR);
 
@@ -1130,7 +1131,7 @@ void PreviewWidget::paintLocHandles(QPainter& p)
             const QPointF at(centre.x() + 10.0, centre.y() - 8.0);
             p.setPen(QColor(0, 0, 0, 160));                   // soft halo
             p.drawText(at + QPointF(1, 1), label);
-            p.setPen(active ? QColor("#D2FC51") : QColor("#F0F0F0"));
+            p.setPen(active ? Ui::kColLocLime : Ui::kColCanvasHandle);
             p.drawText(at, label);
         }
     }
@@ -1144,7 +1145,7 @@ void PreviewWidget::paintHandles(QPainter& p)
     const QPointF rot    = rotationHandleWidget(qw, centre);
 
     p.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(QColor("#F0F0F0"));
+    QPen pen(Ui::kColCanvasHandle);
     pen.setWidthF(1.2);
 
     // Bounding box + arm to the rotation handle
@@ -1154,7 +1155,7 @@ void PreviewWidget::paintHandles(QPainter& p)
     p.drawLine((qw[0] + qw[1]) * 0.5, rot);
 
     // Corner (scale) handles — small filled squares
-    p.setBrush(QColor("#F0F0F0"));
+    p.setBrush(Ui::kColCanvasHandle);
     const double h = 4.0;
     for (const QPointF& c : qw)
         p.drawRect(QRectF(c.x() - h, c.y() - h, 2 * h, 2 * h));
@@ -1171,14 +1172,14 @@ void PreviewWidget::paintGroupHandles(QPainter& p)
     const QPointF rot    = topMid + QPointF(0, -kRotArm);
 
     p.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(QColor("#F0F0F0"));
+    QPen pen(Ui::kColCanvasHandle);
     pen.setWidthF(1.2);
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
     p.drawRect(gw);
     p.drawLine(topMid, rot);
 
-    p.setBrush(QColor("#F0F0F0"));
+    p.setBrush(Ui::kColCanvasHandle);
     const double h = 4.0;
     const QPointF corners[4] = { gw.topLeft(), gw.topRight(),
                                  gw.bottomRight(), gw.bottomLeft() };
@@ -1198,7 +1199,7 @@ void PreviewWidget::paintOverlays(QPainter& p)
             // Selection outlines for every selected layer (the single active one
             // is drawn with full handles instead).
             p.setRenderHint(QPainter::Antialiasing, true);
-            QPen selPen(QColor("#568AD9"));
+            QPen selPen(Ui::kColSelBlue);
             selPen.setWidthF(1.4);
             p.setPen(selPen);
             p.setBrush(Qt::NoBrush);
@@ -1216,7 +1217,7 @@ void PreviewWidget::paintOverlays(QPainter& p)
         if (m_boxSelecting) {
             const QRect r = QRect(m_boxStart, m_boxCur).normalized();
             const bool crossing = m_boxCur.x() < m_boxStart.x();
-            QPen boxPen(QColor("#E3E3E3"));
+            QPen boxPen(Ui::kColTextBody);
             boxPen.setWidthF(1.0);
             if (crossing) boxPen.setStyle(Qt::DashLine);
             p.setPen(boxPen);
@@ -1242,12 +1243,12 @@ void PreviewWidget::paintEvent(QPaintEvent* /*event*/)
         pushViewRect();
         if (m_overlay) m_overlay->update();
         QPainter p(this);
-        p.fillRect(rect(), QColor("#1E1E1E"));   // WA_OpaquePaintEvent safety
+        p.fillRect(rect(), Ui::kColBgWindow);   // WA_OpaquePaintEvent safety
         return;
     }
 
     QPainter p(this);
-    p.fillRect(rect(), QColor("#1E1E1E"));
+    p.fillRect(rect(), Ui::kColBgWindow);
 
     if (!m_scaled.isNull()) {
         const int x = (width()  - m_scaled.width())  / 2 + m_panOffset.x();

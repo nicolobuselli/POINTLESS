@@ -139,7 +139,7 @@ QIcon shapePreviewIcon(const QString& path, int sidePx)
     r.render(&p);
     // Recolour the silhouette to a light tone, keeping its alpha.
     p.setCompositionMode(QPainter::CompositionMode_SourceIn);
-    p.fillRect(img.rect(), QColor("#E3E3E3"));
+    p.fillRect(img.rect(), Ui::kColTextBody);
     p.end();
     return QIcon(QPixmap::fromImage(img));
 }
@@ -746,7 +746,7 @@ private:
         slot.svgPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
         nbl->addWidget(slot.svgPreview);
         slot.svgName = new ElidedLabel;
-        slot.svgName->setStyleSheet("background:transparent; color:#E3E3E3;");
+        slot.svgName->setStyleSheet(QString("background:transparent; color:%1;").arg(Ui::kColTextBody.name()));
         slot.svgName->setAttribute(Qt::WA_TransparentForMouseEvents);
         nbl->addWidget(slot.svgName, 1);
         sr->addWidget(slot.svgNameBox, 1);
@@ -1004,7 +1004,7 @@ public:
                 m_patternPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
                 nbl->addWidget(m_patternPreview);
                 m_patternName = new ElidedLabel;
-                m_patternName->setStyleSheet("background:transparent; color:#E3E3E3;");
+                m_patternName->setStyleSheet(QString("background:transparent; color:%1;").arg(Ui::kColTextBody.name()));
                 m_patternName->setAttribute(Qt::WA_TransparentForMouseEvents);
                 nbl->addWidget(m_patternName, 1);
                 pr->addWidget(m_patternNameBox, 1);

@@ -90,7 +90,7 @@ void drawDiamond(QPainter& p, int x, int y, Easing e, bool selected)
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
     const int r = Ui::px(10);
-    const QColor fill = selected ? QColor("#D2FC51") : QColor("#E8E8E8");
+    const QColor fill = selected ? Ui::kColLocLime : QColor("#E8E8E8");
     p.setBrush(fill);
     p.setPen(QPen(QColor("#101010"), 1));
     if (e == Easing::Hold) {
@@ -172,14 +172,14 @@ protected:
         const Animation& a = m_owner->m_anim;
         const int gut = GUT(), rul = RUL(), row = ROW();
 
-        p.fillRect(rect(), QColor("#272727"));
+        p.fillRect(rect(), Ui::kColBgPanel);
 
         // ── Alternating per-track row backgrounds (full width) ────
         for (int i = 0; i < int(a.tracks.size()); ++i) {
             const int y0 = rul + i * row;
             // First animated row matches the panel colour; stripes alternate.
             p.fillRect(QRect(0, y0, width(), row),
-                       (i % 2) ? QColor("#2D2D2D") : QColor("#272727"));
+                       (i % 2) ? QColor("#2D2D2D") : Ui::kColBgPanel);
         }
 
         // ── Vertical grid: major every `majorStep`, minor at half ──
@@ -215,8 +215,8 @@ protected:
         }
 
         // ── Ruler header band (panel colour, set off by a divider) ─
-        p.fillRect(QRect(0, 0, width(), rul), QColor("#272727"));
-        p.setPen(QColor("#3B3B3B"));
+        p.fillRect(QRect(0, 0, width(), rul), Ui::kColBgPanel);
+        p.setPen(Ui::kColSurface2);
         p.drawLine(0, rul, width(), rul);
 
         QFont rf = p.font(); rf.setPixelSize(Ui::px(16)); p.setFont(rf);
@@ -260,16 +260,16 @@ protected:
             p.setClipRect(flag);
             counterSvg.render(&p, QRectF(flag.topLeft(), QSizeF(fw, fw * 2224.0 / 324.0)));
             p.restore();
-            p.setPen(QColor("#607817"));
+            p.setPen(Ui::kColLocOliveStroke);
             p.drawText(flag, Qt::AlignCenter, fnum);
             p.fillRect(QRectF(px - Ui::px(1), fh, Ui::px(2), height() - fh),
-                       QColor("#D2FC51"));
+                       Ui::kColLocLime);
         }
 
         // ── Rubber-band selection rectangle ──────────────────────
         if (m_banding) {
             p.setRenderHint(QPainter::Antialiasing, false);
-            p.setPen(QPen(QColor("#8E8E8E"), 1, Qt::DashLine));
+            p.setPen(QPen(Ui::kColTextDim, 1, Qt::DashLine));
             p.setBrush(QColor(142, 142, 142, 40));
             p.drawRect(m_bandRect);
         }
