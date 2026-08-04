@@ -1,12 +1,10 @@
 #include "VideoIO.h"
 
 #include <QCoreApplication>
-#include <QDir>
 #include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QStandardPaths>
-#include <QTemporaryDir>
 
 namespace {
 
@@ -48,34 +46,67 @@ bool VideoIO::decode(const QString& videoPath, QVector<QImage>& outFrames,
 {
     if (ffmpegPath().isEmpty()) { err = "ffmpeg not found"; return false; }
 
-    QTemporaryDir tmp;
-    if (!tmp.isValid()) { err = "could not create a temporary folder"; return false; }
-
-    const QString pattern = tmp.path() + "/f_%06d.png";
+    // Raw BGRA straight down ffmpeg's stdout: no PNG round-trip through a temp
+    // folder (that used to cost a zlib compress + write + read + decompress per
+    // frame, which dwarfed the actual video decoding).
     QStringList args;
     args << "-hide_banner" << "-i" << videoPath << "-vsync" << "0";
     if (maxFrames > 0) args << "-frames:v" << QString::number(maxFrames);
-    args << pattern;
+    args << "-f" << "rawvideo" << "-pix_fmt" << "bgra" << "-";
+
+    QProcess p;
+    p.start(ffmpegPath(), args);
+    if (!p.waitForStarted(5000)) { err = "ffmpeg failed to start"; return false; }
 
     QString log;
-    // ffmpeg returns non-zero when capped with -frames:v on some builds, so we
-    // judge success by whether frames were actually produced, not the exit code.
-    runFfmpeg(args, log, -1);
+    QByteArray buf;
+    int w = 0, h = 0;
+    qsizetype frameBytes = 0;
+
+    // Frame size comes from ffmpeg's *output* stream header (not the input one):
+    // it already accounts for rotation metadata, so phone clips are not garbled.
+    auto readGeometry = [&] {
+        const int out = log.indexOf(QStringLiteral("Output #0"));
+        if (out < 0) return;
+        static const QRegularExpression re(QStringLiteral("Video:.*?, (\\d+)x(\\d+)"));
+        const auto m = re.match(log, out);
+        if (!m.hasMatch()) return;
+        w = m.captured(1).toInt();
+        h = m.captured(2).toInt();
+        frameBytes = qsizetype(w) * h * 4;
+    };
+
+    auto sliceFrames = [&] {
+        if (frameBytes <= 0) return;
+        while (buf.size() >= frameBytes) {
+            const QImage view(reinterpret_cast<const uchar*>(buf.constData()),
+                              w, h, w * 4, QImage::Format_RGB32);
+            outFrames.append(view.copy());   // view aliases buf, which we reuse
+            buf.remove(0, frameBytes);
+        }
+    };
+
+    while (p.state() == QProcess::Running) {
+        if (!p.waitForReadyRead(30000)) break;
+        log += QString::fromLocal8Bit(p.readAllStandardError());
+        buf += p.readAllStandardOutput();
+        if (frameBytes <= 0) readGeometry();
+        sliceFrames();
+    }
+    p.waitForFinished(5000);
+    log += QString::fromLocal8Bit(p.readAllStandardError());
+    buf += p.readAllStandardOutput();
+    if (frameBytes <= 0) readGeometry();
+    sliceFrames();
 
     outFps = 24.0;
-    const QRegularExpression re(QStringLiteral("([0-9]+(?:\\.[0-9]+)?) fps"));
-    const auto m = re.match(log);
+    static const QRegularExpression fpsRe(QStringLiteral("([0-9]+(?:\\.[0-9]+)?) fps"));
+    const auto m = fpsRe.match(log);
     if (m.hasMatch()) {
         const double f = m.captured(1).toDouble();
         if (f > 0.0 && f <= 240.0) outFps = f;
     }
 
-    QDir d(tmp.path());
-    const QStringList files = d.entryList({ "f_*.png" }, QDir::Files, QDir::Name);
-    for (const QString& f : files) {
-        QImage im(d.filePath(f));
-        if (!im.isNull()) outFrames.append(im.convertToFormat(QImage::Format_RGB32));
-    }
     if (outFrames.isEmpty()) {
         err = "No frames were decoded.\n\n" + log.right(600);
         return false;

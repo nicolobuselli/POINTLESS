@@ -34,6 +34,7 @@
         <file alias="icons/tl_end.svg">../assets/icons/tl_end.svg</file>
         <file alias="icons/tl_key.svg">../assets/icons/tl_key.svg</file>
         <file alias="icons/tl_play.svg">../assets/icons/tl_play.svg</file>
+        <file alias="icons/zoom.svg">../assets/icons/zoom.svg</file>
         <file alias="icons/favorite.svg">../assets/icons/favorite.svg</file>
         <file alias="icons/rotation.svg">../assets/icons/rotation.svg</file>
         <file alias="icons/rotate90.svg">../assets/icons/rotate90.svg</file>

@@ -516,7 +516,18 @@ void PreviewWidget::wheelEvent(QWheelEvent* event)
         }
     }
 
+    // Plain scroll (trackpad two-finger, tilt wheel) pans the canvas on both
+    // axes; Ctrl+wheel below zooms. pixelDelta = real trackpad travel,
+    // angleDelta (eighths of a degree) = notched-wheel fallback.
     if (!(event->modifiers() & Qt::ControlModifier)) {
+        const QPoint d = event->pixelDelta().isNull() ? event->angleDelta() / 2
+                                                      : event->pixelDelta();
+        if (!d.isNull() && imageScale() > 0.0) {
+            m_panOffset += d;   // scale is unchanged → no updateScaled(), like drag-pan
+            update();
+            event->accept();
+            return;
+        }
         event->ignore();
         return;
     }

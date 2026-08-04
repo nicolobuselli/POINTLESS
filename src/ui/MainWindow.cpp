@@ -449,6 +449,20 @@ MainWindow::MainWindow(QWidget* parent)
     m_timeline->onAnimEdited      = [this]() { onTimelineEdited(); };
     m_timeline->onPlayToggled     = [this](bool p) { onPlayToggled(p); };
     m_timeline->onAutoKeyToggled  = [this](bool on) { m_autoKey = on; };
+    m_timeline->onClipEdited      = [this](int mediaId, int offset, int in, int out) {
+        if (m_current < 0) return;
+        auto& st = m_images[m_current].state;
+        const int pi = findParentByMedia(st.parents, mediaId);
+        if (pi < 0) return;
+        ParentGroup& g = st.parents[pi];
+        if (g.timeOffset == offset && g.trimIn == in && g.trimOut == out) return;
+        g.timeOffset = offset;
+        g.trimIn     = in;
+        g.trimOut    = out;
+        m_playCacheValid = false;
+        scheduleRender();
+        m_undoTimer.start();
+    };
     m_timeline->onImportSequence  = [this]() {
         const QStringList paths = QFileDialog::getOpenFileNames(
             this, "Import sequence", "",
@@ -975,6 +989,9 @@ int MainWindow::addParentMedia(SessionImage& board, const MediaClip& clip)
     ParentGroup g;
     g.mediaId = mid;
     g.name    = clip.name;
+    // A clip gets a concrete out point right away, so trimming/moving it always
+    // has a defined extent (a still stays untrimmed, trimOut = -1).
+    if (!clip.frames.isEmpty()) g.trimOut = clip.frames.size() - 1;
     board.state.parents.push_back(g);
     return mid;
 }
@@ -1018,11 +1035,20 @@ bool MainWindow::groupVisibleFor(const SessionParams& st, int mediaId) const
     return pi < 0 ? true : st.parents[pi].groupVisible;
 }
 
-// A child only appears in the frame if it's visible AND its parent group is.
-SessionParams MainWindow::bakeGroupVisibility(SessionParams p) const
+// A child only appears in the frame if it's visible, its parent group is, and
+// `frame` falls inside the group's clip trim range (video sources only).
+SessionParams MainWindow::bakeGroupVisibility(SessionParams p, int frame) const
 {
-    for (Layer& l : p.layers)
-        if (!groupVisibleFor(p, l.mediaId)) l.visible = false;
+    const int f0 = (m_current >= 0) ? m_images[m_current].anim.frameStart : 0;
+    for (Layer& l : p.layers) {
+        if (!groupVisibleFor(p, l.mediaId)) { l.visible = false; continue; }
+        const int pi = findParentByMedia(p.parents, l.mediaId);
+        if (pi < 0) continue;
+        const ParentGroup& g = p.parents[pi];
+        const int rel = frame - f0 - g.timeOffset;   // clip-local frame
+        if (g.trimOut >= 0 && (rel < g.trimIn || rel > g.trimOut))
+            l.visible = false;
+    }
     return p;
 }
 
@@ -1269,6 +1295,32 @@ void MainWindow::setPlayhead(int frame)
 void MainWindow::syncTimeline()
 {
     m_timeline->setAnimation(m_current >= 0 ? m_images[m_current].anim : Animation{});
+
+    // One timeline clip row per video source placed on the board.
+    QVector<TimelineWidget::ClipRow> clips;
+    if (m_current >= 0) {
+        const SessionImage& img = m_images[m_current];
+        for (const ParentGroup& g : img.state.parents) {
+            const auto it = img.media.find(g.mediaId);
+            if (it == img.media.end() || it->frames.isEmpty()) continue;
+            const int len = it->frames.size();
+            TimelineWidget::ClipRow c;
+            c.mediaId = g.mediaId;
+            c.name    = g.name;
+            c.length  = len;
+            c.trimIn  = qBound(0, g.trimIn, len - 1);
+            c.trimOut = (g.trimOut < 0) ? len - 1 : qBound(c.trimIn, g.trimOut, len - 1);
+            c.offset  = std::max(0, g.timeOffset);
+            clips.append(c);
+        }
+    }
+    // layerId → mediaId, so a keyframe track can nest under its clip's row.
+    QHash<int, int> layerMedia;
+    if (m_current >= 0)
+        for (const Layer& l : m_images[m_current].state.layers)
+            layerMedia.insert(l.id, l.mediaId);
+    m_timeline->setClips(clips, layerMedia);
+
     refreshAnimationIndicators();
 }
 
@@ -1421,7 +1473,7 @@ bool MainWindow::buildPlayCache(int dialogDelayMs)
             src = img.frames[qBound(0, frame - f0, img.frames.size() - 1)];
         const SessionParams p = bakeGroupVisibility(img.anim.hasAnimation()
             ? paramsAtFrame(img.state, img.anim, frame)
-            : img.state);
+            : img.state, frame);
         m_playCache.append(m_worker->renderPreviewCached(src, p, RenderWorker::FAST_MAX_PX,
                                                          layerSourcesAt(img, frame)));
     }
@@ -2259,7 +2311,7 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
     // parent group's master visibility into its children.
     const SessionParams params = bakeGroupVisibility(img.anim.hasAnimation()
         ? paramsAtFrame(img.state, img.anim, frame)
-        : img.state);
+        : img.state, frame);
 
     // Render the live preview at the size it's actually shown on screen, so the
     // fast pass already matches the (downscaled) final — no jarring quality jump.
@@ -2297,9 +2349,13 @@ QHash<int, QImage> MainWindow::layerSourcesAt(const SessionImage& img, int frame
         const auto it = img.media.find(l.mediaId);
         if (it == img.media.end()) continue;
         const MediaClip& m = it.value();
-        if (!m.frames.isEmpty())
-            out.insert(l.id, m.frames[qBound(0, frame - img.anim.frameStart,
+        if (!m.frames.isEmpty()) {
+            // Clip-local frame: the timeline offset shifts where the clip sits.
+            const int pi  = findParentByMedia(img.state.parents, l.mediaId);
+            const int off = (pi >= 0) ? img.state.parents[pi].timeOffset : 0;
+            out.insert(l.id, m.frames[qBound(0, frame - img.anim.frameStart - off,
                                              int(m.frames.size()) - 1)]);
+        }
         else if (!m.image.isNull())
             out.insert(l.id, m.image);
     }
@@ -2724,6 +2780,7 @@ void MainWindow::addLayerFromMedia(int mediaId)
         ParentGroup g;
         g.mediaId = mediaId;
         g.name    = clip.name;
+        if (!clip.frames.isEmpty()) g.trimOut = clip.frames.size() - 1;
         st.parents.push_back(g);
     }
 
@@ -2981,7 +3038,7 @@ void MainWindow::exportSvg(const QString& baseName)
     }
     const SessionParams params = bakeGroupVisibility(img.anim.hasAnimation()
         ? paramsAtFrame(img.state, img.anim, frame)
-        : img.state);
+        : img.state, frame);
     const QHash<int, QImage> ls = layerSourcesAt(img, frame);
 
     // Heavy-render guard: a fine grid / small dither cell can produce hundreds of
@@ -3036,7 +3093,7 @@ void MainWindow::exportSequence(const QString& baseName)
         }
         const SessionParams p = bakeGroupVisibility(img.anim.hasAnimation()
             ? paramsAtFrame(img.state, img.anim, frame)
-            : img.state);
+            : img.state, frame);
 
         const QImage canvas = m_worker->renderDocumentInteractive(src, p, layerSourcesAt(img, frame));
         const QString fn = QString("%1/%2_%3.png")
@@ -3084,7 +3141,7 @@ void MainWindow::exportVideoMp4(const QString& baseName)
             src = img.frames[qBound(0, frame - f0, img.frames.size() - 1)];
         const SessionParams p = bakeGroupVisibility(img.anim.hasAnimation()
             ? paramsAtFrame(img.state, img.anim, frame)
-            : img.state);
+            : img.state, frame);
 
         QImage canvas = m_worker->renderDocumentInteractive(src, p, layerSourcesAt(img, frame));
         // mp4 (yuv420p) has no alpha — flatten on an opaque background.

@@ -781,6 +781,27 @@ QScrollBar::add-page:vertical,
 QScrollBar::sub-page:vertical { background: transparent; }
 QScrollBar:horizontal { height: 0; }
 
+/* Timeline pan bar — the rule above hides every other horizontal scrollbar. */
+QScrollBar#timelineHBar:horizontal {
+    height: s(10)px;
+    background: transparent;
+    margin: 0;
+}
+/* Dimmer than the vertical bars: this one sits permanently under the
+   dopesheet, so @scrollHandle reads far too hot there. */
+QScrollBar#timelineHBar::handle:horizontal {
+    background: @boxStroke;
+    border-radius: s(5)px;
+    min-width: s(40)px;
+}
+QScrollBar#timelineHBar::handle:horizontal:hover {
+    background: @scrollHandle;
+}
+QScrollBar#timelineHBar::add-line:horizontal,
+QScrollBar#timelineHBar::sub-line:horizontal { width: 0; }
+QScrollBar#timelineHBar::add-page:horizontal,
+QScrollBar#timelineHBar::sub-page:horizontal { background: transparent; }
+
 /* ── Layers panel (floating over preview) ────────────────────── */
 #layersPanel {
     background-color: @bgWindow;

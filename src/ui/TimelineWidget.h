@@ -2,10 +2,14 @@
 
 #include "../core/Animation.h"
 #include <QWidget>
+#include <QVector>
+#include <QHash>
 #include <functional>
 
 class QSpinBox;
 class QPushButton;
+class QScrollBar;
+class QSlider;
 class PopupPicker;
 class TimelineCanvas;
 
@@ -23,6 +27,25 @@ class TimelineWidget : public QWidget
 public:
     explicit TimelineWidget(QWidget* parent = nullptr);
 
+    // One row per video clip in the board, above the keyframe tracks: name in
+    // the label gutter, a bar spanning the clip's duration with draggable
+    // in/out edges (trimmed-away part stays visible, dark).
+    struct ClipRow {
+        int     mediaId = -1;
+        QString name;
+        int     length  = 0;   // source frames
+        int     trimIn  = 0;   // clip-local, inclusive
+        int     trimOut = 0;   // clip-local, inclusive
+        int     offset  = 0;   // clip-local frame 0 → this many frames past frameStart
+    };
+    // `layerMedia` maps layerId → mediaId, so a keyframe track can be shown
+    // nested under the clip row of the video it animates.
+    void setClips(const QVector<ClipRow>& clips, const QHash<int, int>& layerMedia = {});
+
+    // Last frame the timeline scrolls to: past the animation range *and* past
+    // the last clip, plus a fixed tail of working space.
+    int dispEndFrame() const;
+
     void      setAnimation(const Animation& a);   // silent: refresh UI
     Animation animation() const { return m_anim; }
     void      setPlayheadSilent(int frame);       // playback/scrub display only
@@ -39,16 +62,30 @@ public:
     std::function<void(bool)> onPlayToggled;       // play/pause
     std::function<void(bool)> onAutoKeyToggled;
     std::function<void()>     onImportSequence;
+    std::function<void(int, int, int, int)> onClipEdited;   // mediaId, offset, trimIn, trimOut
 
 private:
     friend class TimelineCanvas;
+    // One painted row: either a clip bar or a keyframe track. A track row that
+    // belongs to a clip above it is drawn indented, with an L connector.
+    struct Row { int clip = -1; int track = -1; bool child = false; };
+    void rebuildRows();
+    void updateCanvasHeight();
+    void updateScrollRange();          // canvas width/zoom/range → h-scrollbar
+    void setZoom(double z, int anchorFrame, int anchorX);   // keep anchorFrame under anchorX
+    void setScroll(double firstFrame);
     void syncControls();      // m_anim → spinboxes (silent)
     void emitEdited();        // notify owner of an animation edit
     void scrubTo(int frame);  // playhead change from canvas/controls
     void jumpKey(int dir);    // -1 prev / +1 next keyframe
 
-    Animation m_anim;
-    bool      m_updating = false;
+    Animation        m_anim;
+    QVector<ClipRow> m_clips;
+    QHash<int, int>  m_layerMedia;   // layerId → mediaId
+    QVector<Row>     m_rows;         // painted row order (clips + their tracks)
+    bool             m_updating = false;
+    double           m_zoom     = 1.0;   // 1 = whole working span fits the view
+    double           m_scroll   = 0.0;   // first visible frame, relative to frameStart
 
     QPushButton* m_autoKeyBtn = nullptr;
     QPushButton* m_playBtn    = nullptr;
@@ -56,5 +93,7 @@ private:
     QSpinBox*    m_startSpin  = nullptr;
     QSpinBox*    m_endSpin    = nullptr;
     PopupPicker* m_fpsPicker  = nullptr;   // Native / 24 / 15 / 12 / 8 fps
+    QScrollBar*  m_hbar       = nullptr;   // horizontal pan over the frame span
+    QSlider*     m_zoomSlider = nullptr;
     TimelineCanvas* m_canvas  = nullptr;
 };

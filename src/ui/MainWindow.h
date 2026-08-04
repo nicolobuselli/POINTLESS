@@ -128,7 +128,7 @@ private:
     void  regroupLayers(SessionParams& st) const;       // keep layers grouped by parent order
     void  syncBoardSource(SessionImage& board) const;   // board.source = first parent's image
     bool  groupVisibleFor(const SessionParams& st, int mediaId) const;
-    SessionParams bakeGroupVisibility(SessionParams p) const;   // child.visible &&= group
+    SessionParams bakeGroupVisibility(SessionParams p, int frame) const;   // child.visible &&= group && clip trim
     void  commitStructuralChange();                     // sync panel + render + undo
     QSize activeLayerNativeSize() const;   // layer pixel size at 100% scale
     QSize layerNativeSize(const Layer& l) const;   // any layer's 100%-scale size

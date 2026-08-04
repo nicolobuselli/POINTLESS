@@ -773,10 +773,20 @@ struct ParentGroup {
     QString name;
     bool    collapsed    = false;   // children hidden in the panel (UI only)
     bool    groupVisible = true;    // master visibility for all children in the frame
+    // Video clips only: in/out point in clip-local frames (0 = first frame).
+    // trimOut < 0 = untrimmed. Outside [trimIn,trimOut] the group's children
+    // don't render — the clip's content stays anchored in time (AE trim).
+    int     trimIn       = 0;
+    int     trimOut      = -1;
+    // Where clip-local frame 0 sits on the timeline, as an offset from
+    // Animation::frameStart (dragging the clip bar sideways).
+    int     timeOffset   = 0;
 };
 inline bool operator==(const ParentGroup& a, const ParentGroup& b) {
     return a.mediaId == b.mediaId && a.name == b.name
-        && a.collapsed == b.collapsed && a.groupVisible == b.groupVisible;
+        && a.collapsed == b.collapsed && a.groupVisible == b.groupVisible
+        && a.trimIn == b.trimIn && a.trimOut == b.trimOut
+        && a.timeOffset == b.timeOffset;
 }
 inline bool operator!=(const ParentGroup& a, const ParentGroup& b) { return !(a == b); }
 

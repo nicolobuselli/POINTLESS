@@ -182,8 +182,8 @@ public:
         m_nameEdit->setStyleSheet(QString(
             "background:transparent; border:none; padding:0; margin:0; min-height:0;"
             " color:%2; font-size:%1px; font-weight:400;"
-            " selection-background-color:%3;")
-            .arg(Ui::px(18)).arg(Ui::kColWhite.name()).arg(Ui::kColAccent.name()));
+            " selection-background-color:%3; selection-color:#101010;")
+            .arg(Ui::px(18)).arg(Ui::kColWhite.name()).arg(Ui::kColLocLime.name()));
         pl->addWidget(m_nameEdit, 1);
 
         // Reserve the lock icon's footprint (30px) + a small gap so the name
@@ -688,8 +688,8 @@ public:
         m_nameEdit->setStyleSheet(QString(
             "background:transparent; border:none; padding:0; margin:0; min-height:0;"
             " color:%2; font-size:%1px; font-weight:400;"
-            " selection-background-color:%3;")
-            .arg(Ui::px(18)).arg(Ui::kColTextBody.name()).arg(Ui::kColAccent.name()));
+            " selection-background-color:%3; selection-color:#101010;")
+            .arg(Ui::px(18)).arg(Ui::kColTextBody.name()).arg(Ui::kColLocLime.name()));
         connect(m_nameEdit, &QLineEdit::editingFinished, this, [this]() { finishRename(); });
         bl->addWidget(m_nameEdit, 1);
 
