@@ -1310,7 +1310,7 @@ void MainWindow::syncTimeline()
             c.length  = len;
             c.trimIn  = qBound(0, g.trimIn, len - 1);
             c.trimOut = (g.trimOut < 0) ? len - 1 : qBound(c.trimIn, g.trimOut, len - 1);
-            c.offset  = std::max(0, g.timeOffset);
+            c.offset  = qMax(0, g.timeOffset);   // qMax, not std::max: windows.h's max macro breaks MSVC
             clips.append(c);
         }
     }
