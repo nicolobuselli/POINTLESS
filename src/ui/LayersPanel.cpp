@@ -427,6 +427,16 @@ public:
         m_layout = new QVBoxLayout(this);
         m_layout->setContentsMargins(0, 0, 0, 0);
         m_layout->setSpacing(Ui::px(6));
+
+        // The reorder indicator is an overlay child, not a paintEvent stroke:
+        // the rows are children of this widget, so anything painted here ends
+        // up *behind* a row (hidden under the thumb/eye when hovering one).
+        m_indicator = new QWidget(this);
+        m_indicator->setAttribute(Qt::WA_TransparentForMouseEvents);
+        m_indicator->setAttribute(Qt::WA_StyledBackground, true);
+        m_indicator->setStyleSheet(QString("background:%1; border-radius:1px;")
+                                       .arg(Ui::kColLocLime.name()));
+        m_indicator->hide();
     }
 
     QVBoxLayout* rowsLayout() const { return m_layout; }
@@ -460,6 +470,7 @@ protected:
             m_addChildMedia = -1;
             m_indicatorY = childIndicatorY(childInsertIndexAt(pos));   // hint a drop
         } else return;
+        syncIndicator();
         update();
         e->acceptProposedAction();
     }
@@ -524,16 +535,19 @@ protected:
                 p.drawRoundedRect(r.adjusted(1, 1, -1, -1), Ui::px(8), Ui::px(8));
             }
         }
-        // Reorder indicator line
-        if (m_indicatorY >= 0) {
-            p.setPen(Qt::NoPen);
-            p.setBrush(Ui::kColAccent);
-            p.drawRoundedRect(QRectF(2, m_indicatorY - 1.5, width() - 4, 3), 1.5, 1.5);
-        }
     }
 
 private:
-    void clearDnd() { m_indicatorY = -1; m_addChildMedia = -1; update(); }
+    void clearDnd() { m_indicatorY = -1; m_addChildMedia = -1; syncIndicator(); update(); }
+
+    // Places the overlay line and keeps it on top of the rows.
+    void syncIndicator()
+    {
+        if (m_indicatorY < 0) { m_indicator->hide(); return; }
+        m_indicator->setGeometry(2, m_indicatorY - 2, width() - 4, 3);
+        m_indicator->raise();
+        m_indicator->show();
+    }
 
     // Children insert index = number of child rows whose centre is above pos.y.
     int childInsertIndexAt(const QPoint& pos) const
@@ -618,6 +632,7 @@ private:
     QVBoxLayout*  m_layout       = nullptr;
     QVector<Row>  m_model;
     int           m_indicatorY   = -1;
+    QWidget*      m_indicator    = nullptr;   // overlay reorder line (drawn above rows)
     int           m_addChildMedia = -1;
 };
 
