@@ -43,6 +43,7 @@
         <file alias="icons/lock.svg">../assets/icons/lock.svg</file>
         <file alias="icons/lock_open.svg">../assets/icons/lock_open.svg</file>
         <file alias="icons/check.svg">../assets/icons/check.svg</file>
-        <file alias="icons/warning.svg">../assets/icons/warning.svg</file>
+        <file alias="icons/dialog_card.svg">../assets/icons/dialog_card.svg</file>
+        <file alias="icons/dialog_card_warning.svg">../assets/icons/dialog_card_warning.svg</file>
 </qresource>
 </RCC>

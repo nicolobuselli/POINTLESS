@@ -227,26 +227,32 @@ void genPhyllotaxis(const GridSettings& g, const QTransform& t, const BBox& b,
 constexpr int kSlots = 8;
 
 struct CacheEntry {
-    bool                     valid = false;
-    GridSettings             g;
-    int                      w = -1, h = -1;
-    std::vector<GridSample>  samples;
+    bool           valid = false;
+    GridSettings   g;
+    int            w = -1, h = -1;
+    GridSamplesPtr samples;
 };
 
 QMutex     s_mutex;
 CacheEntry s_slots[kSlots];
 int        s_nextEvict = 0;
 
+const GridSamplesPtr& emptySamples()
+{
+    static const GridSamplesPtr e = std::make_shared<const std::vector<GridSample>>();
+    return e;
+}
+
 } // namespace
 
-std::vector<GridSample> GridGenerator::generate(const GridSettings& g, int imgW, int imgH)
+GridSamplesPtr GridGenerator::generate(const GridSettings& g, int imgW, int imgH)
 {
-    if (imgW <= 0 || imgH <= 0) return {};
+    if (imgW <= 0 || imgH <= 0) return emptySamples();
 
     QMutexLocker lock(&s_mutex);
     for (CacheEntry& e : s_slots) {
         if (e.valid && e.w == imgW && e.h == imgH && e.g == g)
-            return e.samples;
+            return e.samples;   // refcount bump, not a copy of the sample list
     }
     lock.unlock();
 
@@ -254,22 +260,26 @@ std::vector<GridSample> GridGenerator::generate(const GridSettings& g, int imgW,
     const QTransform inv = t.inverted();
     const BBox       b   = gridBounds(inv, imgW, imgH);
 
-    std::vector<GridSample> out;
+    auto out = std::make_shared<std::vector<GridSample>>();
     switch (g.type) {
-        case GridType::Square:      genSquare     (g, t, b, imgW, imgH, out); break;
-        case GridType::Hexagonal:   genHex        (g, t, b, imgW, imgH, out); break;
-        case GridType::Brick:       genBrick      (g, t, b, imgW, imgH, out); break;
-        case GridType::Wave:        genWave       (g, t, b, imgW, imgH, out); break;
-        case GridType::Radial:      genRadial     (g, t, b, imgW, imgH, out); break;
-        case GridType::Phyllotaxis: genPhyllotaxis(g, t, b, imgW, imgH, out); break;
+        case GridType::Square:      genSquare     (g, t, b, imgW, imgH, *out); break;
+        case GridType::Hexagonal:   genHex        (g, t, b, imgW, imgH, *out); break;
+        case GridType::Brick:       genBrick      (g, t, b, imgW, imgH, *out); break;
+        case GridType::Wave:        genWave       (g, t, b, imgW, imgH, *out); break;
+        case GridType::Radial:      genRadial     (g, t, b, imgW, imgH, *out); break;
+        case GridType::Phyllotaxis: genPhyllotaxis(g, t, b, imgW, imgH, *out); break;
     }
 
+    GridSamplesPtr shared = std::move(out);
+
+    // Evicting a slot only drops this cache's reference: a renderer still
+    // holding the pointer keeps its samples alive for as long as it needs.
     lock.relock();
     CacheEntry& slot = s_slots[s_nextEvict];
     s_nextEvict = (s_nextEvict + 1) % kSlots;
     slot.valid = true; slot.g = g; slot.w = imgW; slot.h = imgH;
-    slot.samples = out;
-    return out;
+    slot.samples = shared;
+    return shared;
 }
 
 GridGpuLayout GridGenerator::computeGpuLayout(const GridSettings& g, int imgW, int imgH)

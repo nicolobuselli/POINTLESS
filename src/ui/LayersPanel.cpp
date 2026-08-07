@@ -1130,6 +1130,8 @@ void LayersPanel::setSourceImage(const QImage& source)
 void LayersPanel::setBackground(const QColor& background, float opacity)
 {
     // Store only — the following setTree() re-renders thumbs (in place) with it.
+    if (m_background != background || m_bgOpacity != opacity)
+        m_thumbCache.clear();   // the thumb is composited over it
     m_background = background;
     m_bgOpacity = opacity;
 }
@@ -1138,8 +1140,30 @@ QPixmap LayersPanel::thumbFor(const Layer& layer) const
 {
     QImage src = m_mediaImages.value(layer.mediaId);
     if (src.isNull()) src = m_smallSource;
+
+    // Cache key = the layer with everything renderLayer() ignores stripped
+    // out. transform matters: it's what a canvas drag changes every frame,
+    // and renderLayer() never reads it (the caller applies placement), so
+    // leaving it in would re-render every thumbnail after every drag.
+    Layer key = layer;
+    key.name = QString();
+    key.visible = true;
+    key.pinned = false;
+    key.locked = false;
+    key.blend = BlendMode::Normal;
+    key.transform = LayerTransform{};
+
+    const void* bits = src.isNull() ? nullptr
+                                    : static_cast<const void*>(src.constBits());
+    const auto it = m_thumbCache.constFind(layer.id);
+    if (it != m_thumbCache.constEnd() && it->srcBits == bits && it->key == key)
+        return it->pm;
+
     const QImage ref = src.isNull() ? QImage() : RenderWorker::renderLayer(src, layer);
-    return roundedThumb(ref, QSize(Ui::px(44), Ui::px(30)), Ui::px(5), m_background, m_bgOpacity);
+    const QPixmap pm = roundedThumb(ref, QSize(Ui::px(44), Ui::px(30)), Ui::px(5),
+                                    m_background, m_bgOpacity);
+    m_thumbCache.insert(layer.id, { key, bits, pm });
+    return pm;
 }
 
 QPixmap LayersPanel::parentThumb(int mediaId) const

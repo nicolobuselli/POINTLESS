@@ -19,15 +19,14 @@ public:
     static QImage apply(const QImage& src, const Adjustments& a);
 
 private:
+    // The point ops (brightness/contrast, gamma, levels, invert, posterize)
+    // are 256-entry tables composed into a single pass inside apply() — see
+    // LutChain there. Only the ops that can't be a per-channel table stay
+    // here as real image passes.
     static void boxBlur(QImage& img, int radius);
-    static void blend(QImage& dst, const QImage& other, float t);
-    static void brightnessContrast(QImage& img, int brightness, int contrast);
-    static void applyGamma(QImage& img, float gamma);
-    static void applyLevels(QImage& img, int blackPoint, float midPoint, int whitePoint);
     static void saturate(QImage& img, int saturation);
     static void edgeEnhance(QImage& img, int amount);
     static void unsharpMask(QImage& img, int strength, int radius);
     static void addGrain(QImage& img, int amount);
-    static void applyPosterize(QImage& img, int levels);
     static void applyThreshold(QImage& img, int threshold);
 };

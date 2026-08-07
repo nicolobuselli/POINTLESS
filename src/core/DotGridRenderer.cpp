@@ -1,4 +1,5 @@
 #include "DotGridRenderer.h"
+#include "CellSample.h"
 #include "ColorMath.h"
 
 #include <QPainter>
@@ -30,9 +31,8 @@ void DotGridRenderer::render(const QImage& input, QPainter& output,
                            ? input
                            : input.convertToFormat(QImage::Format_RGB32);
 
-    const std::vector<GridSample> samples =
-        GridGenerator::generate(params.grid, imgW, imgH);
-    if (samples.empty()) return;
+    const GridSamplesPtr samples = GridGenerator::generate(params.grid, imgW, imgH);
+    if (samples->empty()) return;
 
     const int nBands = (imgH + kBandHeight - 1) / kBandHeight;
 
@@ -43,11 +43,15 @@ void DotGridRenderer::render(const QImage& input, QPainter& output,
         const int h   = qMin(kBandHeight, imgH - top);
         bandImages[b] = QImage(imgW, h, QImage::Format_ARGB32_Premultiplied);
         bandImages[b].fill(Qt::transparent);
-        jobs[b] = { &inputRGB, &params, &samples, &bandImages[b], top, h, imgW, imgH };
+        jobs[b] = { &inputRGB, &params, samples.get(), &bandImages[b], top, h, imgW, imgH };
     }
 
+    // One band = nothing to parallelise, and dispatching to the pool anyway is
+    // pure overhead. That's the common case for the layer-panel thumbnails,
+    // which render a ~92x64 raster once per layer on the GUI thread.
     // blockingMap runs synchronously — `samples` stays valid for all jobs.
-    QtConcurrent::blockingMap(jobs, &DotGridRenderer::renderTile);
+    if (nBands == 1) renderTile(jobs[0]);
+    else             QtConcurrent::blockingMap(jobs, &DotGridRenderer::renderTile);
 
     output.save();
     output.setClipRect(0, 0, imgW, imgH);
@@ -69,13 +73,12 @@ void DotGridRenderer::renderVector(const QImage& input, QPainter& output,
                            ? input
                            : input.convertToFormat(QImage::Format_RGB32);
 
-    const std::vector<GridSample> samples =
-        GridGenerator::generate(params.grid, imgW, imgH);
-    if (samples.empty()) return;
+    const GridSamplesPtr samples = GridGenerator::generate(params.grid, imgW, imgH);
+    if (samples->empty()) return;
 
     output.save();
     output.setRenderHint(QPainter::Antialiasing, true);
-    TileJob job{ &inputRGB, &params, &samples, nullptr,
+    TileJob job{ &inputRGB, &params, samples.get(), nullptr,
                  /*bandTop*/ 0, /*bandH*/ imgH, imgW, imgH };
     paintDots(output, job);
     output.restore();
@@ -84,7 +87,7 @@ void DotGridRenderer::renderVector(const QImage& input, QPainter& output,
 int DotGridRenderer::estimateDotCount(const QImage& input, const DotGridSettings& params)
 {
     if (input.isNull()) return 0;
-    return int(GridGenerator::generate(params.grid, input.width(), input.height()).size());
+    return int(GridGenerator::generate(params.grid, input.width(), input.height())->size());
 }
 
 // ---------------------------------------------------------------------------
@@ -149,9 +152,10 @@ void DotGridRenderer::paintDots(QPainter& painter, const TileJob& job)
          || s.y - maxR - jitterReach > bandBot) continue;   // band cull (+ jitter drift)
 
         int cx, cy, cw, ch;
-        cellAround(s.x, s.y, cellPx, imgW, imgH, cx, cy, cw, ch);
-        const float lumLin   = sampleLuminosity(inputRGB, cx, cy, cw, ch);
-        const float lumPerc  = ColorMath::linearToSrgb8(lumLin) / 255.0f;
+        CellSample::around(s.x, s.y, cellPx, imgW, imgH, cx, cy, cw, ch);
+        const CellSample::Mean cell = CellSample::mean(inputRGB, cx, cy, cw, ch);
+        const float lumLin   = cell.lumLin;
+        const float lumPerc  = cell.tonePerc();
         const float darkness = 1.0f - lumLin;
         const float invG     = locGam.on
             ? 1.0f / qMax(0.01f, params.gamma * locGam.mul(s.x, s.y)) : invGamma;
@@ -177,7 +181,7 @@ void DotGridRenderer::paintDots(QPainter& painter, const TileJob& job)
 
         QColor fillColor;
         if (imageColors || tones.empty()) {
-            fillColor = sampleAverageColor(inputRGB, cx, cy, cw, ch);
+            fillColor = cell.empty ? QColor(Qt::black) : cell.srgb();
         } else {
             // FixedTones and Palette both map luminosity onto the tones via
             // their per-colour level thresholds (matches Dither/Ascii).
@@ -379,58 +383,8 @@ QPainterPath DotGridRenderer::buildShape(DotGridShape shape, float cx, float cy,
 // ---------------------------------------------------------------------------
 // Sampling helpers
 // ---------------------------------------------------------------------------
-
-// Average linear-light luminance over the cell (0..1).
-float DotGridRenderer::sampleLuminosity(const QImage& rgb,
-                                          int cellX, int cellY,
-                                          int cellW, int cellH)
-{
-    double sum   = 0.0;
-    int    count = 0;
-    for (int y = cellY; y < cellY + cellH; ++y) {
-        const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
-        for (int x = cellX; x < cellX + cellW; ++x) {
-            sum += ColorMath::linearLuminance(line[x]);
-            ++count;
-        }
-    }
-    return count == 0 ? 1.0f : static_cast<float>(sum / count);
-}
-
-// Average colour over the cell, computed in linear light then re-encoded
-// to sRGB (a plain byte average would skew toward the darker side).
-QColor DotGridRenderer::sampleAverageColor(const QImage& rgb,
-                                             int cellX, int cellY,
-                                             int cellW, int cellH)
-{
-    double r = 0.0, g = 0.0, b = 0.0;
-    int count = 0;
-    for (int y = cellY; y < cellY + cellH; ++y) {
-        const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
-        for (int x = cellX; x < cellX + cellW; ++x) {
-            QRgb px = line[x];
-            r += ColorMath::srgbToLinear(qRed(px));
-            g += ColorMath::srgbToLinear(qGreen(px));
-            b += ColorMath::srgbToLinear(qBlue(px));
-            ++count;
-        }
-    }
-    if (count == 0) return Qt::black;
-    return QColor(ColorMath::linearToSrgb8(float(r / count)),
-                  ColorMath::linearToSrgb8(float(g / count)),
-                  ColorMath::linearToSrgb8(float(b / count)));
-}
-
-// Clamped sampling cell of side `cellPx` centred on (sx, sy).
-void DotGridRenderer::cellAround(float sx, float sy, int cellPx, int imgW, int imgH,
-                                  int& cx, int& cy, int& cw, int& ch)
-{
-    cellPx = qMax(1, cellPx);
-    cx = qBound(0, qRound(sx) - cellPx / 2, qMax(0, imgW - 1));
-    cy = qBound(0, qRound(sy) - cellPx / 2, qMax(0, imgH - 1));
-    cw = qBound(1, cellPx, imgW - cx);
-    ch = qBound(1, cellPx, imgH - cy);
-}
+// Cell geometry + averaging now live in core/CellSample.h, shared with ASCII,
+// Mosaic and Halftone.
 
 unsigned int DotGridRenderer::cellSeed(int col, int row)
 {

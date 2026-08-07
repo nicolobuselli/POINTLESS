@@ -321,43 +321,20 @@ QPushButton#checkRow:pressed { border-color: @boxStrokeActive; }
    are painted directly. */
 
 /* ── Animation progress bar (playback prep / frame export) ─────── */
-QProgressBar#animProgressBar {
-    background-color: @boxFill;
-    border: 1px solid @boxStroke;
-    border-radius: s(8)px;
-    text-align: center;
+/* The bar paints itself (PillProgressBar) — no ::chunk rule here, QSS would
+   leave the filled end square. Both widgets only need the panel background
+   off, so the dialog's own #1E1E1E shows through. */
+#progressLabel, QProgressBar#animProgressBar {
+    background: transparent;
     color: @textBody;
-    font-size: s(14)px;
+    font-size: s(20)px;
     font-weight: 500;
-}
-QProgressBar#animProgressBar::chunk {
-    background-color: @accent;
-    border-radius: s(8)px;
 }
 
 /* ── Unsaved-changes dialog (UnsavedChangesDialog) ──────────────
    Mini title bar (name + a permanently-red close = Cancel) over a
    warning icon + message + Yes/No, styled like the rest of the app
    instead of a native QMessageBox. */
-#miniTitleBar {
-    background-color: @surface2;
-    border-top-left-radius: 9px;
-    border-top-right-radius: 9px;
-}
-#miniTitleText {
-    color: @textTitle;
-    font-size: s(20)px;
-    font-weight: 700;
-    background: transparent;
-}
-#miniCloseBtn {
-    background-color: #C83A3A;
-    border: none;
-    border-top-right-radius: 9px;
-}
-#miniCloseBtn:hover   { background-color: #FF3A36; }
-#miniCloseBtn:pressed { background-color: #C81C19; }
-
 #dialogPane {
     background: transparent;
 }
@@ -368,21 +345,41 @@ QProgressBar#animProgressBar::chunk {
     background: transparent;
 }
 
+/* Round red "x" that dismisses the save-before-closing prompt (= Cancel). */
+QPushButton#dialogCloseBtn {
+    background-color: rgba(253, 35, 31, 40);
+    border: 1px solid @danger;
+    border-radius: s(23)px;
+    color: @danger;
+    font-size: s(19)px;
+    font-weight: 600;
+}
+QPushButton#dialogCloseBtn:hover   { background-color: rgba(253, 35, 31, 80); }
+QPushButton#dialogCloseBtn:pressed { background-color: @danger; color: @bgWindow; }
+
+/* Yes = lime outline; the destructive variant (danger property, e.g. "remove
+   the source and its layers") is the same box in red. */
 QPushButton#dialogYesBtn {
-    background-color: @modeFill;
-    border: 1px solid @modeStroke;
-    border-radius: s(24)px;
-    color: @textTitle;
+    background-color: transparent;
+    border: 1px solid @lime;
+    border-radius: s(12)px;
+    color: @lime;
     font-size: s(17)px;
     font-weight: 600;
 }
-QPushButton#dialogYesBtn:hover   { background-color: @modeStrokeHover; }
-QPushButton#dialogYesBtn:pressed { background-color: @modeStroke; }
+QPushButton#dialogYesBtn:hover   { background-color: @selectFill; }
+QPushButton#dialogYesBtn:pressed { background-color: @selectStroke; color: @bgWindow; }
+QPushButton#dialogYesBtn[danger="true"] {
+    border-color: @danger;
+    color: @danger;
+}
+QPushButton#dialogYesBtn[danger="true"]:hover   { background-color: rgba(253, 35, 31, 40); }
+QPushButton#dialogYesBtn[danger="true"]:pressed { background-color: rgba(253, 35, 31, 80); }
 
 QPushButton#dialogNoBtn {
     background-color: transparent;
     border: 1px solid @popupBorder;
-    border-radius: s(24)px;
+    border-radius: s(12)px;
     color: @textBody;
     font-size: s(17)px;
     font-weight: 600;

@@ -11,8 +11,10 @@
 #include <QSvgGenerator>
 #include <QtConcurrent/QtConcurrent>
 #include <algorithm>
+#include <atomic>
 #include <climits>
 #include <cmath>
+#include <iterator>
 
 namespace {
 
@@ -334,6 +336,30 @@ static qint64 rasterSizeKey(QSize s)
     return (qint64(quint32(s.width())) << 32) | quint32(s.height());
 }
 
+// Monotonic tick stamped onto every cache entry as it's written or read, so
+// pruneLayerCache can tell which raster sizes are still in active rotation.
+static std::atomic<quint64> s_cacheClock{ 1 };
+
+void RenderWorker::pruneLayerCache(QHash<int, QHash<qint64, LayerCacheEntry>>& cache,
+                                   const SessionParams& params)
+{
+    for (auto it = cache.begin(); it != cache.end(); ) {
+        bool alive = false;
+        for (const Layer& l : params.layers)
+            if (l.id == it.key()) { alive = true; break; }
+        it = alive ? std::next(it) : cache.erase(it);
+    }
+
+    for (auto& sizes : cache) {
+        while (sizes.size() > kMaxSizesPerLayer) {
+            auto oldest = sizes.begin();
+            for (auto s = sizes.begin(); s != sizes.end(); ++s)
+                if (s->stamp < oldest->stamp) oldest = s;
+            sizes.erase(oldest);
+        }
+    }
+}
+
 QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParams& params,
                                         const QHash<int, QImage>& layerSrc,
                                         QHash<int, QHash<qint64, RenderWorker::LayerCacheEntry>>* cache,
@@ -391,6 +417,7 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
                 if (sizeIt != layerIt->end() && sizeIt->key == contentKey
                     && sizeIt->srcBits == srcBits) {
                     rendered = sizeIt->rendered;
+                    sizeIt->stamp = s_cacheClock++;   // keep this size hot
                     hit = true;
                 }
             }
@@ -403,7 +430,8 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
             rendered = renderLayer(wsrc, wlayer);
             if (cache) {
                 QMutexLocker lock(cacheMutex);
-                (*cache)[j.origLayer.id][sizeKey] = { contentKey, j.origSrc.size(), srcBits, rendered };
+                (*cache)[j.origLayer.id][sizeKey] =
+                    { contentKey, j.origSrc.size(), srcBits, rendered, s_cacheClock++ };
             }
         }
 
@@ -416,6 +444,11 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
             j.origLayer.kind, j.origLayer.transform.scalePct, j.origSrc.size());
         j.placed = placeOnFrame(rendered, placementTf, outSize);
     });
+
+    if (cache) {
+        QMutexLocker lock(cacheMutex);
+        pruneLayerCache(*cache, params);
+    }
 
     for (const Job& j : jobs)
         BlendCompositor::compositeOver(canvas, j.placed, j.origLayer.blend);
@@ -564,6 +597,7 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
                 if (sizeIt != layerIt->end() && sizeIt->key == contentKey
                     && sizeIt->srcBits == srcBits) {
                     j.rendered = sizeIt->rendered;
+                    sizeIt->stamp = s_cacheClock++;   // keep this size hot
                     hit = true;
                 }
             }
@@ -597,9 +631,14 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
                 j.rendered = j.rendered.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
             QMutexLocker lock(&m_layerCacheMutex);
             m_layerCache[j.origLayer.id][sizeKey] =
-                { contentKey, j.origSrc.size(), srcBits, j.rendered };
+                { contentKey, j.origSrc.size(), srcBits, j.rendered, s_cacheClock++ };
         }
     });
+
+    {
+        QMutexLocker lock(&m_layerCacheMutex);
+        pruneLayerCache(m_layerCache, params);
+    }
 
     for (Job& j : jobs) {
         if (j.rendered.isNull()) continue;

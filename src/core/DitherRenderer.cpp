@@ -11,6 +11,7 @@
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <numeric>
 #include <vector>
 
@@ -395,8 +396,10 @@ const std::vector<float>& voidClusterMask()
 //  Any user image becomes a tiled threshold matrix: the pixels are
 //  rank-normalised (sorted by luma, threshold = rank position), so
 //  the tonal response is uniform regardless of the image's own
-//  contrast/histogram. Cached per path; returned BY VALUE because
-//  QHash may rehash under a concurrent insert from another render.
+//  contrast/histogram. Cached per path and handed out as a shared
+//  pointer: QHash may rehash under a concurrent insert from another
+//  render, so callers must not hold a reference into the table — but
+//  they don't need a 256 KB copy of it either.
 // ============================================================
 
 struct PatternMask {
@@ -404,10 +407,12 @@ struct PatternMask {
     std::vector<float> t;
 };
 
-PatternMask patternMask(const QString& path)
+using PatternMaskPtr = std::shared_ptr<const PatternMask>;
+
+PatternMaskPtr patternMask(const QString& path)
 {
     static QMutex mutex;
-    static QHash<QString, PatternMask> cache;
+    static QHash<QString, PatternMaskPtr> cache;
     QMutexLocker lock(&mutex);
 
     auto it = cache.constFind(path);
@@ -442,8 +447,9 @@ PatternMask patternMask(const QString& path)
         for (int r = 0; r < N; ++r)
             m.t[size_t(order[size_t(r)])] = (r + 0.5f) / float(N);
     }
-    cache.insert(path, m);
-    return m;
+    auto ptr = std::make_shared<const PatternMask>(std::move(m));
+    cache.insert(path, ptr);
+    return ptr;
 }
 
 // ============================================================
@@ -502,6 +508,14 @@ const KTap kStucki[] = {
 // ============================================================
 //  DitherRenderer — public entry point
 // ============================================================
+
+void DitherRenderer::warmMasks()
+{
+    // Touching them is enough: both are function-local statics, so the
+    // C++11 thread-safe-init guarantee makes this idempotent and race-free.
+    (void)blueNoiseMask();
+    (void)voidClusterMask();
+}
 
 bool DitherRenderer::isOrdered(DitherAlgorithm a)
 {
@@ -573,9 +587,9 @@ DitherGpuMask DitherRenderer::gpuMask(const DitherSettings& s)
         m.t = voidClusterMask();
         break;
     case DitherAlgorithm::CustomPattern: {
-        PatternMask pm = patternMask(s.patternPath);
-        if (pm.w > 0 && pm.h > 0) {
-            m.w = pm.w; m.h = pm.h; m.t = std::move(pm.t);
+        const PatternMaskPtr pm = patternMask(s.patternPath);
+        if (pm->w > 0 && pm->h > 0) {
+            m.w = pm->w; m.h = pm->h; m.t = pm->t;
         } else {                       // no/invalid pattern → Bayer 8 fallback
             m.w = m.h = 8;
             m.t = bayerMatrix(8);
@@ -661,9 +675,12 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
     // exists inside the union of the circles — alpha fades to 0 outside.
     const LocMask lm = locMask(s.loc, float(out.width()), float(out.height()));
     if (lm.on) {
-        for (int y = 0; y < out.height(); ++y) {
+        out.detach();   // no COW inside the parallel loop (see ImageAdjuster)
+        const int ow = out.width(), oh = out.height();
+        parallelRows(oh, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
             QRgb* line = reinterpret_cast<QRgb*>(out.scanLine(y));
-            for (int x = 0; x < out.width(); ++x) {
+            for (int x = 0; x < ow; ++x) {
                 const QRgb px = line[x];
                 if (qAlpha(px) == 0) continue;
                 const float m = lm.mask(float(x), float(y));
@@ -671,6 +688,7 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
                                 qRound(qAlpha(px) * m));
             }
         }
+        });
     }
 
     if (ps > 1) {
@@ -748,15 +766,19 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
     // Apply opacity after compositing to avoid seams on shared edges.
     if (s.opacity < 1.0f) {
         const float op = qBound(0.0f, s.opacity, 1.0f);
-        for (int y = 0; y < out.height(); ++y) {
+        out.detach();   // no COW inside the parallel loop (see ImageAdjuster)
+        const int ow = out.width(), oh = out.height();
+        parallelRows(oh, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
             QRgb* line = reinterpret_cast<QRgb*>(out.scanLine(y));
-            for (int x = 0; x < out.width(); ++x) {
+            for (int x = 0; x < ow; ++x) {
                 const QRgb px = line[x];
                 if (qAlpha(px) == 0) continue;
                 line[x] = qRgba(qRed(px), qGreen(px), qBlue(px),
                                 qRound(qAlpha(px) * op));
             }
         }
+        });
     }
 
     return out;
@@ -1101,86 +1123,49 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
     const QuantTable qt(s, w, h);
     const LocField locStr = locField(s.loc, LocParam::DiStrength, float(w), float(h));
 
-    // --- Prepare the threshold lookup for this algorithm --------
-    // Returns a threshold in [0,1] for pixel (x,y).
-    std::function<float(int,int)> threshold;
+    // --- Threshold source -------------------------------------------------
+    // Each algorithm's threshold is a tiny functor the pixel loop below is
+    // instantiated against, so the call inlines. It used to be a
+    // std::function<float(int,int)> invoked once (twice in the palette
+    // branch) per pixel — an indirect call in the hottest loop in the app.
+    //
+    // Every ordered algorithm except LineHatch is a tiled lookup table; only
+    // CustomPattern's tile can have a non-power-of-two size, hence the two
+    // table variants (mask vs modulo).
 
-    if (s.algorithm == DitherAlgorithm::Bayer) {
-        const int bn = (s.bayerSize == 2 || s.bayerSize == 4 ||
-                        s.bayerSize == 8 || s.bayerSize == 16) ? s.bayerSize : 8;
-        const std::vector<float> bayer = bayerMatrix(bn);
-        threshold = [bayer, bn](int x, int y) -> float {
-            return bayer[size_t(y % bn) * bn + (x % bn)];
-        };
-
-    } else if (s.algorithm == DitherAlgorithm::ClusteredDot) {
-        // bayerSize ≤ 4 selects the 4×4 pattern; otherwise 8×8.
-        if (s.bayerSize <= 4) {
-            threshold = [](int x, int y) -> float {
-                return (kClustered4[((y & 3) << 2) | (x & 3)] + 0.5f) / 16.0f;
-            };
-        } else {
-            threshold = [](int x, int y) -> float {
-                return (kClustered8[((y & 7) << 3) | (x & 7)] + 0.5f) / 64.0f;
-            };
+    struct TiledPow2 {
+        const float* t; int w, xMask, yMask;
+        float operator()(int x, int y) const
+        { return t[size_t(y & yMask) * w + (x & xMask)]; }
+    };
+    struct TiledMod {
+        const float* t; int w, h;
+        float operator()(int x, int y) const
+        { return t[size_t(y % h) * w + (x % w)]; }
+    };
+    struct PlainHatch {
+        float ca, sa, inv;
+        float operator()(int x, int y) const
+        {
+            const float u = (x * ca + y * sa) * inv;
+            const float f = u - std::floor(u);
+            return std::fabs(f - 0.5f) * 2.0f;
         }
-
-    } else if (s.algorithm == DitherAlgorithm::LineHatch) {
-        // Parallel line screen: threshold = distance from the nearest line
-        // centre (0 at the centre), so lines thicken with darkness.
-        const LocField locAng = locField(s.loc, LocParam::DiLineAngle,   float(w), float(h));
-        const LocField locSpc = locField(s.loc, LocParam::DiLineSpacing, float(w), float(h));
-        if (locAng.on || locSpc.on) {
-            // Localized angle/spacing: the screen bends/thickens through the
-            // influence circle (the varying angle makes the lines curve).
-            const float baseA   = s.lineAngle;
-            const float baseSpc = float(qBound(2, s.lineSpacing, 64));
-            threshold = [=](int x, int y) -> float {
-                const float a   = qDegreesToRadians(baseA * locAng.mul(float(x), float(y)));
-                const float spc = qMax(1.0f, baseSpc * locSpc.mul(float(x), float(y)));
-                const float u = (x * std::cos(a) + y * std::sin(a)) / spc;
-                const float f = u - std::floor(u);
-                return std::fabs(f - 0.5f) * 2.0f;
-            };
-        } else {
-            const float a   = qDegreesToRadians(s.lineAngle);
-            const float ca  = std::cos(a), sa = std::sin(a);
-            const float inv = 1.0f / float(qBound(2, s.lineSpacing, 64));
-            threshold = [ca, sa, inv](int x, int y) -> float {
-                const float u = (x * ca + y * sa) * inv;
-                const float f = u - std::floor(u);
-                return std::fabs(f - 0.5f) * 2.0f;
-            };
+    };
+    struct LocalizedHatch {
+        float baseA, baseSpc; LocField locAng, locSpc;
+        float operator()(int x, int y) const
+        {
+            const float a   = qDegreesToRadians(baseA * locAng.mul(float(x), float(y)));
+            const float spc = qMax(1.0f, baseSpc * locSpc.mul(float(x), float(y)));
+            const float u = (x * std::cos(a) + y * std::sin(a)) / spc;
+            const float f = u - std::floor(u);
+            return std::fabs(f - 0.5f) * 2.0f;
         }
+    };
 
-    } else if (s.algorithm == DitherAlgorithm::CustomPattern) {
-        const PatternMask pm = patternMask(s.patternPath);
-        if (pm.w > 0 && pm.h > 0) {
-            threshold = [pm](int x, int y) -> float {
-                return pm.t[size_t(y % pm.h) * pm.w + (x % pm.w)];
-            };
-        } else {
-            // No/invalid pattern image → Bayer 8 fallback so the mode
-            // still renders something sensible before a file is picked.
-            const std::vector<float> bayer = bayerMatrix(8);
-            threshold = [bayer](int x, int y) -> float {
-                return bayer[size_t(y & 7) * 8 + (x & 7)];
-            };
-        }
-
-    } else if (s.algorithm == DitherAlgorithm::BlueNoise) {
-        const std::vector<float>& mask = blueNoiseMask();
-        threshold = [&mask](int x, int y) -> float {
-            return mask[size_t((y & 63) * 64 + (x & 63))];
-        };
-
-    } else { // VoidAndCluster
-        const std::vector<float>& mask = voidClusterMask();
-        threshold = [&mask](int x, int y) -> float {
-            return mask[size_t((y & 31) * 32 + (x & 31))];
-        };
-    }
-
+    // The pixel loop, generic over the threshold functor.
+    auto runPixels = [&](auto thr) {
     parallelRows(h, [&](int fromY, int toY) {
     for (int y = fromY; y < toY; ++y) {
         const QRgb* in  = reinterpret_cast<const QRgb*>(work.constScanLine(y));
@@ -1209,13 +1194,14 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
             const int   L      = q.L;
             const float str = qBound(0.0f, strength * locStr.mul(float(x), float(y)), 1.0f);
 
+            const float thrRaw = thr(x, y);
             // Compress threshold toward 0.5 as strength decreases.
-            const float t = 0.5f + (threshold(x, y) - 0.5f) * str;
+            const float t = 0.5f + (thrRaw - 0.5f) * str;
 
             if (pal) {
                 // Ordered dithering to a palette: bias the linear value by the
                 // matrix, then snap to the nearest colour.
-                const float bias = (threshold(x, y) - 0.5f) * str * 0.5f;
+                const float bias = (thrRaw - 0.5f) * str * 0.5f;
                 const float rr = qBound(0.0f, r  + bias, 1.0f);
                 const float gg = qBound(0.0f, g  + bias, 1.0f);
                 const float bb = qBound(0.0f, bl + bias, 1.0f);
@@ -1258,6 +1244,59 @@ void DitherRenderer::renderOrdered(const QImage& work, QImage& out,
         }
     }
     });
+    };
+
+    // --- Dispatch: the table each variant points at must outlive runPixels,
+    //     so every branch calls it inside its own scope.
+    if (s.algorithm == DitherAlgorithm::Bayer) {
+        const int bn = (s.bayerSize == 2 || s.bayerSize == 4 ||
+                        s.bayerSize == 8 || s.bayerSize == 16) ? s.bayerSize : 8;
+        const std::vector<float> bayer = bayerMatrix(bn);
+        runPixels(TiledPow2{ bayer.data(), bn, bn - 1, bn - 1 });
+
+    } else if (s.algorithm == DitherAlgorithm::ClusteredDot) {
+        // bayerSize ≤ 4 selects the 4×4 pattern; otherwise 8×8.
+        const int n = (s.bayerSize <= 4) ? 4 : 8;
+        const int* src = (n == 4) ? kClustered4 : kClustered8;
+        std::vector<float> tbl(size_t(n) * n);
+        const float denom = float(n) * float(n);
+        for (int i = 0; i < n * n; ++i) tbl[size_t(i)] = (src[i] + 0.5f) / denom;
+        runPixels(TiledPow2{ tbl.data(), n, n - 1, n - 1 });
+
+    } else if (s.algorithm == DitherAlgorithm::LineHatch) {
+        // Parallel line screen: threshold = distance from the nearest line
+        // centre (0 at the centre), so lines thicken with darkness.
+        const LocField locAng = locField(s.loc, LocParam::DiLineAngle,   float(w), float(h));
+        const LocField locSpc = locField(s.loc, LocParam::DiLineSpacing, float(w), float(h));
+        if (locAng.on || locSpc.on) {
+            // Localized angle/spacing: the screen bends/thickens through the
+            // influence circle (the varying angle makes the lines curve).
+            runPixels(LocalizedHatch{ s.lineAngle,
+                                      float(qBound(2, s.lineSpacing, 64)),
+                                      locAng, locSpc });
+        } else {
+            const float a = qDegreesToRadians(s.lineAngle);
+            runPixels(PlainHatch{ std::cos(a), std::sin(a),
+                                  1.0f / float(qBound(2, s.lineSpacing, 64)) });
+        }
+
+    } else if (s.algorithm == DitherAlgorithm::CustomPattern) {
+        const PatternMaskPtr pm = patternMask(s.patternPath);
+        if (pm->w > 0 && pm->h > 0) {
+            runPixels(TiledMod{ pm->t.data(), pm->w, pm->h });
+        } else {
+            // No/invalid pattern image → Bayer 8 fallback so the mode
+            // still renders something sensible before a file is picked.
+            const std::vector<float> bayer = bayerMatrix(8);
+            runPixels(TiledPow2{ bayer.data(), 8, 7, 7 });
+        }
+
+    } else if (s.algorithm == DitherAlgorithm::BlueNoise) {
+        runPixels(TiledPow2{ blueNoiseMask().data(), 64, 63, 63 });
+
+    } else { // VoidAndCluster
+        runPixels(TiledPow2{ voidClusterMask().data(), 32, 31, 31 });
+    }
 }
 
 // ============================================================

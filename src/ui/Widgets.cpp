@@ -31,6 +31,7 @@
 #include <QTimer>
 #include <QFontMetrics>
 #include <QResizeEvent>
+#include <QSvgRenderer>
 #include <cmath>
 
 // ============================================================
@@ -1319,7 +1320,78 @@ QPushButton* makeIconButton(const QString& iconRes)
     return btn;
 }
 
+// ── Dialog card artwork ──────────────────────────────────────
+// The dialog backgrounds are the design's own SVGs (dialog_card.svg for the
+// progress popup, dialog_card_warning.svg — lime edge + warning mark — for
+// confirmations), drawn straight into the widget rect. The dialogs keep the
+// artwork's aspect ratio (kDialogAspect) so the bubbles along the edge don't
+// get stretched.
+
+namespace {
+
+void paintDialogCard(QPaintDevice* dev, const QRect& rect, bool withWarning)
+{
+    QPainter p(dev);
+    p.setRenderHint(QPainter::Antialiasing);
+    QSvgRenderer svg(QString(withWarning ? ":/icons/dialog_card_warning.svg"
+                                         : ":/icons/dialog_card.svg"));
+    svg.render(&p, QRectF(rect));
+}
+
+// Dialogs sit in the middle of the screen the app is on, not the middle of
+// the app window: a card centred inside a small window reads as oversized.
+void centerOnScreen(QDialog* d, QWidget* parent)
+{
+    const QScreen* scr = parent && parent->window()->screen()
+                       ? parent->window()->screen() : QGuiApplication::primaryScreen();
+    if (!scr) return;
+    const QRect area = scr->availableGeometry();
+    d->move(area.center() - QPoint(d->width() / 2, d->height() / 2));
+}
+
+// The card is one drawing, not a nine-patch: any size that isn't the
+// artwork's aspect ratio stretches the bubbles along the edge. So the dialog
+// takes the height its content needs and then widens to match.
+void lockCardAspect(QDialog* d, int widthFigma, double aspect)
+{
+    d->setFixedWidth(Ui::px(widthFigma));
+    const int w = qMax(Ui::px(widthFigma),
+                       int(qRound(d->sizeHint().height() * aspect)));
+    d->setFixedSize(w, int(qRound(w / aspect)));
+}
+
+} // namespace
+
 // ── AnimProgressDialog ───────────────────────────────────────
+
+namespace {
+// QSS ::chunk leaves the filled end square (Qt clips the chunk rect), so the
+// bar paints itself: pill groove + pill chunk, both fully rounded.
+// ponytail: indeterminate (range 0,0) just fills solid — no marching stripe.
+class PillProgressBar : public QProgressBar {
+public:
+    using QProgressBar::QProgressBar;
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const qreal rad = r.height() / 2.0;
+        p.setPen(QPen(Ui::kColBoxStroke, 1));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(r, rad, rad);
+
+        const int span = maximum() - minimum();
+        const qreal frac = span > 0 ? qreal(value() - minimum()) / span : 1.0;
+        if (frac <= 0.0) return;
+        QRectF fill = r;
+        fill.setWidth(qMax(r.height(), r.width() * qBound(0.0, frac, 1.0)));
+        p.setPen(Qt::NoPen);
+        p.setBrush(Ui::kColLocLime);
+        p.drawRoundedRect(fill, rad, rad);
+    }
+};
+} // namespace
 
 AnimProgressDialog::AnimProgressDialog(const QString& labelText, int maxValue, QWidget* parent)
     : QDialog(parent, Qt::FramelessWindowHint | Qt::Dialog)
@@ -1330,33 +1402,36 @@ AnimProgressDialog::AnimProgressDialog(const QString& labelText, int maxValue, Q
     m_elapsed.start();
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(Ui::px(28), Ui::px(24), Ui::px(28), Ui::px(20));
-    root->setSpacing(Ui::px(16));
+    root->setContentsMargins(Ui::px(52), Ui::px(40), Ui::px(52), Ui::px(32));
+    root->setSpacing(0);
 
     m_label = new QLabel(labelText);
-    m_label->setObjectName("paramLabel");
+    m_label->setObjectName("progressLabel");
     root->addWidget(m_label);
+    root->addStretch(1);
 
-    m_bar = new QProgressBar;
+    m_bar = new PillProgressBar;
     m_bar->setObjectName("animProgressBar");
     m_bar->setRange(0, maxValue);
-    m_bar->setTextVisible(true);
-    m_bar->setFixedHeight(Ui::px(28));
+    m_bar->setTextVisible(false);
+    m_bar->setFixedHeight(Ui::px(37));
     root->addWidget(m_bar);
+    root->addStretch(1);
 
     auto* btnRow = new QHBoxLayout;
+    btnRow->setContentsMargins(0, 0, 0, 0);
     btnRow->addStretch(1);
     auto* cancelBtn = new QPushButton("Cancel");
-    cancelBtn->setObjectName("exportBtn");
+    cancelBtn->setObjectName("dialogNoBtn");
     cancelBtn->setCursor(Qt::PointingHandCursor);
-    cancelBtn->setFixedHeight(Ui::px(36));
+    cancelBtn->setFixedSize(Ui::px(138), Ui::px(46));
     connect(cancelBtn, &QPushButton::clicked, this, [this] { m_canceled = true; });
     btnRow->addWidget(cancelBtn);
     root->addLayout(btnRow);
 
-    setFixedWidth(Ui::px(760));
-    if (parent)
-        move(parent->window()->frameGeometry().center() - QPoint(width() / 2, sizeHint().height() / 2));
+    setFixedSize(Ui::px(Ui::kDialogWFigma),
+                 int(Ui::px(Ui::kDialogWFigma) / Ui::kDialogAspect));
+    centerOnScreen(this, parent);
 }
 
 void AnimProgressDialog::setValue(int v)
@@ -1382,11 +1457,7 @@ void AnimProgressDialog::setRange(int lo, int hi)
 
 void AnimProgressDialog::paintEvent(QPaintEvent*)
 {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(QPen(Ui::kColPopupBorder, 1));
-    p.setBrush(Ui::kColBgWindow);
-    p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
+    paintDialogCard(this, rect(), /*withWarning=*/false);
 }
 
 // ── UnsavedChangesDialog ───────────────────────────────────────
@@ -1397,160 +1468,109 @@ UnsavedChangesDialog::UnsavedChangesDialog(const QString& documentName, QWidget*
     setAttribute(Qt::WA_TranslucentBackground);
     setModal(true);
     setWindowModality(Qt::WindowModal);
-    setFixedWidth(Ui::px(620));
-
+    // Plain QWidgets pick up the global "QWidget { background-color: @bgPanel }"
+    // rule and would paint a flat block over the card artwork, hence
+    // objectName "dialogPane" (transparent) on every container.
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
+    const int pad = Ui::px(Ui::kDialogWarnPad);
+    // Top margin is NOT 50+pad like the others: the close button has to end up
+    // concentric with the card's top-right corner arc. In the 1314×630 artwork
+    // that arc is centred at (1162.15, 151.447), and 643 Figma px map to 1314
+    // svg units, so the centre sits ~74 Figma px in from both the top and the
+    // right edge. Minus half the 45px button → 52.
+    root->setContentsMargins(Ui::px(52) + pad, Ui::px(52),
+                             Ui::px(52) + pad, Ui::px(44) + pad);
     root->setSpacing(0);
 
-    auto* bar = new QWidget;
-    bar->setObjectName("miniTitleBar");
-    bar->setFixedHeight(Ui::px(56));
-    auto* barL = new QHBoxLayout(bar);
-    barL->setContentsMargins(Ui::px(24), 0, 0, 0);
-    barL->setSpacing(0);
-    auto* title = new QLabel("POINTLESS");
-    title->setObjectName("miniTitleText");
-    barL->addWidget(title);
-    barL->addStretch(1);
-    auto* closeBtn = new QPushButton;
-    closeBtn->setObjectName("miniCloseBtn");
-    closeBtn->setCursor(Qt::PointingHandCursor);
-    closeBtn->setFixedSize(Ui::px(72), Ui::px(56));
-    closeBtn->setIcon(QIcon(":/icons/x.svg"));
-    closeBtn->setIconSize(QSize(Ui::px(18), Ui::px(18)));
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::reject);
-    barL->addWidget(closeBtn);
-    root->addWidget(bar);
-
-    // Plain QWidget picks up the global "QWidget { background-color: @bgPanel }"
-    // rule (assets/style.qss) and paints a flat block in its own right —
-    // visibly different from the card's own #1E1E1E (paintEvent below). Every
-    // container between here and the card edge needs objectName "dialogPane"
-    // (background: transparent) so the card colour is the only thing showing.
-    auto* body = new QWidget;
-    body->setObjectName("dialogPane");
-    auto* bodyL = new QHBoxLayout(body);
-    bodyL->setContentsMargins(Ui::px(36), Ui::px(32), Ui::px(36), Ui::px(28));
-    bodyL->setSpacing(Ui::px(26));
-
-    // Source is 200×176 (viewBox) — keep that ~1.14:1 aspect instead of
-    // squashing it into a square.
-    auto* warn = new QLabel;
-    warn->setObjectName("dialogPane");
-    const int warnW = Ui::px(64);
-    const int warnH = int(warnW * 176.0 / 200.0);
-    warn->setPixmap(QIcon(":/icons/warning.svg").pixmap(QSize(warnW, warnH)));
-    warn->setFixedSize(warnW, warnH);
-    bodyL->addWidget(warn, 0, Qt::AlignTop);
-
-    auto* msg = new QLabel(QString::fromUtf8("Save changes to “%1” before closing?")
-                           .arg(documentName));
+    auto* topRowWidget = new QWidget;
+    topRowWidget->setObjectName("dialogPane");
+    auto* topRow = new QHBoxLayout(topRowWidget);
+    // Horizontally the close button follows the root margin like every other
+    // row, so its right edge lines up with the "No" button below it.
+    topRow->setContentsMargins(0, 0, 0, 0);
+    topRow->setSpacing(Ui::px(14));
+    auto* msg = new QLabel("Save changes before closing?");
     msg->setObjectName("dialogMessage");
     msg->setWordWrap(true);
-    bodyL->addWidget(msg, 1);
-    root->addWidget(body);
+    topRow->addWidget(msg, 1);
+    // Dismiss = Cancel (same as Esc): keeps the document open, saves nothing.
+    auto* closeBtn = new QPushButton("x");
+    closeBtn->setObjectName("dialogCloseBtn");
+    closeBtn->setCursor(Qt::PointingHandCursor);
+    const int closeD = Ui::px(45);
+    closeBtn->setFixedSize(closeD, closeD);
+    // Radius must be exactly half the (already rounded) pixel size — a QSS
+    // s(...) value rounds separately and leaves the corners visibly square.
+    closeBtn->setStyleSheet(QString("border-radius: %1px;").arg(closeD / 2));
+    connect(closeBtn, &QPushButton::clicked, this, &QDialog::reject);
+    topRow->addWidget(closeBtn, 0, Qt::AlignTop);
+    root->addWidget(topRowWidget);
+    root->addStretch(1);
 
     auto* btnRowWidget = new QWidget;
     btnRowWidget->setObjectName("dialogPane");
     auto* btnRow = new QHBoxLayout(btnRowWidget);
-    btnRow->setContentsMargins(Ui::px(36), 0, Ui::px(36), Ui::px(28));
+    btnRow->setContentsMargins(0, 0, 0, 0);
     btnRow->setSpacing(Ui::px(14));
     btnRow->addStretch(1);
     auto* yesBtn = new QPushButton("Yes");
     yesBtn->setObjectName("dialogYesBtn");
     yesBtn->setCursor(Qt::PointingHandCursor);
-    yesBtn->setFixedSize(Ui::px(110), Ui::px(48));
+    yesBtn->setFixedSize(Ui::px(94), Ui::px(48));
     yesBtn->setDefault(true);
     connect(yesBtn, &QPushButton::clicked, this, [this] { m_choice = Save; accept(); });
     auto* noBtn = new QPushButton("No");
     noBtn->setObjectName("dialogNoBtn");
     noBtn->setCursor(Qt::PointingHandCursor);
-    noBtn->setFixedSize(Ui::px(110), Ui::px(48));
+    noBtn->setFixedSize(Ui::px(94), Ui::px(48));
     connect(noBtn, &QPushButton::clicked, this, [this] { m_choice = Discard; accept(); });
     btnRow->addWidget(yesBtn);
     btnRow->addWidget(noBtn);
     root->addWidget(btnRowWidget);
 
-    if (parent)
-        move(parent->window()->frameGeometry().center() - QPoint(width() / 2, sizeHint().height() / 2));
+    lockCardAspect(this, Ui::kDialogWarnWFigma, Ui::kDialogWarnAspect);
+    centerOnScreen(this, parent);
 }
 
 void UnsavedChangesDialog::paintEvent(QPaintEvent*)
 {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(QPen(Ui::kColPopupBorder, 1));
-    p.setBrush(Ui::kColBgWindow);
-    p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
+    paintDialogCard(this, rect(), /*withWarning=*/true);
 }
 
 // ── StyledMessageBox ─────────────────────────────────────────
 
 StyledMessageBox::StyledMessageBox(const QString& message, QWidget* parent,
-                                    const QString& yesText, const QString& noText, bool defaultYes)
+                                    const QString& yesText, const QString& noText,
+                                    bool defaultYes, bool dangerYes)
     : QDialog(parent, Qt::FramelessWindowHint | Qt::Dialog)
 {
     setAttribute(Qt::WA_TranslucentBackground);
     setModal(true);
     setWindowModality(Qt::WindowModal);
-    setFixedWidth(Ui::px(620));
-
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
+    const int pad = Ui::px(Ui::kDialogWarnPad);
+    root->setContentsMargins(Ui::px(52) + pad, Ui::px(50) + pad,
+                             Ui::px(52) + pad, Ui::px(44) + pad);
     root->setSpacing(0);
-
-    auto* bar = new QWidget;
-    bar->setObjectName("miniTitleBar");
-    bar->setFixedHeight(Ui::px(56));
-    auto* barL = new QHBoxLayout(bar);
-    barL->setContentsMargins(Ui::px(24), 0, 0, 0);
-    barL->setSpacing(0);
-    auto* title = new QLabel("POINTLESS");
-    title->setObjectName("miniTitleText");
-    barL->addWidget(title);
-    barL->addStretch(1);
-    auto* closeBtn = new QPushButton;
-    closeBtn->setObjectName("miniCloseBtn");
-    closeBtn->setCursor(Qt::PointingHandCursor);
-    closeBtn->setFixedSize(Ui::px(72), Ui::px(56));
-    closeBtn->setIcon(QIcon(":/icons/x.svg"));
-    closeBtn->setIconSize(QSize(Ui::px(18), Ui::px(18)));
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::reject);
-    barL->addWidget(closeBtn);
-    root->addWidget(bar);
-
-    auto* body = new QWidget;
-    body->setObjectName("dialogPane");
-    auto* bodyL = new QHBoxLayout(body);
-    bodyL->setContentsMargins(Ui::px(36), Ui::px(32), Ui::px(36), Ui::px(28));
-    bodyL->setSpacing(Ui::px(26));
-
-    auto* warn = new QLabel;
-    warn->setObjectName("dialogPane");
-    const int warnW = Ui::px(64);
-    const int warnH = int(warnW * 176.0 / 200.0);
-    warn->setPixmap(QIcon(":/icons/warning.svg").pixmap(QSize(warnW, warnH)));
-    warn->setFixedSize(warnW, warnH);
-    bodyL->addWidget(warn, 0, Qt::AlignTop);
 
     auto* msg = new QLabel(message);
     msg->setObjectName("dialogMessage");
     msg->setWordWrap(true);
-    bodyL->addWidget(msg, 1);
-    root->addWidget(body);
+    root->addWidget(msg);
+    root->addStretch(1);
 
     auto* btnRowWidget = new QWidget;
     btnRowWidget->setObjectName("dialogPane");
     auto* btnRow = new QHBoxLayout(btnRowWidget);
-    btnRow->setContentsMargins(Ui::px(36), 0, Ui::px(36), Ui::px(28));
+    btnRow->setContentsMargins(0, 0, 0, 0);
     btnRow->setSpacing(Ui::px(14));
     btnRow->addStretch(1);
 
     auto* yesBtn = new QPushButton(yesText);
     yesBtn->setObjectName("dialogYesBtn");
+    yesBtn->setProperty("danger", dangerYes);
     yesBtn->setCursor(Qt::PointingHandCursor);
-    yesBtn->setFixedSize(Ui::px(110), Ui::px(48));
+    yesBtn->setFixedSize(Ui::px(94), Ui::px(48));
     yesBtn->setDefault(defaultYes);
     connect(yesBtn, &QPushButton::clicked, this, [this] { m_accepted = true; accept(); });
     btnRow->addWidget(yesBtn);
@@ -1558,29 +1578,25 @@ StyledMessageBox::StyledMessageBox(const QString& message, QWidget* parent,
         auto* noBtn = new QPushButton(noText);
         noBtn->setObjectName("dialogNoBtn");
         noBtn->setCursor(Qt::PointingHandCursor);
-        noBtn->setFixedSize(Ui::px(110), Ui::px(48));
+        noBtn->setFixedSize(Ui::px(94), Ui::px(48));
         noBtn->setDefault(!defaultYes);
         connect(noBtn, &QPushButton::clicked, this, [this] { m_accepted = false; accept(); });
         btnRow->addWidget(noBtn);
     }
     root->addWidget(btnRowWidget);
 
-    if (parent)
-        move(parent->window()->frameGeometry().center() - QPoint(width() / 2, sizeHint().height() / 2));
+    lockCardAspect(this, Ui::kDialogWarnWFigma, Ui::kDialogWarnAspect);
+    centerOnScreen(this, parent);
 }
 
 void StyledMessageBox::paintEvent(QPaintEvent*)
 {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setPen(QPen(Ui::kColPopupBorder, 1));
-    p.setBrush(Ui::kColBgWindow);
-    p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 10, 10);
+    paintDialogCard(this, rect(), /*withWarning=*/true);
 }
 
-bool askYesNo(QWidget* parent, const QString& message, bool defaultYes)
+bool askYesNo(QWidget* parent, const QString& message, bool defaultYes, bool dangerYes)
 {
-    StyledMessageBox dlg(message, parent, "Yes", "No", defaultYes);
+    StyledMessageBox dlg(message, parent, "Yes", "No", defaultYes, dangerYes);
     dlg.exec();
     return dlg.accepted();
 }

@@ -881,12 +881,9 @@ void MainWindow::updateDisplayedPreview()
             adjustedOnly,
             l ? l->transform : LayerTransform{},
             frameSize);
-        m_preview->setShowOriginal(false);
         m_preview->setImage(originalPlaced);
         return;
     }
-
-    m_preview->setShowOriginal(false);
 
     // GPU compositing: prefer the per-layer packages (full over preview),
     // mirroring the flattened-image priority below.
@@ -1143,13 +1140,20 @@ void MainWindow::syncLayersPanel()
     // was removed from the library) — hide the "+" until one exists again.
     m_left->setAddLayerVisible(!st.layers.empty());
 
-    // Small source per media for parent + child thumbnails.
+    // Small source per media for parent + child thumbnails (memoized — see
+    // m_mediaThumbCache).
     QHash<int, QImage> mediaImages;
     for (const ParentGroup& g : st.parents) {
         const auto it = board.media.find(g.mediaId);
         if (it == board.media.end() || it->image.isNull()) continue;
-        mediaImages.insert(g.mediaId,
-            it->image.scaled(92, 64, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+        const void* bits = static_cast<const void*>(it->image.constBits());
+        ScaledMedia& c = m_mediaThumbCache[g.mediaId];
+        if (c.srcBits != bits) {
+            c.img = it->image.scaled(92, 64, Qt::KeepAspectRatioByExpanding,
+                                     Qt::SmoothTransformation);
+            c.srcBits = bits;
+        }
+        mediaImages.insert(g.mediaId, c.img);
     }
 
     m_layersPanel->setBackground(st.background, st.backgroundOpacity);
@@ -2374,15 +2378,11 @@ void MainWindow::onRenderComplete(QImage result, bool isPreview)
     } else {
         m_lastRender = result;
     }
-    // The "hold to compare original" overlay (source + adjustments at full res)
-    // is costly, only used on Caps-Lock, and unaffected by mode params — so
-    // refresh it on the full pass only, not on every interactive preview tick.
-    if (!isPreview && m_current >= 0 && !m_playing) {
-        const Layer* l = activeLayer();
-        m_preview->setOriginalImage(ImageAdjuster::apply(
-            m_images[m_current].source,
-            l ? l->adjustments : Adjustments{}));
-    }
+    // The "hold to compare original" overlay used to be pushed from here on
+    // every full pass — a full-resolution ImageAdjuster::apply() on the GUI
+    // thread, feeding a PreviewWidget path nothing ever switched on. Both are
+    // gone; Caps Lock builds its comparison image in updateDisplayedPreview()
+    // below, on demand, only while the key is held.
     updateDisplayedPreview();
     pushPreviewTransform();
     // A full render landed: clear whatever hint/confirmation text ("Drop
@@ -2401,12 +2401,7 @@ void MainWindow::onLayersComplete(GpuFramePackage pkg, bool isPreview)
     if (isPreview) m_lastPkgPreview = pkg;
     else           m_lastPkgRender  = pkg;
 
-    if (!isPreview && m_current >= 0 && !m_playing) {
-        const Layer* l = activeLayer();
-        m_preview->setOriginalImage(ImageAdjuster::apply(
-            m_images[m_current].source,
-            l ? l->adjustments : Adjustments{}));
-    }
+    // (No compare-original push here either — see onRenderComplete.)
     updateDisplayedPreview();
     pushPreviewTransform();
     if (!isPreview) m_preview->setStatus(QString());
@@ -2851,7 +2846,6 @@ void MainWindow::switchToImage(int index)
         m_capsLockActive = false;
         m_spaceDown = false;
         m_preview->setPanMode(false);
-        m_preview->setShowOriginal(false);
         m_preview->resetZoom();
         m_preview->setImage({});
         m_filmstrip->setActive(-1);
@@ -2889,7 +2883,6 @@ void MainWindow::switchToImage(int index)
     m_spaceDown = false;
     m_capsLockActive = false;
     m_preview->setPanMode(false);
-    m_preview->setShowOriginal(false);
     m_preview->resetZoom();
     syncTimeline();
     setPlayhead(m_images[index].anim.playhead);   // applies interpolated params + renders
@@ -2943,8 +2936,8 @@ void MainWindow::onThumbCloseRequested(int mediaId)
     const bool inUse = std::any_of(st.layers.begin(), st.layers.end(),
         [mediaId](const Layer& l){ return l.mediaId == mediaId; });
     if (inUse) {
-        if (!askYesNo(this, "This source is used by one or more layers.\n\nRemove it and its layers?",
-                      /*defaultYes=*/false))
+        if (!askYesNo(this, "This source is used by one or more layers.\nRemove it and its layers?",
+                      /*defaultYes=*/false, /*dangerYes=*/true))
             return;
     }
 
@@ -3130,7 +3123,7 @@ void MainWindow::exportVideoMp4(const QString& baseName)
         return;
     }
 
-    AnimProgressDialog progress("Rendering frames…", count, this);
+    AnimProgressDialog progress("Pointless video is rendering", count, this);
     for (int i = 0; i < count; ++i) {
         progress.setValue(i);
         if (progress.wasCanceled()) return;

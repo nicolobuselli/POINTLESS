@@ -30,7 +30,6 @@ public:
     explicit PreviewWidget(QWidget* parent = nullptr);
 
     void setImage(const QImage& img);
-    void setOriginalImage(const QImage& img);
     void setStatus(const QString& text);
 
     // ── GPU canvas (Phase 1) ──────────────────────────────────
@@ -45,7 +44,6 @@ public:
     GpuCanvasWidget* gpuCanvas() const { return m_canvas; }
     void setGpuPackage(const GpuFramePackage& pkg);
     void resetZoom();
-    void setShowOriginal(bool show);
     void setPanMode(bool enabled);
 
     // Current zoom (1.0 = fit). The UI re-renders at higher resolution when
@@ -122,7 +120,6 @@ private:
     void forceEndDrags();
 
     QImage  m_image;
-    QImage  m_originalImage;
     QString m_status;
 
     // ── GPU canvas plumbing ───────────────────────────────────
@@ -133,7 +130,7 @@ private:
     GpuFramePackage  m_lastPkg;
     bool             m_lastWasPackage = false;
     QSize viewSizePx() const;      // on-screen image size (CPU: m_scaled; GPU: analytic)
-    void  rerouteGpu();            // pick what the canvas shows (original/pkg/image)
+    void  rerouteGpu();            // pick what the canvas shows (package or image)
     void  pushViewRect();          // keep the canvas blit rect in overlay lockstep
     void  paintOverlays(QPainter& p);   // selection/handles/loc/box/status chrome
 
@@ -142,7 +139,6 @@ private:
     double  m_zoomFactor = 0.7;
     QPoint  m_panOffset;
     QPoint  m_lastDragPos;
-    bool    m_showOriginal = false;
     bool    m_panMode = false;
     bool    m_dragging = false;
     Qt::MouseButton m_dragButton = Qt::NoButton;

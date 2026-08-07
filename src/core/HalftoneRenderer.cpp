@@ -1,4 +1,5 @@
 #include "HalftoneRenderer.h"
+#include "CellSample.h"
 #include "ColorMath.h"
 #include "GridGenerator.h"
 
@@ -34,7 +35,7 @@ struct ChannelJob {
     float                   level  = 128.0f;   // tonal: this tone's luminosity anchor
     float                   levelLo = -1.0f;   // neighbour anchors (-1 / 256 = none)
     float                   levelHi = 256.0f;
-    std::vector<GridSample> samples;           // generated on the calling thread
+    GridSamplesPtr          samples;           // generated on the calling thread
     QImage                  canvas;            // transparent ARGB32_Premultiplied
 };
 
@@ -48,42 +49,20 @@ float channelValue(const ColorMath::Cmyk& c, int chan)
     }
 }
 
-void cellAround(float sx, float sy, int cellPx, int imgW, int imgH,
-                int& cx, int& cy, int& cw, int& ch)
-{
-    cellPx = qMax(1, cellPx);
-    cx = qBound(0, qRound(sx) - cellPx / 2, qMax(0, imgW - 1));
-    cy = qBound(0, qRound(sy) - cellPx / 2, qMax(0, imgH - 1));
-    cw = qBound(1, cellPx, imgW - cx);
-    ch = qBound(1, cellPx, imgH - cy);
-}
-
 // Coverage of this job's ink over the sampling cell, 0..1. Linear-light
 // averaging first (matches Dot Grid); CMYK converts the average once, tonal
 // jobs take the perceptual luma (so Fill "level" anchors keep their meaning)
 // and weigh it triangularly against the neighbouring tone levels.
+// Cell geometry + averaging come from core/CellSample.h.
 float cellCoverage(const ChannelJob& job, int cx, int cy, int cw, int ch)
 {
-    const QImage& rgb = *job.rgb;
-    double r = 0.0, g = 0.0, b = 0.0;
-    int count = 0;
-    for (int y = cy; y < cy + ch; ++y) {
-        const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
-        for (int x = cx; x < cx + cw; ++x) {
-            const QRgb px = line[x];
-            r += ColorMath::srgbToLinear(qRed(px));
-            g += ColorMath::srgbToLinear(qGreen(px));
-            b += ColorMath::srgbToLinear(qBlue(px));
-            ++count;
-        }
-    }
-    if (count == 0) return 0.0f;
-    const float rl = float(r / count), gl = float(g / count), bl = float(b / count);
+    const CellSample::Mean m = CellSample::mean(*job.rgb, cx, cy, cw, ch);
+    if (m.empty) return 0.0f;
 
     if (job.cmyk)
-        return channelValue(ColorMath::rgbToCmyk(rl, gl, bl), job.chan);
+        return channelValue(ColorMath::rgbToCmyk(m.rLin, m.gLin, m.bLin), job.chan);
 
-    const float L = ColorMath::perceptualLumaFromLinear(rl, gl, bl) * 255.0f;
+    const float L = m.tonePercPerChannel() * 255.0f;
     if (job.single) return 1.0f - L / 255.0f;   // classic single-ink screen
     if (L <= job.level) {
         if (job.levelLo < -0.5f) return 1.0f;               // darkest tone: full below its anchor
@@ -135,6 +114,10 @@ float valueNoise(float x, float y)
 constexpr float kGrainScale = 0.45f;
 constexpr float kMinEdgeSoftness = 0.02f;
 
+// Rows of the Ink style's float accumulation field held at once (see
+// renderChannelInk): keeps it a few MB per channel instead of the whole frame.
+constexpr int kInkBandHeight = 256;
+
 // "Ink" style — CPU port of paper-design/shaders' "ink" type: every cell
 // splats a soft radial mask whose reach exceeds the cell (r ∝ coverage, up
 // to ~1.15× spacing), the masks ACCUMULATE in a float field, and one
@@ -150,15 +133,20 @@ void renderChannelInk(ChannelJob& job)
     const float invGamma = 1.0f / qBound(0.1f, p.gamma, 5.0f);
     const float gn       = qBound(0.0f, p.gridNoise, 1.0f) * sp;
 
-    std::vector<float> field(size_t(imgW) * size_t(imgH), 0.0f);
+    // Pass 1 — resolve every splat's centre and radius. cellCoverage() is the
+    // expensive part (it averages the whole sampling cell), so it runs exactly
+    // once per sample here rather than once per sample per band below.
+    struct Splat { float px, py, r; };
+    std::vector<Splat> splats;
+    splats.reserve(job.samples->size());
 
-    for (const GridSample& s : job.samples) {
+    for (const GridSample& s : *job.samples) {
         float jx = 0, jy = 0;
         if (gn > 0.0f) cellJitter(s.x, s.y, job.chan, gn, jx, jy);
         const float px = s.x + jx, py = s.y + jy;
 
         int cx, cy, cw, ch;
-        cellAround(px, py, cellPx, imgW, imgH, cx, cy, cw, ch);
+        CellSample::around(px, py, cellPx, imgW, imgH, cx, cy, cw, ch);
         float cov = cellCoverage(job, cx, cy, cw, ch);
         cov = std::pow(qBound(0.0f, cov, 1.0f), invGamma);
         cov = qBound(0.0f, cov * (1.0f + job.gain) + job.flood, 1.0f);
@@ -166,22 +154,26 @@ void renderChannelInk(ChannelJob& job)
 
         const float r = 1.15f * cov * sp;   // reaches past the cell → blobs merge
         if (r < 0.5f) continue;
-        const int x0 = qMax(0, int(px - r));
-        const int x1 = qMin(imgW - 1, int(px + r) + 1);
-        const int y0 = qMax(0, int(py - r));
-        const int y1 = qMin(imgH - 1, int(py + r) + 1);
-        const float invR = 1.0f / r;
-        for (int y = y0; y <= y1; ++y) {
-            float* row = &field[size_t(y) * imgW];
-            const float dy = y + 0.5f - py;
-            for (int x = x0; x <= x1; ++x) {
-                const float dx = x + 0.5f - px;
-                const float d = std::sqrt(dx * dx + dy * dy);
-                if (d >= r) continue;
-                const float t = 1.0f - d * invR;              // 1 centre → 0 at r
-                row[x] += t * t * (3.0f - 2.0f * t);          // smoothstep falloff
-            }
-        }
+        splats.push_back({ px, py, r });
+    }
+
+    // Pass 2 — accumulate + threshold one horizontal band at a time. The field
+    // is only ever bandH rows tall instead of the whole image: at frame
+    // resolution the full-image version was tens of MB per channel, and four
+    // channels render concurrently. Each output row depends only on splats
+    // within rMax of it, so banding is exactly equivalent to one big field.
+    const int bandH  = qMax(1, qMin(imgH, kInkBandHeight));
+    const int nBands = (imgH + bandH - 1) / bandH;
+
+    // Bucket splats by the bands they can reach, so a band doesn't rescan the
+    // whole list.
+    const size_t nBandSlots = size_t(nBands);
+    std::vector<std::vector<int>> byBand(nBandSlots);
+    for (int i = 0; i < int(splats.size()); ++i) {
+        const Splat& s = splats[size_t(i)];
+        const int b0 = qBound(0, int(std::floor((s.py - s.r) / bandH)), nBands - 1);
+        const int b1 = qBound(0, int(std::floor((s.py + s.r) / bandH)), nBands - 1);
+        for (int b = b0; b <= b1; ++b) byBand[size_t(b)].push_back(i);
     }
 
     // Single threshold over the accumulated field → alpha of this channel's
@@ -196,18 +188,47 @@ void renderChannelInk(ChannelJob& job)
     const float invW = 1.0f / (hi - lo);
     const int ir = job.ink.red(), ig = job.ink.green(), ib = job.ink.blue();
     const float inkA = job.ink.alphaF();
-    for (int y = 0; y < imgH; ++y) {
-        QRgb* out = reinterpret_cast<QRgb*>(job.canvas.scanLine(y));
-        const float* row = &field[size_t(y) * imgW];
-        for (int x = 0; x < imgW; ++x) {
-            float f = row[x];
-            if (grain > 0.005f)
-                f += (valueNoise(x * kGrainScale, y * kGrainScale) - 0.5f) * grain * 0.7f;
-            float t = (f - lo) * invW;
-            t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
-            const float a = t * t * (3.0f - 2.0f * t) * inkA;
-            if (a <= 0.003f) continue;
-            out[x] = qPremultiply(qRgba(ir, ig, ib, int(a * 255.0f + 0.5f)));
+
+    std::vector<float> field(size_t(imgW) * size_t(bandH));
+
+    for (int b = 0; b < nBands; ++b) {
+        const int bandTop = b * bandH;
+        const int bandBot = qMin(imgH, bandTop + bandH);   // exclusive
+        std::fill(field.begin(), field.begin() + size_t(imgW) * (bandBot - bandTop), 0.0f);
+
+        for (int idx : byBand[size_t(b)]) {
+            const Splat& s = splats[size_t(idx)];
+            const int x0 = qMax(0, int(s.px - s.r));
+            const int x1 = qMin(imgW - 1, int(s.px + s.r) + 1);
+            const int y0 = qMax(bandTop, int(s.py - s.r));
+            const int y1 = qMin(bandBot - 1, int(s.py + s.r) + 1);
+            const float invR = 1.0f / s.r;
+            for (int y = y0; y <= y1; ++y) {
+                float* row = &field[size_t(y - bandTop) * imgW];
+                const float dy = y + 0.5f - s.py;
+                for (int x = x0; x <= x1; ++x) {
+                    const float dx = x + 0.5f - s.px;
+                    const float d = std::sqrt(dx * dx + dy * dy);
+                    if (d >= s.r) continue;
+                    const float t = 1.0f - d * invR;          // 1 centre → 0 at r
+                    row[x] += t * t * (3.0f - 2.0f * t);      // smoothstep falloff
+                }
+            }
+        }
+
+        for (int y = bandTop; y < bandBot; ++y) {
+            QRgb* out = reinterpret_cast<QRgb*>(job.canvas.scanLine(y));
+            const float* row = &field[size_t(y - bandTop) * imgW];
+            for (int x = 0; x < imgW; ++x) {
+                float f = row[x];
+                if (grain > 0.005f)
+                    f += (valueNoise(x * kGrainScale, y * kGrainScale) - 0.5f) * grain * 0.7f;
+                float t = (f - lo) * invW;
+                t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+                const float a = t * t * (3.0f - 2.0f * t) * inkA;
+                if (a <= 0.003f) continue;
+                out[x] = qPremultiply(qRgba(ir, ig, ib, int(a * 255.0f + 0.5f)));
+            }
         }
     }
 }
@@ -237,6 +258,7 @@ void renderChannel(ChannelJob& job)
     const float gn       = qBound(0.0f, p.gridNoise, 1.0f) * sp;
     const float soft     = qBound(0.0f, p.softness, 1.0f);
     const float edgeSoft = qMax(soft, kMinEdgeSoftness);
+    const auto& samples  = *job.samples;
 
     QPainter painter(&job.canvas);
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -248,13 +270,13 @@ void renderChannel(ChannelJob& job)
     struct Shell { float grow; float alpha; };
     const Shell shells[3] = { { 0.30f, 0.25f }, { 0.15f, 0.55f }, { 0.0f, 1.0f } };
 
-    for (const GridSample& s : job.samples) {
+    for (const GridSample& s : samples) {
         float jx = 0, jy = 0;
         if (gn > 0.0f) cellJitter(s.x, s.y, job.chan, gn, jx, jy);
         const float px = s.x + jx, py = s.y + jy;
 
         int cx, cy, cw, ch;
-        cellAround(px, py, cellPx, imgW, imgH, cx, cy, cw, ch);
+        CellSample::around(px, py, cellPx, imgW, imgH, cx, cy, cw, ch);
         float cov = cellCoverage(job, cx, cy, cw, ch);
         cov = std::pow(qBound(0.0f, cov, 1.0f), invGamma);
         cov = qBound(0.0f, cov * (1.0f + job.gain) + job.flood, 1.0f);

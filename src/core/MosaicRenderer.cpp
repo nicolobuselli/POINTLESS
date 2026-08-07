@@ -1,4 +1,5 @@
 #include "MosaicRenderer.h"
+#include "CellSample.h"
 #include "ColorMath.h"
 #include "GridGenerator.h"
 
@@ -10,34 +11,10 @@
 
 namespace {
 
-// Average of the cell in linear light + its perceptual luma (for tone pick).
-struct CellAvg {
-    float rLin = 1, gLin = 1, bLin = 1;
-    float lumPerc = 1;
-};
-
-CellAvg cellAverage(const QImage& rgb, int cx, int cy, int cw, int ch)
-{
-    double r = 0, g = 0, b = 0;
-    int count = 0;
-    for (int y = cy; y < cy + ch; ++y) {
-        const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
-        for (int x = cx; x < cx + cw; ++x) {
-            const QRgb p = line[x];
-            r += ColorMath::srgbToLinear(qRed(p));
-            g += ColorMath::srgbToLinear(qGreen(p));
-            b += ColorMath::srgbToLinear(qBlue(p));
-            ++count;
-        }
-    }
-    CellAvg a;
-    if (count == 0) return a;
-    a.rLin = float(r / count);
-    a.gLin = float(g / count);
-    a.bLin = float(b / count);
-    a.lumPerc = ColorMath::perceptualLumaFromLinear(a.rLin, a.gLin, a.bLin);
-    return a;
-}
+// Cell averaging lives in core/CellSample.h, shared with the other tone modes.
+// Mosaic reads its perceptual tone per-channel (Mean::tonePercPerChannel),
+// which is NOT the same derivation Dot Grid and ASCII use — see the warning
+// on Mean.
 
 // Font sized so `text` fits a tileW×tileH tile minus padFrac (fraction of the
 // tile's shorter side) padding on every side.
@@ -76,7 +53,7 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
     gs.type     = params.gridShape;
     gs.spacing  = qMax(2.0f, params.spacing);
     gs.rotation = params.gridRotation;
-    const std::vector<GridSample> samples = GridGenerator::generate(gs, w, h);
+    const GridSamplesPtr samples = GridGenerator::generate(gs, w, h);
 
     const int cellPxW = qMax(1, qRound(cellW));
     const int cellPxH = qMax(1, qRound(cellH));
@@ -138,7 +115,7 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
     output.setPen(Qt::NoPen);
     output.setRenderHint(QPainter::Antialiasing, shrunk);
 
-    for (const GridSample& s : samples) {
+    for (const GridSample& s : *samples) {
         // Sampling/base-tile window centred on the grid sample point. A
         // window that would spill off the frame (right/bottom edge samples,
         // whenever cellPxW/H doesn't evenly divide w/h) is still rendered,
@@ -159,8 +136,10 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
         const float maskVal = lmask.on ? lmask.mask(cxp, cyp) : 1.0f;
         if (lmask.on && maskVal <= 0.0f) continue;   // spotlight: nothing outside enabled circles
 
-        const CellAvg avg = cellAverage(rgb, sampleRect.x(), sampleRect.y(), sampleRect.width(), sampleRect.height());
-        if (avg.lumPerc > paperCut) continue;   // ink-or-paper: paper = nothing
+        const CellSample::Mean avg = CellSample::mean(
+            rgb, sampleRect.x(), sampleRect.y(), sampleRect.width(), sampleRect.height());
+        const float avgTone = avg.tonePercPerChannel();
+        if (avgTone > paperCut) continue;   // ink-or-paper: paper = nothing
 
         // Fill colour + the tone index that owns this tile's text.
         QColor fill;
@@ -170,13 +149,11 @@ void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicS
                 palette, ColorMath::linearToOklab(avg.rLin, avg.gLin, avg.bLin));
             fill = QColor::fromRgba(palette[size_t(toneIdx)].out);
         } else if (imageColors || tonal.tones.empty()) {
-            fill = QColor(ColorMath::linearToSrgb8(avg.rLin),
-                          ColorMath::linearToSrgb8(avg.gLin),
-                          ColorMath::linearToSrgb8(avg.bLin));
+            fill = avg.srgb();
             if (!tonal.tones.empty())   // texts still follow the tone bands
-                toneIdx = pickToneIndex(tonal.tones, avg.lumPerc);
+                toneIdx = pickToneIndex(tonal.tones, avgTone);
         } else {
-            toneIdx = pickToneIndex(tonal.tones, avg.lumPerc);
+            toneIdx = pickToneIndex(tonal.tones, avgTone);
             const ToneEntry& te = tonal.tones[size_t(toneIdx)];
             fill = te.color;
             fill.setAlphaF(qBound(0.0f, te.opacity, 1.0f));

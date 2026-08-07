@@ -218,6 +218,15 @@ private:
     QTimer m_undoTimer;
     QTimer m_previewTimer;   // debounce live preview until param edits settle
 
+    // Downscaled media handed to LayersPanel for the row thumbnails.
+    // syncLayersPanel() runs on every selection / eye / lock / reorder change,
+    // so re-running SmoothTransformation there is repeat work — and worse, a
+    // fresh buffer each time has a fresh address, which is exactly what
+    // LayersPanel's thumbnail cache keys on. Without this the thumb cache
+    // could never hit for any layer backed by media.
+    struct ScaledMedia { const void* srcBits = nullptr; QImage img; };
+    QHash<int, ScaledMedia> m_mediaThumbCache;
+
     QString       m_projectPath;    // last save/open .less path; empty → Ctrl+S prompts Save As
     SessionParams m_savedParams;    // state as of the last save/load/empty-board — isDirty() diffs against this
     Animation     m_savedAnim;

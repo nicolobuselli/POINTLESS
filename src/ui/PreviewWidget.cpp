@@ -123,10 +123,7 @@ void PreviewWidget::setGpuPackage(const GpuFramePackage& pkg)
 void PreviewWidget::rerouteGpu()
 {
     if (!m_gpuActive || !m_canvas) return;
-    if (m_showOriginal && !m_originalImage.isNull()) {
-        m_viewSrcSize = m_originalImage.size();
-        m_canvas->showImage(m_originalImage);
-    } else if (m_lastWasPackage && m_lastPkg.valid) {
+    if (m_lastWasPackage && m_lastPkg.valid) {
         m_viewSrcSize = m_lastPkg.frame;
         m_canvas->showPackage(m_lastPkg);
     } else if (!m_image.isNull()) {
@@ -215,16 +212,6 @@ void PreviewWidget::setImage(const QImage& img)
     update();
 }
 
-void PreviewWidget::setOriginalImage(const QImage& img)
-{
-    m_originalImage = img;
-    if (m_showOriginal) {
-        updateScaled();
-        if (m_gpuActive) rerouteGpu();
-        update();
-    }
-}
-
 void PreviewWidget::setStatus(const QString& text)
 {
     m_status = text;
@@ -238,15 +225,6 @@ void PreviewWidget::resetZoom()
     m_dragging = false;
     m_dragButton = Qt::NoButton;
     updateScaled();
-    update();
-}
-
-void PreviewWidget::setShowOriginal(bool show)
-{
-    if (m_showOriginal == show) return;
-    m_showOriginal = show;
-    updateScaled();
-    if (m_gpuActive) rerouteGpu();
     update();
 }
 
@@ -371,13 +349,13 @@ bool PreviewWidget::widgetInsideFrame(QPointF widgetPos) const
 
 bool PreviewWidget::handlesVisible() const
 {
-    return m_transformable && !m_panMode && !m_showOriginal
+    return m_transformable && !m_panMode
         && m_selection.size() == 1 && m_selection.contains(m_activeId);
 }
 
 bool PreviewWidget::groupHandlesVisible() const
 {
-    return !m_panMode && !m_showOriginal && m_selection.size() >= 2;
+    return !m_panMode && m_selection.size() >= 2;
 }
 
 QPointF PreviewWidget::centreFrame(const LayerTransform& tf) const
@@ -464,7 +442,6 @@ int PreviewWidget::hitTest(QPointF widgetPos) const
 
 const QImage& PreviewWidget::currentSource() const
 {
-    if (m_showOriginal && !m_originalImage.isNull()) return m_originalImage;
     return m_image;
 }
 
@@ -566,7 +543,7 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
     }
 
     // Selection + transform (left button, not in pan/original mode).
-    if (event->button() == Qt::LeftButton && !m_panMode && !m_showOriginal
+    if (event->button() == Qt::LeftButton && !m_panMode
         && imageScale() > 0.0) {
         const QPointF pos = event->position();
         const Qt::KeyboardModifiers mods = event->modifiers();
@@ -1205,7 +1182,7 @@ void PreviewWidget::paintGroupHandles(QPainter& p)
 void PreviewWidget::paintOverlays(QPainter& p)
 {
     if (!viewSizePx().isEmpty()) {
-        if (!m_showOriginal && !m_panMode) {
+        if (!m_panMode) {
             const bool single = handlesVisible();
             // Selection outlines for every selected layer (the single active one
             // is drawn with full handles instead).

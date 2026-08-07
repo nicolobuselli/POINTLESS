@@ -1,4 +1,5 @@
 #include "AsciiRenderer.h"
+#include "CellSample.h"
 #include "ColorMath.h"
 #include "GridGenerator.h"
 #include "Parallel.h"
@@ -16,41 +17,8 @@
 
 namespace {
 
-// Average linear-light luminance over the cell (0..1).
-float cellLuminosity(const QImage& rgb, int cx, int cy, int cw, int ch)
-{
-    double sum = 0.0;
-    int count = 0;
-    for (int y = cy; y < cy + ch; ++y) {
-        const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
-        for (int x = cx; x < cx + cw; ++x) {
-            sum += ColorMath::linearLuminance(line[x]);
-            ++count;
-        }
-    }
-    return count == 0 ? 1.0f : float(sum / count);
-}
-
-// Average colour over the cell in linear light, re-encoded to sRGB.
-QColor cellAverageColor(const QImage& rgb, int cx, int cy, int cw, int ch)
-{
-    double r = 0.0, g = 0.0, b = 0.0;
-    int count = 0;
-    for (int y = cy; y < cy + ch; ++y) {
-        const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
-        for (int x = cx; x < cx + cw; ++x) {
-            QRgb p = line[x];
-            r += ColorMath::srgbToLinear(qRed(p));
-            g += ColorMath::srgbToLinear(qGreen(p));
-            b += ColorMath::srgbToLinear(qBlue(p));
-            ++count;
-        }
-    }
-    if (count == 0) return QColor(Qt::black);
-    return QColor(ColorMath::linearToSrgb8(float(r / count)),
-                  ColorMath::linearToSrgb8(float(g / count)),
-                  ColorMath::linearToSrgb8(float(b / count)));
-}
+// Cell averaging lives in core/CellSample.h, shared with Dot Grid / Mosaic /
+// Halftone.
 
 // Nearest palette colour (OkLab) to an sRGB colour, alpha from the tone.
 QColor snapToPalette(const std::vector<ColorMath::PaletteEntry>& pal, const QColor& c)
@@ -80,13 +48,17 @@ struct ToneCtx {
         return c;
     }
 
-    QColor pen(const QImage& rgb, int cx, int cy, int cw, int ch, float lumPerc) const
+    // Takes the cell's already-computed mean: the caller needs its luminance
+    // anyway, and this used to walk the same cell a second time to get the
+    // average colour.
+    QColor pen(const CellSample::Mean& cell) const
     {
+        const QColor avg = cell.empty ? QColor(Qt::black) : cell.srgb();
         if (paletteMode && !palette.empty())
-            return snapToPalette(palette, cellAverageColor(rgb, cx, cy, cw, ch));
+            return snapToPalette(palette, avg);
         if (imageColors || tones->empty())
-            return cellAverageColor(rgb, cx, cy, cw, ch);
-        const ToneEntry& te = (*tones)[pickToneIndex(*tones, lumPerc)];
+            return avg;
+        const ToneEntry& te = (*tones)[pickToneIndex(*tones, cell.tonePerc())];
         QColor pen = te.color;
         pen.setAlphaF(qBound(0.0f, te.opacity, 1.0f));
         return pen;
@@ -249,7 +221,7 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
                     const int x0 = cx + dc * cw / 2;
                     const int x1 = cx + (dc + 1) * cw / 2;
                     if (x1 <= x0 || y1 <= y0) continue;
-                    const float lum = cellLuminosity(rgb, x0, y0, x1 - x0, y1 - y0);
+                    const float lum = CellSample::mean(rgb, x0, y0, x1 - x0, y1 - y0).lumLin;
                     float darkness  = 1.0f - lum;
                     const float invG = locGam.on
                         ? 1.0f / qMax(0.01f, params.gamma * locGam.mul(x0, y0)) : invGamma;
@@ -261,9 +233,7 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
             const QChar glyph(0x2800 + bits);
             if (bits == 0) continue;
 
-            const float lumLin  = cellLuminosity(rgb, cx, cy, cw, ch);
-            const float lumPerc = ColorMath::linearToSrgb8(lumLin) / 255.0f;
-            QColor pen          = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
+            QColor pen = tc.pen(CellSample::mean(rgb, cx, cy, cw, ch));
             if (lm < 1.0f) pen.setAlphaF(pen.alphaF() * lm);   // fade band
             pen.setAlphaF(pen.alphaF() * opacity);
             drawCell(output, QRectF(cx, cy, cellW, cellH), glyph, pen);
@@ -422,6 +392,51 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
     std::sort(byCoverage.begin(), byCoverage.end(),
               [&](int a, int b) { return coverage[size_t(a)] < coverage[size_t(b)]; });
 
+    // Nearest-coverage glyph, precomputed as a step function of darkness.
+    // "Nearest" only changes at the midpoints between consecutive DISTINCT
+    // coverage values, so those midpoints are the whole answer — resolved once
+    // per render instead of the O(nChars) scan per cell this replaces (a
+    // charset can hold up to 128 glyphs). Glyphs measuring identical coverage
+    // collapse to their lowest charset index, matching the scan's tie rule.
+    std::vector<float> nearEdge;   // ascending midpoints
+    std::vector<int>   nearIdx;    // winner for the segment before each edge
+    {
+        std::vector<int> rep;      // one index per distinct coverage, ascending
+        for (int i : byCoverage) {
+            if (!rep.empty() && coverage[size_t(rep.back())] == coverage[size_t(i)]) {
+                if (i < rep.back()) rep.back() = i;
+                continue;
+            }
+            rep.push_back(i);
+        }
+        nearIdx.push_back(rep[0]);
+        for (size_t k = 1; k < rep.size(); ++k) {
+            nearEdge.push_back((coverage[size_t(rep[k - 1])]
+                              + coverage[size_t(rep[k])]) * 0.5f);
+            nearIdx.push_back(rep[k]);
+        }
+    }
+    auto nearestIdx = [&](float darkness) -> int {
+        const size_t cnt = nearIdx.size();
+        const size_t k = size_t(std::upper_bound(nearEdge.begin(), nearEdge.end(), darkness)
+                                - nearEdge.begin());
+        // The midpoints are themselves rounded to float, so they only locate
+        // the right neighbourhood — one can sit on the wrong side of a value
+        // that is genuinely closer to the other bucket. Settle it against the
+        // real coverages, exactly the way the scan did: strictly closer wins,
+        // an exact tie goes to the lower charset index.
+        const size_t lo = (k > 0) ? k - 1 : 0;
+        const size_t hi = (k + 1 < cnt) ? k + 1 : cnt - 1;
+        int   best  = nearIdx[lo];
+        float bestD = std::fabs(coverage[size_t(best)] - darkness);
+        for (size_t c = lo + 1; c <= hi; ++c) {
+            const int i = nearIdx[c];
+            const float d = std::fabs(coverage[size_t(i)] - darkness);
+            if (d < bestD || (d == bestD && i < best)) { best = i; bestD = d; }
+        }
+        return best;
+    };
+
     // Picks the glyph whose measured ink coverage matches `darkness`, either
     // by nearest match or (Ordered dither) by bracketing the two closest
     // glyphs and choosing between them with a Bayer threshold — shared by
@@ -442,13 +457,7 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
                                                                    : byCoverage[size_t(lo)];
             return charset.at(idx);
         }
-        int   idx  = 0;
-        float best = 2.0f;
-        for (int i = 0; i < nChars; ++i) {
-            const float d = std::fabs(coverage[size_t(i)] - darkness);
-            if (d < best) { best = d; idx = i; }
-        }
-        return charset.at(idx);
+        return charset.at(nearestIdx(darkness));
     };
 
     if (params.gridShape != GridType::Square) {
@@ -461,7 +470,7 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
         GridSettings gs;
         gs.type    = params.gridShape;
         gs.spacing = float(cellH);
-        const std::vector<GridSample> samples = GridGenerator::generate(gs, imgW, imgH);
+        const GridSamplesPtr samples = GridGenerator::generate(gs, imgW, imgH);
         const float halfW = cellW * 0.5f;
         const float halfH = cellH * 0.5f;
 
@@ -471,7 +480,7 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
         output.setRenderHint(QPainter::Antialiasing, true);
         output.setRenderHint(QPainter::TextAntialiasing, true);
 
-        for (const GridSample& gsm : samples) {
+        for (const GridSample& gsm : *samples) {
             const float lm = lmask.mask(gsm.x, gsm.y);
             if (lm <= 0.02f) continue;
 
@@ -480,9 +489,8 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
             const int cw = qMin(imgW - cx, cellW);
             const int ch = qMin(imgH - cy, cellH);
 
-            const float lumLin  = cellLuminosity(rgb, cx, cy, cw, ch);
-            const float lumPerc = ColorMath::linearToSrgb8(lumLin) / 255.0f;
-            float darkness      = 1.0f - lumLin;
+            const CellSample::Mean cell = CellSample::mean(rgb, cx, cy, cw, ch);
+            float darkness      = 1.0f - cell.lumLin;
             const float invG    = locGam.on
                 ? 1.0f / qMax(0.01f, params.gamma * locGam.mul(gsm.x, gsm.y)) : invGamma;
             darkness = std::pow(qBound(0.0f, darkness, 1.0f), invG);
@@ -497,7 +505,7 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
             const QChar c = chooseGlyph(darkness, col, row);
             if (c == QChar(' ')) continue;
 
-            QColor pen = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
+            QColor pen = tc.pen(cell);
             if (lm < 1.0f) pen.setAlphaF(pen.alphaF() * lm);
             pen.setAlphaF(pen.alphaF() * opacity);
             drawCell(output, QRectF(gsm.x - halfW, gsm.y - halfH, cellW, cellH), c, pen);
@@ -507,9 +515,12 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
         return;
     }
 
-    // Pass 1 — per-cell perceptual luminosity grid (also feeds the Sobel
-    // pass, which needs neighbour cells).
-    std::vector<float> lumLinGrid(size_t(cols) * rows);
+    // Pass 1 — per-cell means (also feed the Sobel pass, which needs
+    // neighbour cells). Keeping the whole Mean, not just its luminance, is
+    // what lets the draw pass below colour a cell without walking it again.
+    std::vector<CellSample::Mean> cellGrid(size_t(cols) * rows);
+    // tonePerc() costs a pow, and the Sobel/contour passes read it up to eight
+    // times per cell, so it stays precomputed as plain floats.
     std::vector<float> lumPercGrid(size_t(cols) * rows);
     // Rows are independent (each only reads its own image slice, writes its
     // own grid slice) — safe to split across the thread pool. This precompute
@@ -523,10 +534,9 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
             for (int col = 0; col < cols; ++col) {
                 const int cx = col * cellW;
                 const int cw = qMin(cellW, imgW - cx);
-                const float lumLin = cellLuminosity(rgb, cx, cy, cw, ch);
-                lumLinGrid [size_t(row) * cols + col] = lumLin;
-                lumPercGrid[size_t(row) * cols + col] =
-                    ColorMath::linearToSrgb8(lumLin) / 255.0f;
+                const CellSample::Mean m = CellSample::mean(rgb, cx, cy, cw, ch);
+                cellGrid   [size_t(row) * cols + col] = m;
+                lumPercGrid[size_t(row) * cols + col] = m.tonePerc();
             }
         }
     });
@@ -597,12 +607,12 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
     output.setRenderHint(QPainter::Antialiasing, true);
     output.setRenderHint(QPainter::TextAntialiasing, true);
 
+    // No clamped cell width/height needed here any more: the pen colour comes
+    // from the mean pass 1 already computed, not from a second walk of the cell.
     for (int row = 0; row < rows; ++row) {
         const int cy = row * cellH;
-        const int ch = qMin(cellH, imgH - cy);
         for (int col = 0; col < cols; ++col) {
             const int cx = col * cellW;
-            const int cw = qMin(cellW, imgW - cx);
 
             // Spotlight mask: glyphs only exist inside the loc circles.
             const float lm = lmask.mask(cellCX(col), cellCY(row));
@@ -620,9 +630,8 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
                 }
             }
 
-            const float lumLin  = lumLinGrid [size_t(row) * cols + col];
-            const float lumPerc = lumPercGrid[size_t(row) * cols + col];
-            float darkness      = 1.0f - lumLin;
+            const CellSample::Mean& cell = cellGrid[size_t(row) * cols + col];
+            float darkness      = 1.0f - cell.lumLin;
             const float invG    = locGam.on
                 ? 1.0f / qMax(0.01f, params.gamma * locGam.mul(cellCX(col), cellCY(row)))
                 : invGamma;
@@ -659,7 +668,7 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
 
             if (c == QChar(' ')) continue;
 
-            QColor pen = tc.pen(rgb, cx, cy, cw, ch, lumPerc);
+            QColor pen = tc.pen(cell);
             if (lm < 1.0f) pen.setAlphaF(pen.alphaF() * lm);   // fade band
             pen.setAlphaF(pen.alphaF() * opacity);
             drawCell(output, QRectF(cx, cy, cellW, cellH), c, pen);

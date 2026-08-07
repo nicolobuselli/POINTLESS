@@ -71,10 +71,6 @@ private:
     static QPainterPath buildShape(DotGridShape shape, float cx, float cy, float r,
                                    float cornerRadius = 0.f);
 
-    // Sampling
-    static float  sampleLuminosity  (const QImage& rgbImg, int x, int y, int w, int h);
-    static QColor sampleAverageColor(const QImage& rgbImg, int x, int y, int w, int h);
-    static void   cellAround(float sx, float sy, int cellPx, int imgW, int imgH,
-                             int& cx, int& cy, int& cw, int& ch);
+    // Sampling: see core/CellSample.h (shared with ASCII / Mosaic / Halftone).
     static unsigned int cellSeed(int col, int row);
 };

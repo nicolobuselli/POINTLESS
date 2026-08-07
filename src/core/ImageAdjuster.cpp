@@ -38,6 +38,85 @@ void applyLut(QImage& img, const uint8_t* lut)
     });
 }
 
+// ---------------------------------------------------------------------------
+// Point ops as composable 256-entry tables.
+//
+// Every consecutive run of point ops (brightness/contrast, gamma, levels,
+// invert, posterize) collapses into ONE table and ONE full-image pass instead
+// of a pass each. Composition quantises intermediates to 8 bits — exactly what
+// the old chain did anyway, since each op wrote its result back into the 8-bit
+// image before the next one read it, so the output is bit-identical.
+// ---------------------------------------------------------------------------
+
+struct LutChain {
+    uint8_t t[256];
+    bool    identity = true;
+
+    LutChain() { reset(); }
+    void reset() { for (int i = 0; i < 256; ++i) t[i] = uint8_t(i); }
+
+    // t := next ∘ t
+    void compose(const uint8_t* next)
+    {
+        for (int i = 0; i < 256; ++i) t[i] = next[t[i]];
+        identity = false;
+    }
+
+    // Neighbourhood ops (blur/edge/sharpen/grain) read real pixels, so the
+    // pending table has to land before they run.
+    void flush(QImage& img)
+    {
+        if (identity) return;
+        applyLut(img, t);
+        reset();
+        identity = true;
+    }
+};
+
+void brightnessContrastLut(uint8_t lut[256], int brightness, int contrast)
+{
+    const float c = contrast * 2.55f;
+    const float factor = (259.0f * (c + 255.0f)) / (255.0f * (259.0f - c));
+    const float offset = brightness * 1.275f;
+    for (int i = 0; i < 256; ++i)
+        lut[i] = uint8_t(clamp255(qRound(factor * (i - 128) + 128 + offset)));
+}
+
+void gammaLut(uint8_t lut[256], float gamma)
+{
+    if (gamma <= 0.0f) gamma = 0.01f;
+    for (int i = 0; i < 256; ++i)
+        lut[i] = uint8_t(clamp255(qRound(qPow(i / 255.0, gamma) * 255.0)));
+}
+
+void levelsLut(uint8_t lut[256], int blackPoint, float midPoint, int whitePoint)
+{
+    const float range = float(whitePoint - blackPoint);
+    if (midPoint <= 0.0f) midPoint = 0.01f;
+    for (int i = 0; i < 256; ++i) {
+        float v = (range > 0.0f) ? (i - blackPoint) / range : 0.0f;
+        v = qBound(0.0f, v, 1.0f);
+        // midPoint > 1 brightens, < 1 darkens — same convention as Photoshop Levels
+        if (midPoint != 1.0f)
+            v = qPow(v, 1.0f / midPoint);
+        lut[i] = uint8_t(clamp255(qRound(v * 255.0f)));
+    }
+}
+
+void invertLut(uint8_t lut[256])
+{
+    for (int i = 0; i < 256; ++i) lut[i] = uint8_t(255 - i);
+}
+
+void posterizeLut(uint8_t lut[256], int levels)
+{
+    levels = qMax(2, levels);
+    for (int i = 0; i < 256; ++i) {
+        int step = qRound(float(i) / 255.0f * (levels - 1));
+        lut[i] = uint8_t(clamp255(qRound(float(step) / float(levels - 1) * 255.0f)));
+    }
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -60,28 +139,44 @@ QImage ImageAdjuster::apply(const QImage& src, const Adjustments& a)
         img = img.scaled(w, h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
 
+    // Steps 2-4, 6 and 11 are point ops: they accumulate into `chain` and are
+    // paid for in a single pass at the next flush, not one pass each.
+    LutChain chain;
+    uint8_t  lut[256];
+
     // 2. Brightness / Contrast
-    if (a.brightness != 0 || a.contrast != 0)
-        brightnessContrast(img, a.brightness, a.contrast);
+    if (a.brightness != 0 || a.contrast != 0) {
+        brightnessContrastLut(lut, a.brightness, a.contrast);
+        chain.compose(lut);
+    }
 
     // 3. Gamma
-    if (a.gamma != 100)
-        applyGamma(img, a.gamma / 100.0f);
+    if (a.gamma != 100) {
+        gammaLut(lut, a.gamma / 100.0f);
+        chain.compose(lut);
+    }
 
     // 4. Levels
-    if (a.levelsBlack != 0 || a.levelsMid != 100 || a.levelsWhite != 255)
-        applyLevels(img, a.levelsBlack, a.levelsMid / 100.0f, a.levelsWhite);
+    if (a.levelsBlack != 0 || a.levelsMid != 100 || a.levelsWhite != 255) {
+        levelsLut(lut, a.levelsBlack, a.levelsMid / 100.0f, a.levelsWhite);
+        chain.compose(lut);
+    }
 
-    // 5. Saturation
-    if (a.saturation != 0)
+    // 5. Saturation — cross-channel, breaks the chain.
+    if (a.saturation != 0) {
+        chain.flush(img);
         saturate(img, a.saturation);
+    }
 
     // 6. Invert
     if (a.invert) {
-        uint8_t lut[256];
-        for (int i = 0; i < 256; ++i) lut[i] = uint8_t(255 - i);
-        applyLut(img, lut);
+        invertLut(lut);
+        chain.compose(lut);
     }
+
+    // Steps 7-10 read neighbouring / real pixel values: land the chain first.
+    if (a.blur > 0 || a.edgeEnhancement > 0 || a.sharpenStrength > 0 || a.grain > 0)
+        chain.flush(img);
 
     // 7. Blur
     if (a.blur > 0) {
@@ -104,10 +199,14 @@ QImage ImageAdjuster::apply(const QImage& src, const Adjustments& a)
         addGrain(img, a.grain);
 
     // 11. Posterize
-    if (a.posterize < 256)
-        applyPosterize(img, a.posterize);
+    if (a.posterize < 256) {
+        posterizeLut(lut, a.posterize);
+        chain.compose(lut);
+    }
 
-    // 12. Threshold
+    chain.flush(img);
+
+    // 12. Threshold — luma-based, not a per-channel table.
     if (a.threshold > 0)
         applyThreshold(img, a.threshold);
 
@@ -153,7 +252,12 @@ void ImageAdjuster::boxBlur(QImage& img, int radius)
     }
     });
 
-    // Vertical pass: tmp → img (columns are independent)
+    // Vertical pass: tmp → img (columns are independent).
+    // The row base is computed from bits()/bytesPerLine() once instead of
+    // calling scanLine(y) per pixel: the non-const overload re-checks detach()
+    // on every call, and this loop runs w*h times.
+    uchar* const  base = img.bits();
+    const qsizetype bpl = img.bytesPerLine();
     parallelRows(w, [&](int x0, int x1) {
     for (int x = x0; x < x1; ++x) {
         int sr = 0, sg = 0, sb = 0;
@@ -165,8 +269,8 @@ void ImageAdjuster::boxBlur(QImage& img, int radius)
             ++count;
         }
         for (int y = 0; y < h; ++y) {
-            QRgb* line = reinterpret_cast<QRgb*>(img.scanLine(y));
-            line[x] = qRgba(sr / count, sg / count, sb / count, qAlpha(line[x]));
+            QRgb* px = reinterpret_cast<QRgb*>(base + qsizetype(y) * bpl) + x;
+            *px = qRgba(sr / count, sg / count, sb / count, qAlpha(*px));
             int yAdd = qBound(0, y + radius + 1, h - 1);
             int ySub = qBound(0, y - radius,     h - 1);
             QRgb pa = tmp[size_t(yAdd) * w + x], ps = tmp[size_t(ySub) * w + x];
@@ -178,66 +282,9 @@ void ImageAdjuster::boxBlur(QImage& img, int radius)
     });
 }
 
-void ImageAdjuster::blend(QImage& dst, const QImage& other, float t)
-{
-    dst.detach();   // see applyLut: no COW inside parallel loops
-    const int w = dst.width(), h = dst.height();
-    const int ti = qBound(0, qRound(t * 256.0f), 256);
-    parallelRows(h, [&](int y0, int y1) {
-    for (int y = y0; y < y1; ++y) {
-        QRgb*       d = reinterpret_cast<QRgb*>(dst.scanLine(y));
-        const QRgb* o = reinterpret_cast<const QRgb*>(other.constScanLine(y));
-        for (int x = 0; x < w; ++x) {
-            int r = qRed(d[x])   + ((qRed(o[x])   - qRed(d[x]))   * ti >> 8);
-            int g = qGreen(d[x]) + ((qGreen(o[x]) - qGreen(d[x])) * ti >> 8);
-            int b = qBlue(d[x])  + ((qBlue(o[x])  - qBlue(d[x]))  * ti >> 8);
-            d[x] = qRgba(r, g, b, qAlpha(d[x]));
-        }
-    }
-    });
-}
-
 // ---------------------------------------------------------------------------
 // Point operations
 // ---------------------------------------------------------------------------
-
-void ImageAdjuster::brightnessContrast(QImage& img, int brightness, int contrast)
-{
-    const float c = contrast * 2.55f;
-    const float factor = (259.0f * (c + 255.0f)) / (255.0f * (259.0f - c));
-    const float offset = brightness * 1.275f;
-
-    uint8_t lut[256];
-    for (int i = 0; i < 256; ++i)
-        lut[i] = clamp255(qRound(factor * (i - 128) + 128 + offset));
-    applyLut(img, lut);
-}
-
-void ImageAdjuster::applyGamma(QImage& img, float gamma)
-{
-    if (gamma <= 0.0f) gamma = 0.01f;
-    uint8_t lut[256];
-    for (int i = 0; i < 256; ++i)
-        lut[i] = clamp255(qRound(qPow(i / 255.0, gamma) * 255.0));
-    applyLut(img, lut);
-}
-
-void ImageAdjuster::applyLevels(QImage& img, int blackPoint, float midPoint, int whitePoint)
-{
-    const float range = float(whitePoint - blackPoint);
-    if (midPoint <= 0.0f) midPoint = 0.01f;
-
-    uint8_t lut[256];
-    for (int i = 0; i < 256; ++i) {
-        float v = (range > 0.0f) ? (i - blackPoint) / range : 0.0f;
-        v = qBound(0.0f, v, 1.0f);
-        // midPoint > 1 brightens, < 1 darkens — same convention as Photoshop Levels
-        if (midPoint != 1.0f)
-            v = qPow(v, 1.0f / midPoint);
-        lut[i] = clamp255(qRound(v * 255.0f));
-    }
-    applyLut(img, lut);
-}
 
 void ImageAdjuster::saturate(QImage& img, int saturation)
 {
@@ -342,19 +389,6 @@ void ImageAdjuster::addGrain(QImage& img, int amount)
         }
     }
     });
-}
-
-void ImageAdjuster::applyPosterize(QImage& img, int levels)
-{
-    if (levels >= 256) return;
-    levels = qMax(2, levels);
-
-    uint8_t lut[256];
-    for (int i = 0; i < 256; ++i) {
-        int step = qRound(float(i) / 255.0f * (levels - 1));
-        lut[i] = clamp255(qRound(float(step) / float(levels - 1) * 255.0f));
-    }
-    applyLut(img, lut);
 }
 
 void ImageAdjuster::applyThreshold(QImage& img, int threshold)

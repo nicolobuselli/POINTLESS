@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Params.h"
+#include <memory>
 #include <vector>
 
 // ============================================================
@@ -34,12 +35,19 @@ struct GridGpuLayout {
     int   count = 0;    // instances to draw
 };
 
+// Shared, immutable sample list. A dense grid on a big frame is hundreds of
+// thousands of samples (megabytes), and Halftone alone asks for four per
+// render — handing back a shared pointer means a cache hit costs a refcount
+// bump instead of copying the whole vector. Never null; empty when the image
+// size is degenerate.
+using GridSamplesPtr = std::shared_ptr<const std::vector<GridSample>>;
+
 class GridGenerator
 {
 public:
     // Generate samples covering the [0,imgW] × [0,imgH] image. Cached:
     // identical (settings, size) returns the previous result.
-    static std::vector<GridSample> generate(const GridSettings& g, int imgW, int imgH);
+    static GridSamplesPtr generate(const GridSettings& g, int imgW, int imgH);
 
     // Instancing layout for the GPU Dot Grid path (see GridGpuLayout).
     static GridGpuLayout computeGpuLayout(const GridSettings& g, int imgW, int imgH);

@@ -109,6 +109,19 @@ private:
     QColor             m_background    = QColor(0x0A,0x0A,0x0A);
     float              m_bgOpacity     = 1.0f;
 
+    // thumbFor() runs the full per-layer render pipeline, synchronously, on
+    // the GUI thread. syncLayersPanel() reaches it for every layer on every
+    // selection change, eye/lock toggle, reorder, frame step and undo — none
+    // of which alter a single thumbnail pixel. Cache against exactly the
+    // inputs renderLayer() actually reads (see thumbFor for the normalisation)
+    // plus the source buffer's identity; m_background invalidates the lot.
+    struct ThumbCacheEntry {
+        Layer       key;
+        const void* srcBits = nullptr;   // identity check only, never dereferenced
+        QPixmap     pm;
+    };
+    mutable QHash<int, ThumbCacheEntry> m_thumbCache;
+
     QWidget*         m_expandedBox  = nullptr;
     QPushButton*     m_collapsedBtn = nullptr;
     QWidget*         m_rowsScroll   = nullptr;   // embedded: scroll host for rows

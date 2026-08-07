@@ -7,6 +7,8 @@
 #include <QTimer>
 #include <QRegularExpression>
 #include <QHash>
+#include <QThreadPool>
+#include "core/DitherRenderer.h"
 #include "ui/MainWindow.h"
 #include "ui/GpuCanvasWidget.h"
 #include "ui/UiScale.h"
@@ -107,6 +109,7 @@ static QString substitutePaletteTokens(QString css)
         // lime fill @ 20% opacity, olive stroke/text
         { "selectFill",   "rgba(210, 252, 81, 51)" },
         { "selectStroke", Ui::kColSelectStroke.name().toUpper() },
+        { "lime",         Ui::kColLocLime.name().toUpper() },
 
         // Accent (orange CTA)
         { "accent",      Ui::kColAccent.name().toUpper() },
@@ -172,6 +175,12 @@ int main(int argc, char* argv[])
     if (qss.open(QIODevice::ReadOnly)) {
         app.setStyleSheet(scaleStyleSheet(substitutePaletteTokens(QString::fromUtf8(qss.readAll()))));
     }
+
+    // Blue Noise / Void and Cluster build their threshold masks on first use —
+    // a one-shot cost that would otherwise stall the first render that picks
+    // those algorithms. Do it now, on a pool thread, while the user is still
+    // looking at an empty board.
+    QThreadPool::globalInstance()->start([] { DitherRenderer::warmMasks(); });
 
     MainWindow w;
     w.showMaximized();

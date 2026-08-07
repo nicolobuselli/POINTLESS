@@ -142,11 +142,22 @@ private:
         QSize       srcSize;
         const void* srcBits = nullptr; // identity check only, never dereferenced
         QImage      rendered;
+        quint64     stamp = 0;         // LRU order (see pruneLayerCache)
     };
     static QImage renderDocumentImpl(const QImage& source, const SessionParams& params,
                                      const QHash<int, QImage>& layerSrc,
                                      QHash<int, QHash<qint64, LayerCacheEntry>>* cache,
                                      QMutex* cacheMutex);
+
+    // Bound the cache above. Nothing evicted from it before, and every entry
+    // holds a whole rendered raster (tens of MB at frame resolution): a
+    // deleted layer's entries lived forever, and each new raster size — a
+    // window resize, a drag's half-res pass vs. the full-res one that follows,
+    // a zoom step — minted another one under the same layer id. Drops ids that
+    // left the document, then keeps only the most recently used sizes.
+    static constexpr int kMaxSizesPerLayer = 3;
+    static void pruneLayerCache(QHash<int, QHash<qint64, LayerCacheEntry>>& cache,
+                                const SessionParams& params);
 
     QHash<int, QHash<qint64, LayerCacheEntry>> m_layerCache;
     QMutex                                     m_layerCacheMutex;

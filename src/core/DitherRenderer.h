@@ -64,6 +64,14 @@ public:
     static int paintMergedRects(const QImage& input, const DitherSettings& s,
                                 QPainter& out, double targetW, double targetH);
 
+    // Build the void-and-cluster (Blue Noise / Void and Cluster) threshold
+    // masks now. They are lazy statics otherwise, and generating them is a
+    // ~50ms one-shot that would otherwise land on whichever render first
+    // selects those algorithms — i.e. on a user gesture. Call once off the
+    // GUI thread at startup; safe to call from anywhere, and a no-op after
+    // the first time.
+    static void warmMasks();
+
 private:
     static bool isOrdered  (DitherAlgorithm a);
     static bool isHybrid   (DitherAlgorithm a);

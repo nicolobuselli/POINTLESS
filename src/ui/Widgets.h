@@ -293,15 +293,16 @@ private:
 };
 
 // ── StyledMessageBox ─────────────────────────────────────────
-// In-app-styled stand-in for QMessageBox: same frameless chrome as
-// UnsavedChangesDialog (mini "POINTLESS" title bar + warning icon)
-// instead of a native OS dialog. Two buttons (Yes/No) or one (OK),
-// picked by leaving noText empty. Use askYesNo()/showMessage() below
-// rather than constructing this directly.
+// In-app-styled stand-in for QMessageBox: same frameless scalloped card as
+// UnsavedChangesDialog (message + warning mark) instead of a native OS
+// dialog. Two buttons (Yes/No) or one (OK), picked by leaving noText empty.
+// dangerYes paints the Yes button red — for confirmations that destroy
+// something. Use askYesNo()/showMessage() below rather than this directly.
 class StyledMessageBox : public QDialog {
 public:
     StyledMessageBox(const QString& message, QWidget* parent,
-                      const QString& yesText, const QString& noText, bool defaultYes);
+                      const QString& yesText, const QString& noText,
+                      bool defaultYes, bool dangerYes = false);
 
     bool accepted() const { return m_accepted; }
 
@@ -314,7 +315,8 @@ private:
 
 // Blocking Yes/No prompt, styled like the app instead of a native QMessageBox.
 // Returns true iff the user picked "Yes" (closing via the X or Esc is "No").
-bool askYesNo(QWidget* parent, const QString& message, bool defaultYes = true);
+bool askYesNo(QWidget* parent, const QString& message, bool defaultYes = true,
+              bool dangerYes = false);
 
 // Blocking single-button ("OK") notice, same styled chrome.
 void showMessage(QWidget* parent, const QString& message);

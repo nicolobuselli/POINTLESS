@@ -32,6 +32,17 @@ inline constexpr int kBoxRadius  = 8;
 inline constexpr int kBoxFontPx  = 17;  // any text inside a box
 inline constexpr int kCellW      = 58;  // slider value cell (kCellW × kBoxH)
 
+// Dialog cards are drawn from assets/icons/dialog_card*.svg exactly as
+// exported. The dialog is sized to each file's own aspect ratio — anything
+// else stretches the bubbly edge. The warning file carries transparent
+// padding around its card (Figma's shadow bounds), hence the wider box and
+// the bigger content margins that go with it.
+inline constexpr int    kDialogWFigma     = 620;
+inline constexpr double kDialogAspect     = 1267.0 / 583.0;
+inline constexpr int    kDialogWarnWFigma = 643;
+inline constexpr double kDialogWarnAspect = 1314.0 / 630.0;
+inline constexpr int    kDialogWarnPad    = 12;   // transparent margin in that file
+
 // ── Hairlines ───────────────────────────────────────────────
 // Every horizontal rule is exactly 1 *logical* px (setFixedHeight(1)),
 // never Ui::px(1) — px() can round to 2 on large screens and the lines
