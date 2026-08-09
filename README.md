@@ -11,8 +11,9 @@
 POINTLESS turns photos and footage into dot screens, error-diffusion dithers,
 ASCII glyph art, mosaic tile grids, and canonical 4-color CMYK halftone
 separations. It has layers, blend modes, per-parameter localization, and
-a full keyframe animation timeline. It's a native C++/Qt6 desktop app: no
-browser, no subscription, no upload.
+a full keyframe animation timeline. Output goes out as PNG/JPG, **real vector
+SVG**, PNG sequences, or mp4. It's a native C++/Qt6 desktop app with a
+GPU-accelerated preview: no browser, no subscription, no upload.
 
 <img width="2560" height="1500" alt="image" src="https://github.com/user-attachments/assets/7fcadd7d-ff37-4eeb-98c7-fe97e20289d1" />
 
@@ -25,21 +26,50 @@ browser, no subscription, no upload.
 ## Table of contents
 
 - [Why](#why)
+- [Quick start](#quick-start)
 - [Features](#features)
   - [Rendering modes](#five-rendering-modes)
   - [Color](#color)
   - [Animation & video](#animation--video)
   - [Compositing](#compositing)
+  - [Export](#export)
   - [Project files](#project-files)
+  - [GPU-accelerated preview](#gpu-accelerated-preview)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Known limitations](#known-limitations)
 - [Download](#download)
 - [Build from source](#build-from-source)
+- [Contributing](#contributing)
 - [License](#license)
 
 ---
 
 ## Why
 
-Most dithering and halftone tools today are either simple one-click filters, restricted web experiments with no real workflow, or locked behind payments. POINTLESS treats these effects as a real compositing pipeline: stack multiple rendering modes as layers, blend them, mask and scale individual parameters over regions of the canvas, animate any of it on a timeline, and export straight to mp4.
+Most dithering and halftone tools today are either simple one-click filters, restricted web experiments with no real workflow, or locked behind payments. POINTLESS treats these effects as a real compositing pipeline: stack multiple rendering modes as layers, blend them, mask and scale individual parameters over regions of the canvas, animate any of it on a timeline, and export to vector SVG or straight to mp4.
+
+---
+
+## Quick start
+
+1. **Bring in an image.** Drop a file onto the canvas, hit `+` in the
+   **Library** tab (bottom panel), or paste from the clipboard with `Ctrl+V` —
+   anything copied from a browser or file explorer lands in the library.
+   Video (mp4, mov, mkv, webm, gif…) and numbered PNG sequences import too.
+2. **Put it on the board.** Double-click a library thumbnail, or drag it onto
+   the canvas, to create a layer. Layers stack in the left column.
+3. **Pick a mode.** The dropdown at the top of the right column switches the
+   selected layer between Dot Grid, Halftone, Dither, ASCII, and Mosaic. All
+   the parameters for that mode appear underneath.
+4. **Adjust.** Left column: frame size, per-layer transform (position,
+   rotation, scale, flip) and image adjustments. Right column: mode parameters,
+   fill/palette, background. Press `H` to toggle the on-canvas localization
+   dots.
+5. **Export.** Bottom of the right column: choose PNG / PNG Sequence / JPG /
+   MP4 / SVG and hit **Export**. The output name comes from the document title
+   in the top-left.
+
+Save the whole composition with `Ctrl+S` (`.less` project file).
 
 ---
 
@@ -130,6 +160,8 @@ because of how the math handles gamma.
 - Keyframe timeline (dopesheet UI, auto-key, easing presets, copy/paste
   keys) across more than 50 numeric parameters.
 - mp4 import/export via bundled FFmpeg; PNG sequence import.
+- Playback runs off a pre-rendered frame cache, so scrubbing and preview
+  play stay smooth instead of re-rendering on every tick.
 
 <div align="center">
 <img width="2560" height="1496" alt="image" src="https://github.com/user-attachments/assets/c820d8e8-e0d6-4454-b8c4-5a1f38c942f9" />
@@ -146,10 +178,59 @@ because of how the math handles gamma.
   (coverage, dot area, error diffusion), perceptual luma for tone/glyph
   selection.
 
+### Export
+
+| Format | Notes |
+|---|---|
+| **PNG** | Full-quality raster of the current frame. |
+| **JPG** | Same, quality 95. |
+| **SVG** | **Real vector output** — Dot Grid, Dither, ASCII, and Mosaic layers are written as vector shapes/glyphs, not a traced bitmap. Layers using a blend mode other than Normal, plus Halftone and plain photo layers, are rasterized and embedded so the file still matches the preview. A warning appears first if the shape count would be huge. |
+| **PNG Sequence** | One numbered PNG per timeline frame. |
+| **MP4** | H.264 / yuv420p via the bundled FFmpeg, for broad compatibility. Video only — no audio track. |
+
+`Ctrl+C` copies the rendered frame straight to the clipboard.
+
 ### Project files
 
 - Full session save/load (`.less`, JSON) — frame, layers, transforms,
   animation, and an embedded still-image library.
+
+### GPU-accelerated preview
+
+The canvas renders through Qt's RHI (Direct3D 11 on Windows) with a dedicated
+shader per mode, so parameter dragging stays interactive on large frames.
+Cases a shader can't express fall back to the CPU renderers automatically and
+produce the same pixels — notably error-diffusion dithering, OkLab
+palette matching, and the SVG export path.
+
+---
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Z` / `Ctrl+Shift+Z` (or `Ctrl+Y`) | Undo / redo |
+| `Ctrl+C` | Copy the rendered frame to the clipboard |
+| `Ctrl+V` | Paste — context sensitive: an image from outside the app becomes a new layer; in the timeline it pastes copied keyframes; in the layer list it pastes the layer copied from the right-click menu |
+| `Ctrl+S` / `Ctrl+Shift+S` | Save project / Save as |
+| `Ctrl+O` | Open project |
+| `H` | Show/hide the on-canvas localization dots (the points stay active — this only declutters the canvas) |
+
+---
+
+## Known limitations
+
+- **Video isn't saved in a project file.** `.less` embeds the still-image
+  library only; saving a composition that uses a video source drops those
+  layers, their parent clips, and their animation tracks from the file (the
+  status bar reports how many were skipped). Keep the source video around and
+  re-import it.
+- **mp4 export is video-only** — no audio track.
+- **Windows only** for now: video export and the app icon rely on Win32 APIs.
+- **One composition at a time** — opening a project replaces the current
+  board; there are no multi-project tabs.
+- Animation covers numeric parameters only: colors, enums, and booleans can't
+  be keyframed yet, and easing is preset-based (no bézier curve editor).
 
 ---
 
@@ -164,8 +245,9 @@ FFmpeg.
 ## Build from source
 
 Only needed if you want to modify the code. Requires **Qt 6** (Core, Gui,
-Widgets, Svg, Concurrent) and **CMake ≥ 3.22**. Windows only for now (video
-export and the app icon rely on Win32 APIs).
+Widgets, Svg, Concurrent, **ShaderTools** — the last one bakes the GPU shaders
+and is a separately installable Qt module) and **CMake ≥ 3.22**. Windows only
+for now (video export and the app icon rely on Win32 APIs).
 
 ```bash
 cmake -B build -DCMAKE_PREFIX_PATH="<path-to-Qt6-install>"
@@ -180,6 +262,16 @@ video import/export works out of the box.
 
 CI (`.github/workflows/build.yml`) builds with MSVC + Qt 6.7 on every push;
 see that file for a known-working toolchain if local setup gives trouble.
+
+Renderer changes should be checked against the golden-image differ in
+[`tests/`](tests/README.md) — two standalone programs, compiled by hand, that
+byte-compare the output of two builds across 14 render configurations.
+
+## Contributing
+
+Issues and pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for
+the workflow and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the ground
+rules. Security issues: [SECURITY.md](SECURITY.md).
 
 ## License
 
