@@ -87,7 +87,7 @@ QScrollArea > QWidget > QWidget {
     padding: 0;
 }
 #fileTitleEdit {
-    selection-background-color: @selBlue;
+    selection-background-color: @boxStrokeActive;
 }
 
 /* ── Parameter labels (Funnel Display Medium 16 · @textLabel) ─── */

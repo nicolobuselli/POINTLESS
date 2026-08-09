@@ -134,7 +134,7 @@ public:
         // Outer row is transparent; the coloured selection "pill" wraps only
         // the thumbnail + name, while the eye sits in the gutter to its right.
         setObjectName("layerRowOuter");
-        setCursor(Qt::PointingHandCursor);
+        setCursor(appCursor());
         setFixedHeight(Ui::px(52));
         // Click-focusable so MainWindow's Ctrl+C/Ctrl+V shortcuts can tell "a
         // layer row is the active context" (focusWidget inside the panel) apart
@@ -200,7 +200,7 @@ public:
         m_eye = new QPushButton;
         m_eye->setObjectName("eyeBtn");
         m_eye->setFixedSize(Ui::px(30), Ui::px(30));
-        m_eye->setCursor(Qt::PointingHandCursor);
+        m_eye->setCursor(appCursor());
         m_eye->setIconSize(QSize(Ui::px(20), Ui::px(20)));
 
         // The eye lives centred in the right gutter, detached from the pill,
@@ -224,7 +224,7 @@ public:
         m_lock = new QPushButton(this);
         m_lock->setObjectName("eyeBtn");   // same transparent icon chrome
         m_lock->setFixedSize(Ui::px(30), Ui::px(30));
-        m_lock->setCursor(Qt::PointingHandCursor);
+        m_lock->setCursor(appCursor());
         m_lock->setIconSize(QSize(Ui::px(18), Ui::px(18)));
         m_lock->setToolTip("Lock layer (canvas clicks ignore it; panels still edit it)");
         m_lock->hide();
@@ -657,7 +657,7 @@ public:
         // Outer row is transparent; the bordered "box" wraps chevron+thumb+name
         // and stops before the eye, which sits in the icon gutter (like child rows).
         setObjectName("parentRowOuter");
-        setCursor(Qt::PointingHandCursor);
+        setCursor(appCursor());
         setFixedHeight(Ui::px(52));
 
         auto* hl = new QHBoxLayout(this);
@@ -677,7 +677,7 @@ public:
         // setFixedSize and would push the thumb off the child rows' alignment.
         m_chevron->setObjectName("parentChevron");
         m_chevron->setFixedSize(Ui::px(18), Ui::px(34));
-        m_chevron->setCursor(Qt::PointingHandCursor);
+        m_chevron->setCursor(appCursor());
         connect(m_chevron, &QPushButton::clicked, this, [this]() {
             m_collapsed = !m_collapsed;
             m_chevron->setDirection(m_collapsed ? ChevronButton::Right : ChevronButton::Down);
@@ -713,7 +713,7 @@ public:
         m_eye = new QPushButton;
         m_eye->setObjectName("eyeBtn");
         m_eye->setFixedSize(Ui::px(30), Ui::px(30));
-        m_eye->setCursor(Qt::PointingHandCursor);
+        m_eye->setCursor(appCursor());
         m_eye->setIconSize(QSize(Ui::px(20), Ui::px(20)));
         auto* eyeWrap = new QWidget(this);
         eyeWrap->setFixedWidth(Ui::px(Ui::kColRight));
@@ -845,7 +845,7 @@ public:
     {
         setObjectName("trashBtn");
         setFixedSize(Ui::px(30), Ui::px(30));
-        setCursor(Qt::PointingHandCursor);
+        setCursor(appCursor());
         setIcon(QIcon(":/icons/trash.svg"));
         setIconSize(QSize(Ui::px(16), Ui::px(16)));
         setAcceptDrops(true);
@@ -1007,7 +1007,7 @@ LayersPanel::LayersPanel(bool embedded, QWidget* parent)
     m_collapsedBtn = new QPushButton;
     m_collapsedBtn->setObjectName("layersToggleBtn");
     m_collapsedBtn->setFixedSize(Ui::px(38), Ui::px(38));
-    m_collapsedBtn->setCursor(Qt::PointingHandCursor);
+    m_collapsedBtn->setCursor(appCursor());
     m_collapsedBtn->setIcon(QIcon(":/icons/layers.svg"));
     m_collapsedBtn->setIconSize(QSize(Ui::px(19), Ui::px(19)));
     m_collapsedBtn->setToolTip("Layers");

@@ -304,11 +304,12 @@ protected:
                 p.drawLine(lx, y0 + row / 2, indent - Ui::px(8), y0 + row / 2);
             }
             p.setPen(QColor("#C8C8C8"));
-            const QString text = (rw.clip >= 0)
-                ? m_owner->m_clips[rw.clip].name
-                : QString::fromUtf8(paramDesc(a.tracks[size_t(rw.track)].param).label);
-            p.drawText(QRect(indent, y0, gut - indent - Ui::px(6), row),
-                       Qt::AlignVCenter | Qt::AlignLeft, text);
+            const QString text = (rw.clip >= 0) ? m_owner->m_clips[rw.clip].name
+                               : (rw.track < 0) ? rw.name   // still-image layer header
+                               : QString::fromUtf8(paramDesc(a.tracks[size_t(rw.track)].param).label);
+            const int tw = gut - indent - Ui::px(6);
+            p.drawText(QRect(indent, y0, tw, row), Qt::AlignVCenter | Qt::AlignLeft,
+                       p.fontMetrics().elidedText(text, Qt::ElideRight, tw));
         }
 
         // ── Playhead: lime counter (tl_counter.svg cap) + bar ───
@@ -414,9 +415,9 @@ protected:
         if (!m_draggingKeys && !m_banding && !m_scrubbing) {
             const int ci = clipAtY(e->pos().y());
             const bool edge = ci >= 0 && trimEdgeAt(ci, e->pos().x()) != 0;
-            setCursor(edge ? Qt::SizeHorCursor
-                    : (ci >= 0 && onClipBody(ci, e->pos().x())) ? Qt::OpenHandCursor
-                                                                : Qt::ArrowCursor);
+            setCursor(edge ? handleCursor(1, 0, 0.0, true)
+                    : (ci >= 0 && onClipBody(ci, e->pos().x())) ? QCursor(Qt::OpenHandCursor)
+                                                                : appCursor());
         }
         if (m_draggingKeys) {
             const Animation& a = m_owner->m_anim;
@@ -577,9 +578,18 @@ private:
                 keys.erase(keys.begin() + s.second);
         }
         auto& tracks = m_owner->m_anim.tracks;
+        const size_t before = tracks.size();
         tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
                      [](const Track& t) { return t.keys.empty(); }), tracks.end());
         m_sel.clear();
+        // Dropping a track shifts every row index after it: the painted row list
+        // is built from track indices, so it has to be rebuilt here. Nothing
+        // else does it — MainWindow::onTimelineEdited only reads the animation
+        // back, it never pushes it in again.
+        if (tracks.size() != before) {
+            m_owner->rebuildRows();
+            m_owner->updateCanvasHeight();
+        }
     }
 
 public:
@@ -695,7 +705,7 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent)
     m_autoKeyBtn = new QPushButton("Auto key");
     m_autoKeyBtn->setObjectName("autoKeyBtn");
     m_autoKeyBtn->setCheckable(true);
-    m_autoKeyBtn->setCursor(Qt::PointingHandCursor);
+    m_autoKeyBtn->setCursor(appCursor());
     m_autoKeyBtn->setFixedHeight(Ui::px(Ui::kBoxHFull));
     connect(m_autoKeyBtn, &QPushButton::toggled, this,
             [this](bool on) { if (onAutoKeyToggled) onAutoKeyToggled(on); });
@@ -715,7 +725,7 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent)
     auto mkBtn = [&](const QString& res, bool flip) {
         auto* b = new QPushButton;
         b->setObjectName("tlBtn");
-        b->setCursor(Qt::PointingHandCursor);
+        b->setCursor(appCursor());
         b->setFixedSize(Ui::px(34), Ui::px(Ui::kBoxHFull - 2));   // fits inside the 48 box border
         b->setIcon(svgIcon(res, icoBox.width(), icoBox.height(), flip));
         b->setIconSize(icoBox);
@@ -935,10 +945,12 @@ void TimelineWidget::setAnimation(const Animation& a)
     updateScrollRange();   // the frame range (and so the scrollable span) moved
 }
 
-void TimelineWidget::setClips(const QVector<ClipRow>& clips, const QHash<int, int>& layerMedia)
+void TimelineWidget::setClips(const QVector<ClipRow>& clips, const QHash<int, int>& layerMedia,
+                              const QHash<int, QString>& layerNames)
 {
     m_clips      = clips;
     m_layerMedia = layerMedia;
+    m_layerNames = layerNames;
     rebuildRows();
     updateCanvasHeight();
     updateScrollRange();
@@ -953,24 +965,39 @@ int TimelineWidget::dispEndFrame() const
 }
 
 // Row order: every clip followed by the keyframe tracks that animate one of
-// its layers (drawn indented), then any track with no clip of its own.
+// its layers (drawn indented), then the tracks of every still-image layer under
+// a header row carrying that layer's name — same parent/child reading as the
+// clips, so a parameter row always says whose parameter it is. Anything left
+// (document-level tracks, layerId -1) stays flat at the bottom.
 void TimelineWidget::rebuildRows()
 {
     m_rows.clear();
-    QVector<bool> placed(int(m_anim.tracks.size()), false);
+    const int n = int(m_anim.tracks.size());
+    QVector<bool> placed(n, false);
 
     for (int ci = 0; ci < m_clips.size(); ++ci) {
-        m_rows.append({ ci, -1, false });
-        for (int ti = 0; ti < int(m_anim.tracks.size()); ++ti) {
+        m_rows.append({ ci, -1, false, {} });
+        for (int ti = 0; ti < n; ++ti) {
             if (placed[ti]) continue;
             if (m_layerMedia.value(m_anim.tracks[size_t(ti)].layerId, -1) != m_clips[ci].mediaId)
                 continue;
-            m_rows.append({ -1, ti, true });
+            m_rows.append({ -1, ti, true, {} });
             placed[ti] = true;
         }
     }
-    for (int ti = 0; ti < int(m_anim.tracks.size()); ++ti)
-        if (!placed[ti]) m_rows.append({ -1, ti, false });
+    for (int ti = 0; ti < n; ++ti) {
+        if (placed[ti]) continue;
+        const int lid = m_anim.tracks[size_t(ti)].layerId;
+        if (lid < 0 || !m_layerNames.contains(lid)) continue;   // handled below
+        m_rows.append({ -1, -1, false, m_layerNames.value(lid) });
+        for (int tj = ti; tj < n; ++tj) {
+            if (placed[tj] || m_anim.tracks[size_t(tj)].layerId != lid) continue;
+            m_rows.append({ -1, tj, true, {} });
+            placed[tj] = true;
+        }
+    }
+    for (int ti = 0; ti < n; ++ti)
+        if (!placed[ti]) m_rows.append({ -1, ti, false, {} });
 }
 
 void TimelineWidget::updateCanvasHeight()

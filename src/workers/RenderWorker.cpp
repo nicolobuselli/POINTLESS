@@ -273,6 +273,79 @@ static void prerenderAtFrameRes(QImage& src, Layer& layer)
     src = src.scaled(bake, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 }
 
+// A canvas edge-stretch (aspectPct != 100) is a NON-uniform placement scale,
+// which would stretch the symbols along with the photo — ovals instead of dots.
+// Fix it the same way scale is fixed: move the anisotropy out of the placement
+// and into the working raster. Pre-stretch the source by the ratio between the
+// two axes and what's left to place is uniform, so compensateSymbolScale can
+// cancel it as usual. The SMALLER axis scale sets the uniform remainder, so the
+// pre-stretch only ever enlarges (never throws detail away).
+struct AspectBake { double px = 1.0, py = 1.0; float uniformPct = 100.0f; };
+static AspectBake aspectBakeFor(const Layer& l, QSize srcSize)
+{
+    AspectBake b;
+    b.uniformPct = l.transform.scalePct;
+    // Original has no symbols to protect: let it stretch.
+    if (l.kind == LayerKind::Original || srcSize.isEmpty()) return b;
+    const LayerScaleXY s = layerScaleXY(l.transform);
+    const double u = qMax(1e-6, qMin(s.x, s.y));
+    b.px = s.x / u;
+    b.py = s.y / u;
+    // Not stretched → hard no-op, whatever the source size. (Capping here would
+    // silently downsample every big un-stretched source.)
+    if (qAbs(b.px - 1.0) < 0.001 && qAbs(b.py - 1.0) < 0.001) {
+        b.px = b.py = 1.0;
+        return b;
+    }
+    // Shrinking BOTH factors keeps the remainder uniform (it just moves scale
+    // back into the placement), so this cap costs resolution, never squareness.
+    // Never cap below the source's own resolution.
+    const double nativeMax = qMax(srcSize.width(), srcSize.height());
+    const double limit  = qMax(6000.0, nativeMax);
+    const double maxDim = qMax(srcSize.width() * b.px, srcSize.height() * b.py);
+    const double c = maxDim > limit ? limit / maxDim : 1.0;
+    b.px *= c;
+    b.py *= c;
+    b.uniformPct = float(u * 100.0 / c);
+    return b;
+}
+
+static bool aspectBakeIsNoop(const AspectBake& b)
+{
+    return qAbs(b.px - 1.0) < 0.001 && qAbs(b.py - 1.0) < 0.001;
+}
+
+// Settings-only half of the aspect bake (mirrors frameResBakeSize): returns the
+// pre-stretched source size and leaves the layer with a UNIFORM transform.
+static QSize aspectBakeSize(Layer& l, QSize srcSize)
+{
+    const AspectBake b = aspectBakeFor(l, srcSize);
+    if (aspectBakeIsNoop(b)) return srcSize;
+    l.transform.scalePct  = b.uniformPct;
+    l.transform.aspectPct = 100.0f;
+    return QSize(qMax(1, qRound(srcSize.width()  * b.px)),
+                 qMax(1, qRound(srcSize.height() * b.py)));
+}
+
+static void prerenderAspect(QImage& src, Layer& layer)
+{
+    if (src.isNull()) return;
+    const QSize baked = aspectBakeSize(layer, src.size());
+    if (baked == src.size()) return;
+    src = src.scaled(baked, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+}
+
+// The placement left over once BOTH bakes (aspect + frame-res) have moved their
+// scale into pixels. Pure arithmetic, so a cache HIT recomputes it identically
+// instead of having to store it — same contract as effectivePlacementScalePct.
+static LayerTransform effectivePlacementTf(const Layer& l, QSize srcSize)
+{
+    Layer w = l;
+    const QSize baked = aspectBakeSize(w, srcSize);
+    w.transform.scalePct = effectivePlacementScalePct(l.kind, w.transform.scalePct, baked);
+    return w.transform;
+}
+
 // Symbol sizes (halftone spacing, ascii cell, dither pixel) are authored in
 // FRAME pixels: cancel the layer's placement scale so scaling a layer scales
 // the photo, not the symbols. prerenderAtFrameRes then re-applies any upscale
@@ -302,14 +375,14 @@ static QImage placeOnFrame(const QImage& layerImg, const LayerTransform& tf, QSi
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    const double s  = qMax(0.0001, double(tf.scalePct) / 100.0);
+    const LayerScaleXY s = layerScaleXY(tf);
     const double cx = frame.width()  * 0.5 + double(tf.xPct) * frame.width();
     const double cy = frame.height() * 0.5 + double(tf.yPct) * frame.height();
 
     QTransform m;
     m.translate(cx, cy);
     m.rotate(tf.rotation);
-    m.scale(s * (tf.flipH ? -1.0 : 1.0), s * (tf.flipV ? -1.0 : 1.0));
+    m.scale(s.x * (tf.flipH ? -1.0 : 1.0), s.y * (tf.flipV ? -1.0 : 1.0));
     m.translate(-layerImg.width() * 0.5, -layerImg.height() * 0.5);
     p.setTransform(m);
     p.drawImage(0, 0, layerImg);
@@ -425,6 +498,7 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
         if (!hit) {
             QImage wsrc = j.origSrc;
             Layer  wlayer = j.origLayer;
+            prerenderAspect(wsrc, wlayer);        // edge-stretch → raster, not symbols
             compensateSymbolScale(wlayer);        // symbol sizes are frame px
             prerenderAtFrameRes(wsrc, wlayer);    // crisp symbols when scaled up
             rendered = renderLayer(wsrc, wlayer);
@@ -436,12 +510,11 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
         }
 
         // Placement always uses the LIVE transform (position/rotation/flip can
-        // change every frame during a drag); only scalePct needs the same
-        // frame-resolution adjustment prerenderAtFrameRes would have applied —
-        // cheap to recompute, so a cache hit skips zero placement accuracy.
-        LayerTransform placementTf = j.origLayer.transform;
-        placementTf.scalePct = effectivePlacementScalePct(
-            j.origLayer.kind, j.origLayer.transform.scalePct, j.origSrc.size());
+        // change every frame during a drag); only the scale needs the same
+        // adjustments the two bakes would have applied — cheap to recompute, so
+        // a cache hit skips zero placement accuracy.
+        const LayerTransform placementTf =
+            effectivePlacementTf(j.origLayer, j.origSrc.size());
         j.placed = placeOnFrame(rendered, placementTf, outSize);
     });
 
@@ -572,9 +645,20 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
         // layers, screen sources included) cache the RAW converted source:
         // any adjustment slider drag stays a cache hit — the GPU applies
         // the values (Phase 2 in composite.frag, Phase 4 in adjust.frag).
-        if (j.gpuAdjust || j.adjChain || j.halftone || j.instanced || j.ditherScr
-            || j.mosaicScr || j.asciiScr)
+        const bool rawPassthrough = j.gpuAdjust || j.adjChain || j.halftone
+                                 || j.instanced || j.ditherScr || j.mosaicScr
+                                 || j.asciiScr;
+        if (rawPassthrough) {
             contentKey.adjustments = Adjustments{};
+            // …and for the same reason the placement SCALE doesn't belong in
+            // the key either: it only feeds the placement matrix and the
+            // content-pass target size, both recomputed below on every pass.
+            // Leaving it in made every frame of a scale/stretch drag a miss —
+            // and a miss here re-converts the whole source image to RGBA8888,
+            // which is exactly the lag a corner drag used to have.
+            contentKey.transform.scalePct  = 100.0f;
+            contentKey.transform.aspectPct = 100.0f;
+        }
         const void* srcBits = static_cast<const void*>(j.origSrc.constBits());
         const qint64 sizeKey = rasterSizeKey(j.origSrc.size());
 
@@ -605,8 +689,7 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
         if (!hit) {
             if (j.gpuAdjust || j.adjChain) {
                 j.rendered = j.origSrc;
-            } else if (j.halftone || j.instanced || j.ditherScr || j.mosaicScr
-                       || j.asciiScr) {
+            } else if (rawPassthrough) {
                 // RAW native-res source, no CPU resample: the GPU content
                 // pass bakes the pattern directly at frame resolution (see
                 // gl.contentSize below) and samples this texture via mip/
@@ -615,6 +698,7 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
             } else {
                 QImage wsrc = j.origSrc;
                 Layer  wlayer = j.origLayer;
+                prerenderAspect(wsrc, wlayer);
                 compensateSymbolScale(wlayer);
                 prerenderAtFrameRes(wsrc, wlayer);
                 j.rendered = renderLayer(wsrc, wlayer);
@@ -624,8 +708,7 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
             // Adjust-chain inputs (screen sources + neighborhood-op Originals)
             // upload STRAIGHT alpha: the chain math mirrors ImageAdjuster's
             // straight-RGB ops, and its finish pass premultiplies/flattens.
-            if (j.halftone || j.instanced || j.ditherScr || j.mosaicScr
-                || j.asciiScr || j.adjChain)
+            if (rawPassthrough && !j.gpuAdjust)
                 j.rendered = j.rendered.convertToFormat(QImage::Format_RGBA8888);
             else
                 j.rendered = j.rendered.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
@@ -642,9 +725,7 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
 
     for (Job& j : jobs) {
         if (j.rendered.isNull()) continue;
-        LayerTransform placementTf = j.origLayer.transform;
-        placementTf.scalePct = effectivePlacementScalePct(
-            j.origLayer.kind, j.origLayer.transform.scalePct, j.origSrc.size());
+        LayerTransform placementTf = effectivePlacementTf(j.origLayer, j.origSrc.size());
         if (j.gpuAdjust)   // sizePct resample becomes a placement scale
             placementTf.scalePct *= float(qBound(10, j.origLayer.adjustments.sizePct, 200)) / 100.0f;
         GpuLayer gl;
@@ -663,8 +744,12 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
         QSize bakeBase = j.rendered.size();
         if (j.halftone || j.instanced || j.ditherScr || j.mosaicScr || j.asciiScr) {
             Layer wlayer = j.origLayer;
+            // The content pass renders into a bakeBase-sized target and samples
+            // the source by UV, so an aspect-stretched target IS the raster
+            // pre-stretch — the screen pattern stays square inside it.
+            const QSize aspected = aspectBakeSize(wlayer, j.origSrc.size());
             compensateSymbolScale(wlayer);
-            bakeBase = frameResBakeSize(wlayer, j.origSrc.size());
+            bakeBase = frameResBakeSize(wlayer, aspected);
             j.spacingScale = j.halftone
                 ? wlayer.halftone.spacing
                   / qMax(0.01f, j.origLayer.halftone.spacing)
@@ -726,13 +811,13 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
 // (so the renderers draw straight into frame space — no intermediate raster).
 static QTransform layerMatrix(const LayerTransform& tf, QSize layerSize, QSize frame)
 {
-    const double s  = qMax(0.0001, double(tf.scalePct) / 100.0);
+    const LayerScaleXY s = layerScaleXY(tf);
     const double cx = frame.width()  * 0.5 + double(tf.xPct) * frame.width();
     const double cy = frame.height() * 0.5 + double(tf.yPct) * frame.height();
     QTransform m;
     m.translate(cx, cy);
     m.rotate(tf.rotation);
-    m.scale(s * (tf.flipH ? -1.0 : 1.0), s * (tf.flipV ? -1.0 : 1.0));
+    m.scale(s.x * (tf.flipH ? -1.0 : 1.0), s.y * (tf.flipV ? -1.0 : 1.0));
     m.translate(-layerSize.width() * 0.5, -layerSize.height() * 0.5);
     return m;
 }
@@ -783,10 +868,11 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
     // Stored top→bottom; paint bottom→top.
     for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
         Layer layer = *it;
-        compensateSymbolScale(layer);   // symbol sizes are frame px (matches raster)
         if (!layer.visible || !layerFillEnabled(layer)) continue;
-        const QImage src = layerSrc.contains(layer.id) ? layerSrc.value(layer.id) : source;
+        QImage src = layerSrc.contains(layer.id) ? layerSrc.value(layer.id) : source;
         if (src.isNull()) continue;
+        prerenderAspect(src, layer);    // edge-stretch → raster, not symbols
+        compensateSymbolScale(layer);   // symbol sizes are frame px (matches raster)
 
         // Blend modes and the Original photo can't be expressed as SVG vectors;
         // rasterise those layers and embed them so the output still matches.
@@ -867,8 +953,8 @@ int RenderWorker::estimateSvgElements(const QImage& source, const SessionParams&
         // Symbol pitch is in frame px (compensated), so a scaled-up layer packs
         // more elements per source pixel: counts grow with the placement scale².
         // DPI no longer changes the pitch, so it dropped out of the estimate.
-        const double s  = qMax(0.0001, double(layer.transform.scalePct) / 100.0);
-        const double s2 = s * s;
+        const LayerScaleXY s = layerScaleXY(layer.transform);
+        const double s2 = s.x * s.y;   // area, so an edge-stretch counts too
         switch (layer.kind) {
             case LayerKind::DotGrid: {
                 total += (long long)(DotGridRenderer::estimateDotCount(adjusted, layer.dotGrid)

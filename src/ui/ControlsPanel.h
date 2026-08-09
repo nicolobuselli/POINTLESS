@@ -47,8 +47,10 @@ public:
     // Frame dimensions (the canvas all layers are composited onto).
     void setFrameSize(int w, int h);                    // silent
 
-    // Active layer placement on the frame (X/Y in px from centre, scale %, rotation °).
-    void setTransform(const LayerTransform& t);         // silent
+    // Active layer placement on the frame (X/Y in px from centre, rotation °,
+    // and its on-frame size in px — hence the layer's native size, which the
+    // Dimensions boxes convert against).
+    void setTransform(const LayerTransform& t, QSize nativeSize);   // silent
 
     // Tint Parameters/Transform labels whose ParamId has a keyframe track.
     void setAnimatedParams(const QSet<ParamId>& ids);
@@ -69,8 +71,7 @@ signals:
 
 private:
     void  emitTransform();
-    void  setScale(float scalePct);     // silent — moves slider + box
-    float currentScalePct() const;      // reads the box (falls back to slider)
+    void  setDimensions(float scalePct, float aspectPct);   // silent — fills the X/Y px boxes
 
     LayersPanel*      m_layers      = nullptr;
     QPushButton*      m_addLayerBtn = nullptr;
@@ -81,12 +82,16 @@ private:
     DragSpinBox*      m_tfX       = nullptr;
     DragSpinBox*      m_tfY       = nullptr;
     DragSpinBox*      m_tfRot     = nullptr;
-    QSlider*          m_tfScaleSlider = nullptr;
-    QLineEdit*        m_tfScaleEdit   = nullptr;
+    DragSpinBox*      m_tfDimX    = nullptr;   // on-frame width  px → scalePct
+    DragSpinBox*      m_tfDimY    = nullptr;   // on-frame height px → scalePct × aspectPct
     QPushButton*      m_flipH     = nullptr;   // mirror about y axis (left/right)
     QPushButton*      m_flipV     = nullptr;   // mirror about x axis (top/bottom)
     int               m_curFrameW = 1080;
     int               m_curFrameH = 1080;
+    int               m_curSrcW   = 0;        // active layer's native size (0 = unknown)
+    int               m_curSrcH   = 0;
+    float             m_curScalePct  = 100.0f;   // last known, for the unknown-source case
+    float             m_curAspectPct = 100.0f;
 
     bool m_updating = false;
 };

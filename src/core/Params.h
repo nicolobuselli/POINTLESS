@@ -683,14 +683,27 @@ struct LayerTransform {
     float xPct     = 0.0f;     // -1..1 — horizontal centre offset (fraction of frame)
     float yPct     = 0.0f;     // -1..1 — vertical centre offset
     float scalePct = 100.0f;   // uniform scale (100 = native pixels)
+    float aspectPct = 100.0f;  // extra Y-only stretch on top of scalePct
+                               // (100 = source aspect). Canvas edge drags write
+                               // this; the Scale slider keeps touching scalePct.
     float rotation = 0.0f;     // -180..180 deg
     bool  flipH    = false;    // mirror about the vertical (y) axis — left/right
     bool  flipV    = false;    // mirror about the horizontal (x) axis — top/bottom
 };
 inline bool operator==(const LayerTransform& a, const LayerTransform& b) {
     return a.xPct == b.xPct && a.yPct == b.yPct
-        && a.scalePct == b.scalePct && a.rotation == b.rotation
+        && a.scalePct == b.scalePct && a.aspectPct == b.aspectPct
+        && a.rotation == b.rotation
         && a.flipH == b.flipH && a.flipV == b.flipV;
+}
+
+// Per-axis placement scale (1.0 = native px). Every placement matrix and every
+// bounding-quad computation must go through this, or a stretched layer draws
+// with the wrong height somewhere.
+struct LayerScaleXY { double x, y; };
+inline LayerScaleXY layerScaleXY(const LayerTransform& t) {
+    const double s = std::max(0.0001, double(t.scalePct) / 100.0);
+    return { s, s * std::max(0.0001, double(t.aspectPct) / 100.0) };
 }
 
 // Scale a layer so it fits entirely inside the frame (contain), keeping aspect.

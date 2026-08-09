@@ -336,6 +336,7 @@ Adjustments adjFromJson(const QJsonObject& o) {
 QJsonObject toJson(const LayerTransform& t) {
     return {
         { "xPct", t.xPct }, { "yPct", t.yPct }, { "scalePct", t.scalePct },
+        { "aspectPct", t.aspectPct },
         { "rotation", t.rotation }, { "flipH", t.flipH }, { "flipV", t.flipV },
     };
 }
@@ -344,6 +345,7 @@ LayerTransform transformFromJson(const QJsonObject& o) {
     t.xPct     = float(o["xPct"].toDouble(t.xPct));
     t.yPct     = float(o["yPct"].toDouble(t.yPct));
     t.scalePct = float(o["scalePct"].toDouble(t.scalePct));
+    t.aspectPct = float(o["aspectPct"].toDouble(t.aspectPct));
     t.rotation = float(o["rotation"].toDouble(t.rotation));
     t.flipH    = o["flipH"].toBool(t.flipH);
     t.flipV    = o["flipV"].toBool(t.flipV);

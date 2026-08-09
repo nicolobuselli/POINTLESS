@@ -156,8 +156,19 @@ private:
     QPointF        m_pressPos;         // widget pos at mousePressEvent; jitter tolerance for m_gestureMoved
     LayerTransform m_tfStart;          // transform at drag start
     QPointF        m_grabOffset;       // Move: centre - grab point (frame space)
-    double         m_startDist  = 1.0; // Scale: |corner - centre| at start
+    double         m_startDist  = 1.0; // group Scale: |corner - pivot| at start
     double         m_startAngle = 0.0; // Rotate: angle(grab - centre) at start
+
+    // Figma-style scale from any point of the outline. A handle is identified by
+    // the LOCAL (unrotated, layer-space) direction of the point that was grabbed:
+    // (±1,±1) = corner, (±1,0)/(0,±1) = an edge. `rotate` is the ring just
+    // outside a corner, which starts a rotation instead of a scale.
+    struct HandleHit { int dx = 0; int dy = 0; bool rotate = false;
+                       bool valid() const { return dx != 0 || dy != 0; } };
+    HandleHit handleHit(QPointF widgetPos) const;
+    int     m_scaleDirX = 0, m_scaleDirY = 0;   // grabbed handle, local dirs
+    QPointF m_scaleStartCentre;                 // layer centre at drag start (frame px)
+    QSizeF  m_scaleStartHalf;                   // half W/H at drag start (frame px)
 
     // ── Selection (click / box) over all layers ───────────────────
     QVector<CanvasLayer> m_canvasLayers;   // top-first

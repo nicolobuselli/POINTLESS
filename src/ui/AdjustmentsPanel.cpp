@@ -104,7 +104,7 @@ QPushButton* makeCheckRow(const QString& text, CheckSquare*& squareOut)
     auto* btn = new QPushButton;
     btn->setObjectName("checkRow");
     btn->setCheckable(true);
-    btn->setCursor(Qt::PointingHandCursor);
+    btn->setCursor(appCursor());
     btn->setFixedHeight(Ui::px(Ui::kBoxH));
 
     auto* hl = new QHBoxLayout(btn);
@@ -225,7 +225,7 @@ AdjustmentsPanel::AdjustmentsPanel(QWidget* parent)
     auto* btnReset = new QPushButton("reset adjustments");
     btnReset->setObjectName("resetBtn");
     btnReset->setFixedHeight(Ui::px(Ui::kBoxH));
-    btnReset->setCursor(Qt::PointingHandCursor);
+    btnReset->setCursor(appCursor());
     connect(btnReset, &QPushButton::clicked, this, &AdjustmentsPanel::resetRequested);
 
     vlay->addWidget(btnReset);

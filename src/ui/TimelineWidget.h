@@ -39,8 +39,11 @@ public:
         int     offset  = 0;   // clip-local frame 0 → this many frames past frameStart
     };
     // `layerMedia` maps layerId → mediaId, so a keyframe track can be shown
-    // nested under the clip row of the video it animates.
-    void setClips(const QVector<ClipRow>& clips, const QHash<int, int>& layerMedia = {});
+    // nested under the clip row of the video it animates. `layerNames` gives
+    // still-image layers the same parent/child grouping: a header row with the
+    // layer's name, its parameter tracks indented under it.
+    void setClips(const QVector<ClipRow>& clips, const QHash<int, int>& layerMedia = {},
+                  const QHash<int, QString>& layerNames = {});
 
     // Last frame the timeline scrolls to: past the animation range *and* past
     // the last clip, plus a fixed tail of working space.
@@ -66,9 +69,11 @@ public:
 
 private:
     friend class TimelineCanvas;
-    // One painted row: either a clip bar or a keyframe track. A track row that
-    // belongs to a clip above it is drawn indented, with an L connector.
-    struct Row { int clip = -1; int track = -1; bool child = false; };
+    // One painted row: a clip bar (clip >= 0), a keyframe track (track >= 0),
+    // or a plain layer header (both -1, `name` filled) for still images, which
+    // have no clip bar to hang under. A track row that belongs to the clip or
+    // header above it is drawn indented, with an L connector.
+    struct Row { int clip = -1; int track = -1; bool child = false; QString name; };
     void rebuildRows();
     void updateCanvasHeight();
     void updateScrollRange();          // canvas width/zoom/range → h-scrollbar
@@ -81,7 +86,8 @@ private:
 
     Animation        m_anim;
     QVector<ClipRow> m_clips;
-    QHash<int, int>  m_layerMedia;   // layerId → mediaId
+    QHash<int, int>     m_layerMedia;   // layerId → mediaId
+    QHash<int, QString> m_layerNames;   // layerId → name (header rows for stills)
     QVector<Row>     m_rows;         // painted row order (clips + their tracks)
     bool             m_updating = false;
     double           m_zoom     = 1.0;   // 1 = whole working span fits the view

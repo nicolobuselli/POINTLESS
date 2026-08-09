@@ -32,6 +32,10 @@
 #include <QFontMetrics>
 #include <QResizeEvent>
 #include <QSvgRenderer>
+#include <QSplitter>
+#include <QTransform>
+#include <QHash>
+#include <QtMath>
 #include <cmath>
 
 // ============================================================
@@ -50,7 +54,7 @@ DragSpinBox::DragSpinBox(const QString& iconRes, int minVal, int maxVal, int def
 {
     setObjectName("dragSpinBox");
     setFrameShape(QFrame::NoFrame);
-    setCursor(Qt::SizeHorCursor);
+    setCursor(handleCursor(1, 0, 0.0, true));
     setFixedHeight(Ui::px(Ui::kBoxH));
     setFocusPolicy(Qt::StrongFocus);   // reachable via Tab (left→right, top→bottom)
 
@@ -304,7 +308,7 @@ LevelsWidget::LevelsWidget(QWidget* parent)
     // full-height neighbours.
     const int boxH = Ui::px(Ui::kBoxH);
     setFixedHeight(kLvTrackH + kLvGap + boxH);
-    setCursor(Qt::SizeHorCursor);
+    setCursor(handleCursor(1, 0, 0.0, true));
 
     // Layout only occupies the bottom strip; top is custom-painted.
     auto* vl = new QVBoxLayout(this);
@@ -578,7 +582,7 @@ ChevronButton::ChevronButton(Direction dir, QWidget* parent)
 {
     setObjectName("iconBtn");
     setFixedSize(Ui::px(24), Ui::px(24));
-    setCursor(Qt::PointingHandCursor);
+    setCursor(appCursor());
 }
 
 void ChevronButton::setDirection(Direction dir)
@@ -624,7 +628,7 @@ FillSwatch::FillSwatch(QColor color, float opacity, bool showOpacity, QWidget* p
     : QWidget(parent), m_color(color), m_opacity(opacity), m_showOpacity(showOpacity)
 {
     setFixedHeight(Ui::px(Ui::kBoxH));
-    setCursor(Qt::PointingHandCursor);
+    setCursor(appCursor());
     setAttribute(Qt::WA_Hover, true);   // so paintEvent's underMouse() repaints on hover
 
     // Selectable / hand-editable hex value over the painted area.
@@ -796,7 +800,7 @@ private:
 class HueBarWidget : public QWidget {
 public:
     std::function<void(float h)> onChanged;
-    explicit HueBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(Ui::px(16)); setCursor(Qt::SizeHorCursor); }
+    explicit HueBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(Ui::px(16)); setCursor(handleCursor(1, 0, 0.0, true)); }
     void setHue(float h) { m_hue = h; update(); }
 protected:
     void paintEvent(QPaintEvent*) override {
@@ -824,7 +828,7 @@ private:
 class OpacityBarWidget : public QWidget {
 public:
     std::function<void(float a)> onChanged;
-    explicit OpacityBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(Ui::px(16)); setCursor(Qt::SizeHorCursor); }
+    explicit OpacityBarWidget(QWidget* p = nullptr) : QWidget(p) { setFixedHeight(Ui::px(16)); setCursor(handleCursor(1, 0, 0.0, true)); }
     void setColor(QColor c) { m_color = c; update(); }
     void setAlpha(float a)  { m_alpha = a; update(); }
 protected:
@@ -1091,7 +1095,7 @@ void ColorPickerDialog::buildUI(bool showOpacity)
         auto* eyeBtn = new QPushButton;
         eyeBtn->setObjectName("eyeDropBtn");
         eyeBtn->setAutoDefault(false);   // else Enter in hex/opacity fields also fires this
-        eyeBtn->setCursor(Qt::PointingHandCursor);
+        eyeBtn->setCursor(appCursor());
         eyeBtn->setFixedSize(Ui::px(30), Ui::px(30));
         eyeBtn->setIconSize(QSize(Ui::px(18), Ui::px(18)));
         eyeBtn->setIcon(QIcon(":/icons/color_picker.svg"));
@@ -1320,6 +1324,79 @@ QPushButton* makeIconButton(const QString& iconRes)
     return btn;
 }
 
+// ── Cursors ──────────────────────────────────────────────────
+
+namespace {
+
+constexpr int kArrowPx  = 14;   // plain pointer
+constexpr int kHandlePx = 21;   // the directional glyphs read smaller — ~1.3×
+
+QCursor makeSvgCursor(const char* path, int px, double rotateDeg, bool hotspotTip = false)
+{
+    QPixmap pm = QIcon(QString::fromLatin1(path)).pixmap(px, px);
+    if (rotateDeg != 0.0)
+        pm = pm.transformed(QTransform().rotate(rotateDeg), Qt::SmoothTransformation);
+    // QCursor wants the hotspot in DEVICE-INDEPENDENT pixels, but pm.width()
+    // is device pixels: passing width()/2 lands a 200%-DPI hotspot on the
+    // glyph's bottom-right corner instead of its centre. Qt's own default
+    // (-1,-1) does the divide, so let it centre the glyph.
+    return hotspotTip ? QCursor(pm, 1, 1) : QCursor(pm);
+}
+
+// One cache for every angled glyph. `kind` keeps the three families apart.
+const QCursor& angledCursor(const char* path, int kind, double angleDeg)
+{
+    const int step = ((int(std::lround(angleDeg / 15.0)) % 24) + 24) % 24;
+    static QHash<int, QCursor> cache;
+    const int key = step * 4 + kind;
+    auto it = cache.find(key);
+    if (it == cache.end())
+        it = cache.insert(key, makeSvgCursor(path, kHandlePx, step * 15.0));
+    return *it;
+}
+
+} // namespace
+
+const QCursor& appCursor()
+{
+    static const QCursor c = makeSvgCursor(":/icons/cur_arrow.svg", kArrowPx, 0.0, true);
+    return c;
+}
+
+const QCursor& rotateCursor(int dx, int dy, double rotationDeg)
+{
+    // The glyph curves into the top-left corner, so each corner gets its own
+    // quarter turn; the layer's own rotation rides on top.
+    const double corner = (dy < 0) ? (dx < 0 ?   0.0 :  90.0)
+                                   : (dx > 0 ? 180.0 : 270.0);
+    return angledCursor(":/icons/cur_rotate.svg", 2, corner + rotationDeg);
+}
+
+const QCursor& handleCursor(int dx, int dy, double rotationDeg, bool stretch)
+{
+    // Base glyphs point NW-SE (scale) and N-S (stretch) — both double-headed,
+    // so opposite handles share a cursor and the angle wraps at 180°.
+    double a = qRadiansToDegrees(std::atan2(double(dy), double(dx))) + rotationDeg;
+    a = std::fmod(a, 180.0);
+    if (a < 0.0) a += 180.0;
+    return stretch ? angledCursor(":/icons/cur_stretch.svg", 1, a - 90.0)
+                   : angledCursor(":/icons/cur_scale.svg",   0, a - 45.0);
+}
+
+const QCursor& resizeCursor(bool vertical)
+{
+    static const QCursor h = makeSvgCursor(":/icons/cur_window.svg", kHandlePx, 0.0);
+    static const QCursor v = makeSvgCursor(":/icons/cur_window.svg", kHandlePx, 90.0);
+    return vertical ? v : h;
+}
+
+void applySplitterCursors(QSplitter* sp)
+{
+    const bool vertical = sp->orientation() == Qt::Vertical;
+    for (int i = 1; i < sp->count(); ++i)
+        if (QWidget* h = sp->handle(i)) h->setCursor(resizeCursor(vertical));
+}
+
 // ── Dialog card artwork ──────────────────────────────────────
 // The dialog backgrounds are the design's own SVGs (dialog_card.svg for the
 // progress popup, dialog_card_warning.svg — lime edge + warning mark — for
@@ -1423,7 +1500,7 @@ AnimProgressDialog::AnimProgressDialog(const QString& labelText, int maxValue, Q
     btnRow->addStretch(1);
     auto* cancelBtn = new QPushButton("Cancel");
     cancelBtn->setObjectName("dialogNoBtn");
-    cancelBtn->setCursor(Qt::PointingHandCursor);
+    cancelBtn->setCursor(appCursor());
     cancelBtn->setFixedSize(Ui::px(138), Ui::px(46));
     connect(cancelBtn, &QPushButton::clicked, this, [this] { m_canceled = true; });
     btnRow->addWidget(cancelBtn);
@@ -1496,7 +1573,7 @@ UnsavedChangesDialog::UnsavedChangesDialog(const QString& documentName, QWidget*
     // Dismiss = Cancel (same as Esc): keeps the document open, saves nothing.
     auto* closeBtn = new QPushButton("x");
     closeBtn->setObjectName("dialogCloseBtn");
-    closeBtn->setCursor(Qt::PointingHandCursor);
+    closeBtn->setCursor(appCursor());
     const int closeD = Ui::px(45);
     closeBtn->setFixedSize(closeD, closeD);
     // Radius must be exactly half the (already rounded) pixel size — a QSS
@@ -1515,13 +1592,13 @@ UnsavedChangesDialog::UnsavedChangesDialog(const QString& documentName, QWidget*
     btnRow->addStretch(1);
     auto* yesBtn = new QPushButton("Yes");
     yesBtn->setObjectName("dialogYesBtn");
-    yesBtn->setCursor(Qt::PointingHandCursor);
+    yesBtn->setCursor(appCursor());
     yesBtn->setFixedSize(Ui::px(94), Ui::px(48));
     yesBtn->setDefault(true);
     connect(yesBtn, &QPushButton::clicked, this, [this] { m_choice = Save; accept(); });
     auto* noBtn = new QPushButton("No");
     noBtn->setObjectName("dialogNoBtn");
-    noBtn->setCursor(Qt::PointingHandCursor);
+    noBtn->setCursor(appCursor());
     noBtn->setFixedSize(Ui::px(94), Ui::px(48));
     connect(noBtn, &QPushButton::clicked, this, [this] { m_choice = Discard; accept(); });
     btnRow->addWidget(yesBtn);
@@ -1569,7 +1646,7 @@ StyledMessageBox::StyledMessageBox(const QString& message, QWidget* parent,
     auto* yesBtn = new QPushButton(yesText);
     yesBtn->setObjectName("dialogYesBtn");
     yesBtn->setProperty("danger", dangerYes);
-    yesBtn->setCursor(Qt::PointingHandCursor);
+    yesBtn->setCursor(appCursor());
     yesBtn->setFixedSize(Ui::px(94), Ui::px(48));
     yesBtn->setDefault(defaultYes);
     connect(yesBtn, &QPushButton::clicked, this, [this] { m_accepted = true; accept(); });
@@ -1577,7 +1654,7 @@ StyledMessageBox::StyledMessageBox(const QString& message, QWidget* parent,
     if (!noText.isEmpty()) {
         auto* noBtn = new QPushButton(noText);
         noBtn->setObjectName("dialogNoBtn");
-        noBtn->setCursor(Qt::PointingHandCursor);
+        noBtn->setCursor(appCursor());
         noBtn->setFixedSize(Ui::px(94), Ui::px(48));
         noBtn->setDefault(!defaultYes);
         connect(noBtn, &QPushButton::clicked, this, [this] { m_accepted = false; accept(); });
@@ -1772,7 +1849,7 @@ PopupPicker::PopupPicker(int columns, QWidget* parent)
     : QPushButton(parent), m_columns(columns)
 {
     setObjectName("algoBox");
-    setCursor(Qt::PointingHandCursor);
+    setCursor(appCursor());
     setFixedHeight(Ui::px(Ui::kBoxH));
 
     auto* hl = new QHBoxLayout(this);
@@ -1905,7 +1982,7 @@ void PopupPicker::openPopup()
         } else {
             auto* b = new QPushButton(e.label);
             b->setObjectName("algoCell");
-            b->setCursor(Qt::PointingHandCursor);
+            b->setCursor(appCursor());
             b->setCheckable(true);
             b->setChecked(e.value == m_value);
             if (!e.tooltip.isEmpty()) b->setToolTip(e.tooltip);

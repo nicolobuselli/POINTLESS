@@ -19,6 +19,10 @@
 #include <QPainterPath>
 #include <QKeyEvent>
 #include <QApplication>
+#include <QCursor>
+#include <QIcon>
+#include <QPixmap>
+#include <QHash>
 
 namespace {
 
@@ -35,21 +39,24 @@ QStringList imagePathsFromMime(const QMimeData* mime)
     return out;
 }
 
-constexpr double kHandleHit    = 9.0;   // px radius for corner hit-test
-constexpr double kRotHandleHit = 11.0;
-constexpr double kRotArm       = 28.0;  // px from top edge to rotation handle
+constexpr double kHandleHit    = 12.0;  // px tolerance for the outline handles
+constexpr double kRotZone      = 16.0;  // px ring outside the corner handle = rotate
 constexpr double kLocRingHit   = 6.0;   // px hit tolerance for the loc radius/falloff rings
 constexpr double kLocDotHit    = 9.0;   // px radius for the loc centre-dot hit/hover test
 
-// Rotation handle position (widget space) given the widget-space quad
-// [TL,TR,BR,BL] and the widget-space centre.
-QPointF rotationHandleWidget(const QPolygonF& q, QPointF centre)
+
+// Rotate a frame-space vector into the layer's local (unrotated) axes.
+QPointF toLocal(QPointF rel, double rotationDeg)
 {
-    const QPointF topMid = (q[0] + q[1]) * 0.5;
-    QPointF up = topMid - centre;
-    const double len = std::hypot(up.x(), up.y());
-    if (len > 1e-6) up /= len;
-    return topMid + up * kRotArm;
+    const double th = qDegreesToRadians(rotationDeg);
+    const double cs = std::cos(th), sn = std::sin(th);
+    return QPointF(rel.x() * cs + rel.y() * sn, -rel.x() * sn + rel.y() * cs);
+}
+QPointF fromLocal(QPointF loc, double rotationDeg)
+{
+    const double th = qDegreesToRadians(rotationDeg);
+    const double cs = std::cos(th), sn = std::sin(th);
+    return QPointF(loc.x() * cs - loc.y() * sn, loc.x() * sn + loc.y() * cs);
 }
 
 } // namespace
@@ -91,6 +98,11 @@ void PreviewWidget::initGpu()
     if (m_canvas) return;
     m_canvas  = new GpuCanvasWidget(this);   // created first → stacked below…
     m_overlay = new PreviewOverlay(this);    // …the chrome overlay
+    // The canvas covers the whole widget, so without this it is the widget
+    // under the mouse: it has no mouse tracking (button-less moves die there
+    // instead of reaching us) and it owns cursor resolution. Handle hover —
+    // rotate/scale/stretch cursors, loc-dot hover — needs both back here.
+    m_canvas->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_canvas->setGeometry(rect());
     m_overlay->setGeometry(rect());
     m_canvas->show();
@@ -236,7 +248,7 @@ void PreviewWidget::setPanMode(bool enabled)
         m_dragging = false;
         m_dragButton = Qt::NoButton;
     }
-    setCursor(enabled ? Qt::OpenHandCursor : Qt::ArrowCursor);
+    setCursor(enabled ? QCursor(Qt::OpenHandCursor) : appCursor());
 }
 
 void PreviewWidget::setActiveTransform(const LayerTransform& tf, QSize layerNative,
@@ -315,9 +327,9 @@ QPointF PreviewWidget::layerCentreFrame() const
 
 QPolygonF PreviewWidget::quadFrame(const LayerTransform& tf, QSize native) const
 {
-    const double s     = qMax(0.0001, double(tf.scalePct) / 100.0);
-    const double halfW = native.width()  * 0.5 * s;
-    const double halfH = native.height() * 0.5 * s;
+    const LayerScaleXY s = layerScaleXY(tf);
+    const double halfW = native.width()  * 0.5 * s.x;
+    const double halfH = native.height() * 0.5 * s.y;
     const QPointF c(m_frame.width()  * 0.5 + double(tf.xPct) * m_frame.width(),
                     m_frame.height() * 0.5 + double(tf.yPct) * m_frame.height());
     QTransform m;
@@ -351,6 +363,37 @@ bool PreviewWidget::handlesVisible() const
 {
     return m_transformable && !m_panMode
         && m_selection.size() == 1 && m_selection.contains(m_activeId);
+}
+
+// Which outline handle is under `widgetPos`, in the active layer's local axes.
+// Corners win over edges; the ring just outside a corner means "rotate".
+PreviewWidget::HandleHit PreviewWidget::handleHit(QPointF widgetPos) const
+{
+    HandleHit h;
+    const double k = imageScale();
+    if (!handlesVisible() || k <= 0.0 || m_layerNative.isEmpty()) return h;
+
+    const QPointF u = toLocal(widgetToFrame(widgetPos) - layerCentreFrame(),
+                              double(m_tf.rotation));
+    const LayerScaleXY s = layerScaleXY(m_tf);
+    const double hw = m_layerNative.width()  * 0.5 * s.x;
+    const double hh = m_layerNative.height() * 0.5 * s.y;
+    const double tol  = kHandleHit / k;   // widget px → frame px
+    const double rtol = kRotZone   / k;
+
+    const double ax = std::abs(u.x()), ay = std::abs(u.y());
+    const int sx = u.x() >= 0.0 ? 1 : -1, sy = u.y() >= 0.0 ? 1 : -1;
+    const bool onX = std::abs(ax - hw) <= tol;   // on the left/right edge line
+    const bool onY = std::abs(ay - hh) <= tol;   // on the top/bottom edge line
+
+    if (onX && onY)               { h.dx = sx; h.dy = sy; return h; }   // corner
+    // Rotate starts where the corner handle ends, never on top of it.
+    if (ax > hw + tol && ay > hh + tol && ax <= hw + tol + rtol && ay <= hh + tol + rtol) {
+        h.dx = sx; h.dy = sy; h.rotate = true; return h;                // corner ring
+    }
+    if (onX && ay <= hh)          { h.dx = sx; return h; }              // left/right edge
+    if (onY && ax <= hw)          { h.dy = sy; return h; }              // top/bottom edge
+    return h;
 }
 
 bool PreviewWidget::groupHandlesVisible() const
@@ -603,8 +646,6 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
             const QRectF gw      = groupRectWidget();
             const QPointF framePt = widgetToFrame(pos);
             const QPointF pivot   = groupBBoxFrame().center();
-            const QPointF topMid  = (gw.topLeft() + gw.topRight()) * 0.5;
-            const QPointF rot     = topMid + QPointF(0, -kRotArm);
 
             auto beginGroup = [&](TfDrag mode) {
                 m_groupDrag  = true;
@@ -615,18 +656,22 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
                     if (m_selection.contains(cl.id)) m_groupStart.insert(cl.id, cl.tf);
             };
 
-            if (QLineF(pos, rot).length() <= kRotHandleHit) {
-                beginGroup(TfDrag::Rotate);
-                m_startAngle = std::atan2(framePt.y() - pivot.y(), framePt.x() - pivot.x());
-                event->accept();
-                return;
-            }
+            // Corner = proportional scale; the ring just outside it = rotate.
+            // ponytail: the group gizmo stays uniform-only — per-layer stretch
+            // needs each layer's own axes; add if anyone asks for it.
             const QPointF corners[4] = { gw.topLeft(), gw.topRight(),
                                          gw.bottomRight(), gw.bottomLeft() };
             for (const QPointF& corner : corners) {
-                if (QLineF(pos, corner).length() <= kHandleHit) {
+                const double d = QLineF(pos, corner).length();
+                if (d <= kHandleHit) {
                     beginGroup(TfDrag::Scale);
                     m_startDist = qMax(1e-3, QLineF(pivot, framePt).length());
+                    event->accept();
+                    return;
+                }
+                if (d <= kHandleHit + kRotZone && !gw.contains(pos)) {
+                    beginGroup(TfDrag::Rotate);
+                    m_startAngle = std::atan2(framePt.y() - pivot.y(), framePt.x() - pivot.x());
                     event->accept();
                     return;
                 }
@@ -634,7 +679,7 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
             if (gw.contains(pos)) {
                 beginGroup(TfDrag::Move);
                 m_groupGrabFrame = framePt;
-                setCursor(Qt::SizeAllCursor);
+                setCursor(appCursor());
                 event->accept();
                 return;
             }
@@ -642,28 +687,24 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
         }
 
         // 1. Rotation/scale handles of the single active layer take priority.
-        if (handlesVisible()) {
-            QPolygonF qw;
-            for (const QPointF& f : layerQuadFrame()) qw << frameToWidget(f);
-            const QPointF centre = frameToWidget(layerCentreFrame());
-            m_tfStart = m_tf;
+        if (const HandleHit hh = handleHit(pos); hh.valid()) {
             const QPointF framePt = widgetToFrame(pos);
             const QPointF c = layerCentreFrame();
-
-            if (QLineF(pos, rotationHandleWidget(qw, centre)).length() <= kRotHandleHit) {
+            m_tfStart = m_tf;
+            if (hh.rotate) {
                 m_tfDrag = TfDrag::Rotate;
                 m_startAngle = std::atan2(framePt.y() - c.y(), framePt.x() - c.x());
-                event->accept();
-                return;
+            } else {
+                const LayerScaleXY s = layerScaleXY(m_tf);
+                m_tfDrag           = TfDrag::Scale;
+                m_scaleDirX        = hh.dx;
+                m_scaleDirY        = hh.dy;
+                m_scaleStartCentre = c;
+                m_scaleStartHalf   = QSizeF(m_layerNative.width()  * 0.5 * s.x,
+                                            m_layerNative.height() * 0.5 * s.y);
             }
-            for (const QPointF& corner : qw) {
-                if (QLineF(pos, corner).length() <= kHandleHit) {
-                    m_tfDrag = TfDrag::Scale;
-                    m_startDist = qMax(1e-3, QLineF(c, framePt).length());
-                    event->accept();
-                    return;
-                }
-            }
+            event->accept();
+            return;
         }
 
         // Outside the frame and not on a handle (checked above, so an
@@ -727,7 +768,7 @@ void PreviewWidget::mousePressEvent(QMouseEvent* event)
                 const QPointF framePt = widgetToFrame(pos);
                 m_grabOffset    = layerCentreFrame() - framePt;
                 m_tfDrag        = TfDrag::Move;
-                setCursor(Qt::SizeAllCursor);
+                setCursor(appCursor());
             }
             emit selectionChanged(m_selection, target);
             update();
@@ -765,7 +806,7 @@ void PreviewWidget::forceEndDrags()
     m_boxSelecting = false;
     m_dragging     = false;
     m_dragButton   = Qt::NoButton;
-    setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
+    setCursor(m_panMode ? QCursor(Qt::OpenHandCursor) : appCursor());
     update();
 }
 
@@ -929,8 +970,50 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
                 break;
             }
             case TfDrag::Scale: {
-                const double d = QLineF(c, framePt).length();
-                m_tf.scalePct = qBound(0.1f, float(m_tfStart.scalePct * d / m_startDist), 100000.0f);
+                // Work in the layer's own axes, anchored on a fixed point:
+                //   corner drag → always proportional (Alt: about the centre,
+                //                 otherwise the opposite corner stays put);
+                //   edge drag   → stretches that axis only (Shift: proportional,
+                //                 Alt: symmetric about the centre).
+                const double hw = m_scaleStartHalf.width();
+                const double hh = m_scaleStartHalf.height();
+                const QPointF grab(m_scaleDirX * hw, m_scaleDirY * hh);
+                const bool alt     = event->modifiers() & Qt::AltModifier;
+                const bool corner  = m_scaleDirX != 0 && m_scaleDirY != 0;
+                const bool uniform = corner || (event->modifiers() & Qt::ShiftModifier);
+                const QPointF anchor = alt ? QPointF(0.0, 0.0) : -grab;
+
+                const QPointF u = toLocal(framePt - m_scaleStartCentre,
+                                          double(m_tfStart.rotation));
+                double fx = 1.0, fy = 1.0;
+                if (m_scaleDirX) fx = (u.x() - anchor.x()) / (grab.x() - anchor.x());
+                if (m_scaleDirY) fy = (u.y() - anchor.y()) / (grab.y() - anchor.y());
+                if (uniform) {
+                    // Corner: project the cursor onto the anchor→corner diagonal
+                    // so the aspect never wobbles. Edge: the one live axis wins.
+                    double f;
+                    if (corner) {
+                        const QPointF v = grab - anchor, w = u - anchor;
+                        f = QPointF::dotProduct(v, w)
+                          / qMax(1e-9, QPointF::dotProduct(v, v));
+                    } else {
+                        f = m_scaleDirX ? fx : fy;
+                    }
+                    fx = fy = f;
+                }
+                // No mirror-through-zero: a flip is the Transform panel's job.
+                fx = qBound(0.01, fx, 1000.0);
+                fy = qBound(0.01, fy, 1000.0);
+
+                m_tf.scalePct  = qBound(0.1f, float(m_tfStart.scalePct * fx), 100000.0f);
+                m_tf.aspectPct = qBound(0.1f, float(m_tfStart.aspectPct * fy / fx), 100000.0f);
+
+                // Scaling about `anchor` moves the centre unless the anchor IS it.
+                const QPointF off(anchor.x() * (1.0 - fx), anchor.y() * (1.0 - fy));
+                const QPointF nc = m_scaleStartCentre
+                                 + fromLocal(off, double(m_tfStart.rotation));
+                m_tf.xPct = m_frame.width()  > 0 ? float((nc.x() - m_frame.width()  * 0.5) / m_frame.width())  : 0.0f;
+                m_tf.yPct = m_frame.height() > 0 ? float((nc.y() - m_frame.height() * 0.5) / m_frame.height()) : 0.0f;
                 break;
             }
             case TfDrag::Rotate: {
@@ -975,12 +1058,41 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* event)
         if (hover == m_locActive) hover = -1;   // the active dot already shows its rings
         if (hover != m_locHover) {
             m_locHover = hover;
-            setCursor(hover >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
+            setCursor(appCursor());
             update();
         }
     } else if (m_locHover != -1) {
         m_locHover = -1;
         update();
+    }
+
+    // Handle hover: resize cursor on the outline, rotate glyph just outside a
+    // corner. Loc dots own the cursor when one is hovered.
+    if (!m_panMode && m_locHover < 0) {
+        const HandleHit hh = handleHit(event->position());
+        if (hh.valid()) {
+            // corner (both axes) = proportional scale, edge (one axis) = stretch
+            setCursor(hh.rotate ? rotateCursor(hh.dx, hh.dy, double(m_tf.rotation))
+                                : handleCursor(hh.dx, hh.dy, double(m_tf.rotation),
+                                               hh.dx == 0 || hh.dy == 0));
+        } else if (groupHandlesVisible()) {
+            const QRectF gw = groupRectWidget();
+            const QPointF corners[4] = { gw.topLeft(), gw.topRight(),
+                                         gw.bottomRight(), gw.bottomLeft() };
+            QCursor cur = appCursor();
+            for (int i = 0; i < 4; ++i) {
+                const double d = QLineF(event->position(), corners[i]).length();
+                const int dx = (i == 0 || i == 3) ? -1 : 1;
+                const int dy = (i < 2) ? -1 : 1;
+                if (d <= kHandleHit) { cur = handleCursor(dx, dy, 0.0, false); break; }
+                if (d <= kHandleHit + kRotZone && !gw.contains(event->position())) {
+                    cur = rotateCursor(dx, dy, 0.0); break;
+                }
+            }
+            setCursor(cur);
+        } else {
+            setCursor(appCursor());
+        }
     }
     QWidget::mouseMoveEvent(event);
 }
@@ -1000,7 +1112,7 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
     if (m_groupDrag && event->button() == Qt::LeftButton) {
         m_groupDrag = false;
         m_groupMode = TfDrag::None;
-        setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        setCursor(m_panMode ? QCursor(Qt::OpenHandCursor) : appCursor());
         if (m_gestureMoved) emit transformEditFinished();
         event->accept();
         return;
@@ -1008,7 +1120,7 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
 
     if (m_tfDrag != TfDrag::None && event->button() == Qt::LeftButton) {
         m_tfDrag = TfDrag::None;
-        setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        setCursor(m_panMode ? QCursor(Qt::OpenHandCursor) : appCursor());
         // Selecting a layer with a plain click (no drag) also arms Move above
         // (mousePressEvent) — without this guard every click fired a full
         // re-render for zero actual change.
@@ -1048,7 +1160,7 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* event)
     if (m_dragging && event->button() == m_dragButton) {
         m_dragging = false;
         m_dragButton = Qt::NoButton;
-        setCursor(m_panMode ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        setCursor(m_panMode ? QCursor(Qt::OpenHandCursor) : appCursor());
         event->accept();
         return;
     }
@@ -1129,35 +1241,27 @@ void PreviewWidget::paintHandles(QPainter& p)
 {
     QPolygonF qw;
     for (const QPointF& f : layerQuadFrame()) qw << frameToWidget(f);
-    const QPointF centre = frameToWidget(layerCentreFrame());
-    const QPointF rot    = rotationHandleWidget(qw, centre);
 
     p.setRenderHint(QPainter::Antialiasing, true);
     QPen pen(Ui::kColCanvasHandle);
     pen.setWidthF(1.2);
 
-    // Bounding box + arm to the rotation handle
+    // Outline: every point of it is draggable (edges stretch, corners scale),
+    // so there is nothing to draw but the box and its corners.
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
     p.drawPolygon(qw);
-    p.drawLine((qw[0] + qw[1]) * 0.5, rot);
 
-    // Corner (scale) handles — small filled squares
     p.setBrush(Ui::kColCanvasHandle);
     const double h = 4.0;
     for (const QPointF& c : qw)
         p.drawRect(QRectF(c.x() - h, c.y() - h, 2 * h, 2 * h));
-
-    // Rotation handle — round
-    p.drawEllipse(rot, 4.5, 4.5);
 }
 
 void PreviewWidget::paintGroupHandles(QPainter& p)
 {
     const QRectF gw = groupRectWidget();
     if (gw.isNull()) return;
-    const QPointF topMid = (gw.topLeft() + gw.topRight()) * 0.5;
-    const QPointF rot    = topMid + QPointF(0, -kRotArm);
 
     p.setRenderHint(QPainter::Antialiasing, true);
     QPen pen(Ui::kColCanvasHandle);
@@ -1165,7 +1269,6 @@ void PreviewWidget::paintGroupHandles(QPainter& p)
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
     p.drawRect(gw);
-    p.drawLine(topMid, rot);
 
     p.setBrush(Ui::kColCanvasHandle);
     const double h = 4.0;
@@ -1173,7 +1276,6 @@ void PreviewWidget::paintGroupHandles(QPainter& p)
                                  gw.bottomRight(), gw.bottomLeft() };
     for (const QPointF& c : corners)
         p.drawRect(QRectF(c.x() - h, c.y() - h, 2 * h, 2 * h));
-    p.drawEllipse(rot, 4.5, 4.5);
 }
 
 // Everything drawn ON TOP of the image: selection chrome, handles, loc dots,

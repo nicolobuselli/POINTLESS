@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QFontDatabase>
 #include <QFont>
+#include <QPalette>
 #include <QScreen>
 #include <QTimer>
 #include <QRegularExpression>
@@ -98,7 +99,7 @@ static QString substitutePaletteTokens(QString css)
         { "boxFill",        "transparent" },
         { "boxStroke",      Ui::kColBoxStroke.name().toUpper() },
         { "boxStrokeHover", "#616161" },
-        { "boxStrokeActive", "#45556C" },  // border while editing a number / dropdown open / pressed
+        { "boxStrokeActive", Ui::kColBoxStrokeActive.name().toUpper() },  // border while editing a number / dropdown open / pressed
 
         // Special boxes (own colors instead of the default box system)
         { "modeFill",         "#46556C" },
@@ -168,6 +169,16 @@ int main(int argc, char* argv[])
         QFont base("Funnel Display");
         base.setStyleStrategy(QFont::PreferAntialias);
         app.setFont(base);
+    }
+
+    // Text-selection rectangle: Qt's default Highlight role is the system
+    // accent (purple here). Use the same blue as a box border while it's being
+    // edited, so a selection reads as part of the design system.
+    {
+        QPalette pal = app.palette();
+        pal.setColor(QPalette::Highlight, Ui::kColBoxStrokeActive);
+        pal.setColor(QPalette::HighlightedText, Ui::kColTextTitle);
+        app.setPalette(pal);
     }
 
     // Load + scale stylesheet

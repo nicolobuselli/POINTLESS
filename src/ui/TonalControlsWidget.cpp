@@ -174,7 +174,7 @@ private:
         {
             auto* row = new QPushButton;
             row->setObjectName("algoCell");
-            row->setCursor(Qt::PointingHandCursor);
+            row->setCursor(appCursor());
             row->setFixedHeight(Ui::px(46));
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(Ui::px(15), 0, Ui::px(15), 0);
@@ -197,7 +197,7 @@ private:
             auto* row = new QPushButton;
             row->setObjectName("algoCell");
             row->setProperty("selected", true);
-            row->setCursor(Qt::PointingHandCursor);
+            row->setCursor(appCursor());
             row->setFixedHeight(Ui::px(46));
             auto* hl = new QHBoxLayout(row);
             hl->setContentsMargins(Ui::px(15), 0, Ui::px(15), 0);
@@ -231,7 +231,7 @@ private:
         auto* row = new QPushButton;
         row->setObjectName("algoCell");
         row->setProperty("selected", selected);
-        row->setCursor(Qt::PointingHandCursor);
+        row->setCursor(appCursor());
         row->setFixedHeight(Ui::px(46));
         row->setContextMenuPolicy(Qt::CustomContextMenu);
 
@@ -303,7 +303,7 @@ public:
                              .arg(Ui::px(20)).arg(Ui::kColTextTitle.name()));
         auto* x = new QPushButton(QString::fromUtf8("\xC3\x97"));   // ×
         x->setObjectName("closeMini");
-        x->setCursor(Qt::PointingHandCursor);
+        x->setCursor(appCursor());
         x->setFixedSize(Ui::px(32), Ui::px(32));
         x->setStyleSheet(QString("QPushButton#closeMini{background:transparent;border:none;color:%2;font-size:%1px;font-weight:600;}"
                                  "QPushButton#closeMini:hover{color:%3;}")
@@ -333,7 +333,7 @@ public:
                                 .arg(Ui::px(36)).arg(Ui::px(16)).arg(Ui::px(15))
                                 .arg(Ui::kColLocLime.name()).arg(Ui::kColBgWindow.name())
                                 .arg(Ui::kColLocLimeHover.name()).arg(Ui::kColLocLimePress.name()));
-        save->setCursor(Qt::PointingHandCursor);
+        save->setCursor(appCursor());
         br->addWidget(save);
         v->addLayout(br);
 
@@ -414,7 +414,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
 
         m_paletteHeader = new QPushButton;
         m_paletteHeader->setObjectName("paletteHeader");
-        m_paletteHeader->setCursor(Qt::PointingHandCursor);
+        m_paletteHeader->setCursor(appCursor());
         m_paletteHeader->setFixedHeight(Ui::px(Ui::kBoxH));
         {
             auto* hl = new QHBoxLayout(m_paletteHeader);
@@ -457,7 +457,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
 
         m_favBtn = new QPushButton;
         m_favBtn->setObjectName("favBtn");
-        m_favBtn->setCursor(Qt::PointingHandCursor);
+        m_favBtn->setCursor(appCursor());
         m_favBtn->setFixedSize(kFavW, Ui::px(Ui::kBoxH));
         m_favBtn->setIcon(QIcon(":/icons/favorite.svg"));
         m_favBtn->setIconSize(QSize(Ui::px(17), Ui::px(22)));
@@ -486,7 +486,7 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
     m_generateBtn = new QPushButton("generate random");
     m_generateBtn->setObjectName("exportBtn");
     m_generateBtn->setFixedHeight(Ui::px(Ui::kBoxH));
-    m_generateBtn->setCursor(Qt::PointingHandCursor);
+    m_generateBtn->setCursor(appCursor());
     connect(m_generateBtn, &QPushButton::clicked, this, [this]() { generateRandom(); });
     {
         auto* gw = new QWidget;
@@ -713,7 +713,6 @@ void TonalControlsWidget::rebuildRows()
         slider->setRange(0, 255);
         slider->setValue(m_settings.tones[i].level);
         slider->setFixedHeight(Ui::px(30));   // match the other sliders
-        slider->setVisible(n > 1);            // per-colour threshold only when multi-colour
 
         if (n > 1) {
             swatch->setFixedWidth(Ui::px(185));
@@ -725,6 +724,11 @@ void TonalControlsWidget::rebuildRows()
             hl->addWidget(slider);   // hidden, takes no space
         }
         rvl->addLayout(hl);
+        // Only AFTER addLayout() does the slider get a parent (hl alone doesn't
+        // reparent — it isn't installed on a widget yet). setVisible(true) on a
+        // still-parentless widget shows it as a top-level window for one
+        // event-loop tick: Windows flashes a tiny popup on every palette rebuild.
+        slider->setVisible(n > 1);   // per-colour threshold only when multi-colour
 
         m_rowsLayout->addWidget(rowWidget);
         m_rows.push_back({ swatch, slider, nullptr, nullptr });

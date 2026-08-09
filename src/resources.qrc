@@ -45,5 +45,10 @@
         <file alias="icons/check.svg">../assets/icons/check.svg</file>
         <file alias="icons/dialog_card.svg">../assets/icons/dialog_card.svg</file>
         <file alias="icons/dialog_card_warning.svg">../assets/icons/dialog_card_warning.svg</file>
+        <file alias="icons/cur_arrow.svg">../assets/icons/cur_arrow.svg</file>
+        <file alias="icons/cur_rotate.svg">../assets/icons/cur_rotate.svg</file>
+        <file alias="icons/cur_scale.svg">../assets/icons/cur_scale.svg</file>
+        <file alias="icons/cur_stretch.svg">../assets/icons/cur_stretch.svg</file>
+        <file alias="icons/cur_window.svg">../assets/icons/cur_window.svg</file>
 </qresource>
 </RCC>

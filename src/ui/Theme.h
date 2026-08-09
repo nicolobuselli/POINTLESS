@@ -57,6 +57,7 @@ inline const QColor kColBgWindow  {"#1E1E1E"};
 inline const QColor kColBgPanel   {"#272727"};
 inline const QColor kColSurface2  {"#3B3B3B"};   // hairlines, flat dark chrome
 inline const QColor kColBoxStroke {"#3D3D3D"};   // default box border
+inline const QColor kColBoxStrokeActive {"#45556C"}; // box border while editing / text selection
 inline const QColor kColPopupBorder {"#5D5D5D"}; // floating popup/panel border
 
 inline const QColor kColTextBody  {"#E3E3E3"};

@@ -54,7 +54,7 @@ class AddImageButton : public QAbstractButton {
 public:
     explicit AddImageButton(QWidget* parent = nullptr) : QAbstractButton(parent) {
         setFixedSize(Ui::px(96), Ui::px(96));
-        setCursor(Qt::PointingHandCursor);
+        setCursor(appCursor());
         setToolTip("Import images");
     }
 
@@ -94,7 +94,7 @@ class ImportCTAButton : public QAbstractButton {
 public:
     explicit ImportCTAButton(QWidget* parent = nullptr) : QAbstractButton(parent) {
         setFixedSize(Ui::px(145), qRound(Ui::px(145) * 118.0 / 349.0));
-        setCursor(Qt::PointingHandCursor);
+        setCursor(appCursor());
     }
 
 protected:
@@ -140,7 +140,7 @@ public:
     FilmstripThumb(int mediaId, const QImage& source, const QString& name, QWidget* parent = nullptr)
         : QWidget(parent), m_mediaId(mediaId), m_name(name), m_source(source)
     {
-        setCursor(Qt::PointingHandCursor);
+        setCursor(appCursor());
         setMouseTracking(true);
         setToolTip(name);
     }

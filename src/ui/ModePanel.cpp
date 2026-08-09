@@ -221,7 +221,7 @@ public:
         if (collapsible) {
             m_toggle = new QPushButton;
             m_toggle->setObjectName("iconBtn");
-            m_toggle->setCursor(Qt::PointingHandCursor);
+            m_toggle->setCursor(appCursor());
             // Icon size derived from the button size, not scaled independently
             // (see makeIconButton) — keeps the button-minus-icon gap even so
             // the glyph centres exactly instead of drifting a px to one side.
@@ -262,7 +262,7 @@ public:
     {
         auto* b = new QPushButton;
         b->setObjectName("iconBtn");
-        b->setCursor(Qt::PointingHandCursor);
+        b->setCursor(appCursor());
         const int btnPx = Ui::px(26);
         const int pad   = Ui::px(5);
         b->setFixedSize(btnPx, btnPx);
@@ -350,7 +350,7 @@ public:
         auto* dot = new QPushButton(m_page);
         dot->setObjectName("locDot");
         dot->setCheckable(true);
-        dot->setCursor(Qt::PointingHandCursor);
+        dot->setCursor(appCursor());
         dot->setToolTip(QString("Localize %1 — drag the point on canvas; scroll inside its "
                                 "circle to set the intensity (H hides the overlay)")
                             .arg(QString::fromUtf8(locParamLabel(p)).toLower()));
@@ -720,7 +720,7 @@ private:
         gl->addStretch(1);
         slot.minusBtn = new QPushButton;
         slot.minusBtn->setObjectName("iconBtn");
-        slot.minusBtn->setCursor(Qt::PointingHandCursor);
+        slot.minusBtn->setCursor(appCursor());
         slot.minusBtn->setFixedSize(Ui::px(26), Ui::px(26));
         slot.minusBtn->setIcon(QIcon(":/icons/minus.svg"));
         slot.minusBtn->setIconSize(QSize(Ui::px(16), Ui::px(16)));
@@ -753,7 +753,7 @@ private:
 
         slot.svgBtn = new QPushButton;
         slot.svgBtn->setObjectName("accentBtn");                // orange (colour via QSS)
-        slot.svgBtn->setCursor(Qt::PointingHandCursor);
+        slot.svgBtn->setCursor(appCursor());
         // Pin the height to match the name box: #accentBtn carries a literal
         // min-height:40px (unscaled) that would otherwise mis-size it.
         slot.svgBtn->setStyleSheet(QString("min-height:%1px; max-height:%1px;").arg(Ui::px(Ui::kBoxH)));
@@ -1011,7 +1011,7 @@ public:
 
                 m_patternBtn = new QPushButton;
                 m_patternBtn->setObjectName("accentBtn");
-                m_patternBtn->setCursor(Qt::PointingHandCursor);
+                m_patternBtn->setCursor(appCursor());
                 m_patternBtn->setStyleSheet(
                     QString("min-height:%1px; max-height:%1px;").arg(Ui::px(Ui::kBoxH)));
                 m_patternBtn->setFixedHeight(Ui::px(Ui::kBoxH));
@@ -1549,7 +1549,7 @@ public:
 
     TextColorSwatch(QWidget* parent = nullptr) : QPushButton(parent)
     {
-        setCursor(Qt::PointingHandCursor);
+        setCursor(appCursor());
         // Same width as a SliderRow's value cell (kCellW), so a Texts row's
         // [text | swatch] lines up exactly with the Rotation row's
         // [slider | value] above it — same right edge, same gap.
@@ -2233,7 +2233,7 @@ ModePanel::ModePanel(QWidget* parent)
         // place it past the layout's own right margin.
         auto* clearBtn = new QPushButton(modeRow);
         clearBtn->setObjectName("iconBtn");
-        clearBtn->setCursor(Qt::PointingHandCursor);
+        clearBtn->setCursor(appCursor());
         {
             const int btnPx = Ui::px(26);
             const int pad   = Ui::px(5);

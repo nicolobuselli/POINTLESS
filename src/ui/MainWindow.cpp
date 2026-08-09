@@ -96,19 +96,37 @@ QImage placeOnFramePreview(const QImage& layerImg, const LayerTransform& tf, QSi
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    const double s  = qMax(0.0001, double(tf.scalePct) / 100.0);
+    const LayerScaleXY s = layerScaleXY(tf);
     const double cx = frame.width()  * 0.5 + double(tf.xPct) * frame.width();
     const double cy = frame.height() * 0.5 + double(tf.yPct) * frame.height();
 
     QTransform m;
     m.translate(cx, cy);
     m.rotate(tf.rotation);
-    m.scale(s * (tf.flipH ? -1.0 : 1.0), s * (tf.flipV ? -1.0 : 1.0));
+    m.scale(s.x * (tf.flipH ? -1.0 : 1.0), s.y * (tf.flipV ? -1.0 : 1.0));
     m.translate(-layerImg.width() * 0.5, -layerImg.height() * 0.5);
     p.setTransform(m);
     p.drawImage(0, 0, layerImg);
     return placed;
 }
+
+// Host that clips its single child instead of squashing it. The child keeps at
+// least its natural (minimumSizeHint) height and is anchored to the top, so
+// dragging the bottom panel closed slides its content off the bottom edge
+// rather than compressing rows/buttons on the way down.
+class ClipHost : public QWidget {
+public:
+    explicit ClipHost(QWidget* child, QWidget* parent = nullptr)
+        : QWidget(parent), m_child(child) { child->setParent(this); }
+protected:
+    void resizeEvent(QResizeEvent*) override
+    {
+        m_child->setGeometry(0, 0, width(),
+                             qMax(height(), m_child->minimumSizeHint().height()));
+    }
+private:
+    QWidget* m_child;
+};
 } // namespace
 
 // ============================================================
@@ -149,7 +167,7 @@ public:
         auto mkBtn = [&](const QString& icon, const char* obj) {
             auto* b = new QPushButton;
             b->setObjectName(obj);
-            b->setCursor(Qt::PointingHandCursor);
+            b->setCursor(appCursor());
             b->setFixedSize(Ui::px(48), barH);   // full bar height: hover/press fill top-to-bottom
             b->setIcon(QIcon(icon));
             b->setIconSize(QSize(Ui::px(20), Ui::px(20)));
@@ -192,6 +210,9 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowTitle("POINTLESS");
     setWindowIcon(QIcon(":/logo.png"));
     setMinimumSize(1100, 680);
+    // App-wide default cursor: children inherit it unless they set their own
+    // (IBeam in line edits, pointing hand on buttons, the canvas handles).
+    setCursor(appCursor());
 
     // ── Layout ───────────────────────────────────────────────
     auto* central = new QWidget;
@@ -239,7 +260,7 @@ MainWindow::MainWindow(QWidget* parent)
         b->setObjectName("rectTab");
         b->setCheckable(true);
         b->setAutoExclusive(true);
-        b->setCursor(Qt::PointingHandCursor);
+        b->setCursor(appCursor());
     }
     trl->addWidget(tabLibrary);
     trl->addWidget(tabTimeline);
@@ -257,7 +278,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     bp->addWidget(tabRow);
     bp->addWidget(underTabs);
-    bp->addWidget(bottomStack, 1);
+    bp->addWidget(new ClipHost(bottomStack), 1);
 
     // Center column: preview over the bottom panel, vertically resizable.
     auto* centerSplit = new QSplitter(Qt::Vertical);
@@ -345,6 +366,10 @@ MainWindow::MainWindow(QWidget* parent)
     mainSplit->setStretchFactor(2, 0);
     // Start with the side columns at their minimum width (the user can widen).
     mainSplit->setSizes({ Ui::px(410), Ui::px(1738), Ui::px(410) });
+
+    // Panel-resize glyph on every drag handle (Qt's own split cursors otherwise).
+    applySplitterCursors(mainSplit);
+    applySplitterCursors(centerSplit);
 
     hl->addWidget(mainSplit);
     rootV->addWidget(content, 1);
@@ -807,17 +832,11 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         if (event->type() == QEvent::KeyPress) {
             auto* keyEvent = static_cast<QKeyEvent*>(event);
             if (keyEvent->key() == Qt::Key_Space) {
-                // On the timeline, Space toggles playback instead of panning.
-                QWidget* fw = QApplication::focusWidget();
-                if (m_timeline && fw && (fw == m_timeline || m_timeline->isAncestorOf(fw))) {
-                    if (!keyEvent->isAutoRepeat()) m_timeline->togglePlay();
-                    event->accept();
-                    return true;
-                }
-                if (!keyEvent->isAutoRepeat()) {
-                    m_spaceDown = true;
-                    updatePreviewInteractionState();
-                }
+                // Timeline tab open (not the Library, not collapsed): Space is
+                // play/pause wherever the focus happens to be — and a no-op
+                // otherwise (it used to arm canvas panning).
+                if (m_timeline && m_timeline->isVisible() && !keyEvent->isAutoRepeat())
+                    m_timeline->togglePlay();
                 event->accept();
                 return true;
             }
@@ -848,13 +867,9 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             }
         } else if (event->type() == QEvent::KeyRelease) {
             auto* keyEvent = static_cast<QKeyEvent*>(event);
-            if (!keyEvent->isAutoRepeat()) {
-                if (keyEvent->key() == Qt::Key_Space) {
-                    m_spaceDown = false;
-                    updatePreviewInteractionState();
-                    event->accept();
-                    return true;
-                }
+            if (keyEvent->key() == Qt::Key_Space) {
+                event->accept();
+                return true;
             }
         }
     }
@@ -1055,7 +1070,7 @@ void MainWindow::commitStructuralChange()
     m_playCacheValid = false;
     auto& st = m_images[m_current].state;
     regroupLayers(st);
-    if (findLayerById(st.layers, st.activeLayerId) < 0)
+    if (st.activeLayerId >= 0 && findLayerById(st.layers, st.activeLayerId) < 0)
         st.activeLayerId = st.layers.empty() ? -1 : st.layers.front().id;
     syncBoardSource(m_images[m_current]);
     applyParams(st);
@@ -1102,15 +1117,18 @@ void MainWindow::applyParams(const SessionParams& p)
                          p.frameH > 0 ? p.frameH : 1080);
     m_right->setBackground(p.background, p.backgroundOpacity);
 
+    // activeLayerId == -1 is a deliberate "nothing selected" (click on empty
+    // canvas): leave the panels without a target instead of silently falling
+    // back to the first layer. The fallback only covers a stale id.
     int idx = findLayerById(p.layers, p.activeLayerId);
-    if (idx < 0 && !p.layers.empty()) idx = 0;
+    if (idx < 0 && p.activeLayerId >= 0 && !p.layers.empty()) idx = 0;
     if (idx < 0) { pushPreviewTransform(); refreshAnimationIndicators(); return; }
 
     m_selectedParentMediaId = -1;   // panels now follow a concrete child again
 
     const Layer& l = p.layers[idx];
     m_left->setAdjustments(l.adjustments);
-    m_left->setTransform(l.transform);   // boxes follow the active layer
+    m_left->setTransform(l.transform, layerNativeSize(l));   // boxes follow the active layer
     pushPreviewTransform();              // overlay follows the active layer
 
     // "Localize" button follows the active layer's own mask point.
@@ -1133,7 +1151,10 @@ void MainWindow::syncLayersPanel()
     if (m_current < 0) return;
     SessionImage& board = m_images[m_current];
     auto& st = board.state;
-    if (findLayerById(st.layers, st.activeLayerId) < 0 && !st.layers.empty())
+    // Only repair a stale id (its layer is gone); -1 means "nothing selected"
+    // on purpose and must survive.
+    if (st.activeLayerId >= 0 && findLayerById(st.layers, st.activeLayerId) < 0
+        && !st.layers.empty())
         st.activeLayerId = st.layers[0].id;
 
     // Nothing to add a layer to once the last one's gone (e.g. its source
@@ -1310,7 +1331,20 @@ void MainWindow::syncTimeline()
             const int len = it->frames.size();
             TimelineWidget::ClipRow c;
             c.mediaId = g.mediaId;
+            // The clip bar is the layer's presence in time, so it carries the
+            // layer's (possibly renamed) name — not the source file's. With more
+            // than one layer on the same clip there is no single name to show,
+            // so the group name stands in.
             c.name    = g.name;
+            {
+                const Layer* only = nullptr;
+                for (const Layer& l : img.state.layers) {
+                    if (l.mediaId != g.mediaId) continue;
+                    if (only) { only = nullptr; break; }   // more than one → keep group name
+                    only = &l;
+                }
+                if (only) c.name = only->name;
+            }
             c.length  = len;
             c.trimIn  = qBound(0, g.trimIn, len - 1);
             c.trimOut = (g.trimOut < 0) ? len - 1 : qBound(c.trimIn, g.trimOut, len - 1);
@@ -1318,12 +1352,17 @@ void MainWindow::syncTimeline()
             clips.append(c);
         }
     }
-    // layerId → mediaId, so a keyframe track can nest under its clip's row.
-    QHash<int, int> layerMedia;
+    // layerId → mediaId, so a keyframe track can nest under its clip's row;
+    // layerId → name, so a still-image layer (no clip bar) still gets a header
+    // row of its own with its tracks nested under it.
+    QHash<int, int>     layerMedia;
+    QHash<int, QString> layerNames;
     if (m_current >= 0)
-        for (const Layer& l : m_images[m_current].state.layers)
+        for (const Layer& l : m_images[m_current].state.layers) {
             layerMedia.insert(l.id, l.mediaId);
-    m_timeline->setClips(clips, layerMedia);
+            layerNames.insert(l.id, l.name.isEmpty() ? layerKindName(l.kind) : l.name);
+        }
+    m_timeline->setClips(clips, layerMedia, layerNames);
 
     refreshAnimationIndicators();
 }
@@ -1518,7 +1557,7 @@ void MainWindow::selectLayerInternal(int layerId, bool makeVisible)
     m_undoTimer.start();
 }
 
-// Auto layer names are "<source>.<mode>" (e.g. "example.ascii"): source = the
+// Auto layer names are "<source>_<mode>" (e.g. "example_ascii"): source = the
 // parent group's name without extension, mode = the lowercase kind. When the
 // name is already taken, 1, 2, 3… is appended.
 QString MainWindow::uniqueLayerName(const SessionParams& p, LayerKind kind, int mediaId) const
@@ -1527,7 +1566,7 @@ QString MainWindow::uniqueLayerName(const SessionParams& p, LayerKind kind, int 
     const int pi = findParentByMedia(p.parents, mediaId);
     if (pi >= 0) src = QFileInfo(p.parents[pi].name).completeBaseName();
     if (src.isEmpty()) src = QStringLiteral("layer");
-    const QString base = src + "." + layerKindName(kind).toLower();
+    const QString base = src + "_" + layerKindName(kind).toLower();
 
     auto exists = [&p](const QString& name) {
         for (const Layer& l : p.layers)
@@ -1544,7 +1583,7 @@ QString MainWindow::uniqueLayerName(const SessionParams& p, LayerKind kind, int 
 }
 
 // Duplicating a layer keeps the source's (possibly user-renamed) name instead
-// of regenerating "<source>.<mode>" from scratch, so a rename survives its
+// of regenerating "<source>_<mode>" from scratch, so a rename survives its
 // copies: "sunset" → "sunset_1", "sunset_2"…
 QString MainWindow::uniqueDuplicateName(const SessionParams& p, const QString& baseName) const
 {
@@ -1683,6 +1722,7 @@ void MainWindow::onLayerRenamed(int layerId, const QString& name)
     if (idx < 0) return;
     layers[idx].name = name;
     syncLayersPanel();
+    syncTimeline();     // the clip row is labelled with this layer's name
     m_undoTimer.start();
 }
 
@@ -1769,7 +1809,7 @@ void MainWindow::onLayerTransformChanged(const LayerTransform& t)
     l->transform = t;
     autoKeyTransform(l->id, old, t);   // cheap: just upserts a float; no-op unless keyed already or Auto Key is on
     m_playCacheValid = false;
-    m_left->setTransform(t);   // keep the numeric boxes in sync (silent)
+    m_left->setTransform(t, layerNativeSize(*l));   // keep the numeric boxes in sync (silent)
     pushPreviewTransform();
     // During a live canvas drag, only the cheap interactive pass runs (the full
     // pass is deferred to drag end) — re-rendering the whole document, and the
@@ -1878,7 +1918,7 @@ void MainWindow::onGroupTransformChanged(const QHash<int, LayerTransform>& byId)
     if (!any) return;
 
     m_playCacheValid = false;
-    if (const Layer* l = activeLayer()) m_left->setTransform(l->transform);
+    if (const Layer* l = activeLayer()) m_left->setTransform(l->transform, layerNativeSize(*l));
     pushPreviewTransform();
     const bool preview = m_transformDragging && !m_preview->isSnapped();
     scheduleRender(preview);
@@ -1972,10 +2012,15 @@ void MainWindow::onCanvasSelectionChanged(const QSet<int>& ids, int activeId)
     if (m_current < 0) return;
     auto& st = m_images[m_current].state;
     m_selection = ids;
-    // Selecting an image makes it the param-editing target too; deselecting
-    // (empty) leaves the active layer as-is so the panels stay usable.
+    // Selecting an image makes it the param-editing target too; a click on
+    // empty canvas clears the selection AND the active layer, so no row reads
+    // selected in the Layers panel and no parameter shows its animated tint —
+    // a tinted box with nothing selected says nothing about which layer it
+    // belongs to.
     if (activeId >= 0 && findLayerById(st.layers, activeId) >= 0)
         st.activeLayerId = activeId;
+    else if (activeId < 0 && ids.isEmpty())
+        st.activeLayerId = -1;
 
     applyParams(st);      // refresh panels + pushPreviewTransform (pushes selection)
     // Highlight-only: a canvas click never touches a layer's pixels, so a full
@@ -2199,6 +2244,7 @@ void MainWindow::onParentRenamed(int mediaId, const QString& name)
     if (pi < 0) return;
     parents[pi].name = name;
     syncLayersPanel();
+    syncTimeline();     // multi-layer clips are labelled with the group name
     m_undoTimer.start();
 }
 
@@ -2257,7 +2303,7 @@ void MainWindow::onDeleteParentRequested(int mediaId)
                     st.layers.end());
     st.parents.erase(st.parents.begin() + pi);
 
-    if (findLayerById(st.layers, st.activeLayerId) < 0)
+    if (st.activeLayerId >= 0 && findLayerById(st.layers, st.activeLayerId) < 0)
         st.activeLayerId = st.layers.empty() ? -1 : st.layers.front().id;
     syncBoardSource(board);
     commitStructuralChange();
@@ -2951,7 +2997,7 @@ void MainWindow::onThumbCloseRequested(int mediaId)
     board.media.remove(mediaId);
     m_filmstrip->removeThumb(mediaId);
 
-    if (findLayerById(st.layers, st.activeLayerId) < 0)
+    if (st.activeLayerId >= 0 && findLayerById(st.layers, st.activeLayerId) < 0)
         st.activeLayerId = st.layers.empty() ? -1 : st.layers.front().id;
     syncBoardSource(board);
     commitStructuralChange();

@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QLineEdit>
 #include <QColor>
+#include <QCursor>
 #include <QVariant>
 #include <QVector>
 #include <QElapsedTimer>
@@ -16,6 +17,7 @@
 #include <array>
 
 class QResizeEvent;
+class QSplitter;
 
 // ============================================================
 //  Shared custom widgets for POINTLESS panels.
@@ -398,6 +400,21 @@ QLabel*      makeParamLabel(const QString& text);
 QLabel*      makeSectionTitle(const QString& text);
 QFrame*      makeSeparatorLine();
 QPushButton* makeIconButton(const QString& iconRes);
+
+// ── Cursors ──────────────────────────────────────────────────
+// Custom SVG glyphs (Qt has no rotate/stretch shapes). `appCursor` is set on
+// the main window so it replaces the system arrow everywhere; widgets that
+// want something else (IBeam, pointing hand) still override it locally.
+const QCursor& appCursor();
+// Rotate glyph, turned a quarter per corner (dx/dy = which corner) plus the
+// layer's own rotation.
+const QCursor& rotateCursor(int dx, int dy, double rotationDeg);
+// Scale (corner, `stretch=false`) / stretch (edge) glyph spun to the handle's
+// outward direction dx/dy once the layer's own rotation is folded in.
+const QCursor& handleCursor(int dx, int dy, double rotationDeg, bool stretch);
+// Panel/splitter resize glyph.
+const QCursor& resizeCursor(bool vertical);
+void applySplitterCursors(QSplitter* sp);
 
 // Control name + its control, stacked with the standard tight gap
 // (Ui::kGapLabelToCtrl). Add the result to a body layout whose spacing is
