@@ -2443,6 +2443,14 @@ ModePanel::ModePanel(QWidget* parent)
     // Before any layer/image exists (or import), match the no-mode state
     // setFromLayer() would apply for an Original layer — otherwise the panel
     // sits at its construction-time defaults (Dot Grid) with nothing behind it.
+    clearLayer();
+}
+
+// Nothing selected: the panel has no layer to describe, so no mode may read as
+// active — the picker falls back to its placeholder and every mode page hides.
+void ModePanel::clearLayer()
+{
+    m_updating = true;
     m_modePick->setPlaceholder("Select mode…");
     m_dotGridPage->setVisible(false);
     m_ditherPage->setVisible(false);
@@ -2453,6 +2461,7 @@ ModePanel::ModePanel(QWidget* parent)
     m_noModeSection->setVisible(true);
     m_clearModeBtn->setVisible(false);
     m_fillSection->setVisible(false);
+    m_updating = false;
 }
 
 // ── Fill / Background / source ───────────────────────────────

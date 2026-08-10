@@ -58,6 +58,7 @@ public:
 
     void setFromLayer(const Layer& layer);   // silent
     void setMode(RenderMode m);              // silent: updates picker + visible page
+    void clearLayer();                       // silent: nothing selected → no active mode
 
     // Localization points: kept in sync with the Layer so the settings()
     // getters round-trip them faithfully (they are edited on-canvas).

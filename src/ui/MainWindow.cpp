@@ -1128,7 +1128,12 @@ void MainWindow::applyParams(const SessionParams& p)
     // back to the first layer. The fallback only covers a stale id.
     int idx = findLayerById(p.layers, p.activeLayerId);
     if (idx < 0 && p.activeLayerId >= 0 && !p.layers.empty()) idx = 0;
-    if (idx < 0) { pushPreviewTransform(); refreshAnimationIndicators(); return; }
+    if (idx < 0) {
+        m_right->clearLayer();   // no layer → no mode may read as active
+        pushPreviewTransform();
+        refreshAnimationIndicators();
+        return;
+    }
 
     m_selectedParentMediaId = -1;   // panels now follow a concrete child again
 
