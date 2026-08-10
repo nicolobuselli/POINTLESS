@@ -1834,6 +1834,9 @@ void installOverlayScrollbar(QAbstractScrollArea* area)
 // ============================================================
 
 namespace {
+// When any popup last closed — see popupJustClosed() in Widgets.h.
+QElapsedTimer g_popupClosed;
+
 // Reports when the popup closes, so the toggle button can tell "outside
 // click closed me" apart from "user wants me open again".
 class PopupPickerFrame : public QFrame {
@@ -1841,9 +1844,19 @@ public:
     std::function<void()> onHide;
     using QFrame::QFrame;
 protected:
-    void hideEvent(QHideEvent* e) override { QFrame::hideEvent(e); if (onHide) onHide(); }
+    void hideEvent(QHideEvent* e) override
+    {
+        QFrame::hideEvent(e);
+        g_popupClosed.start();
+        if (onHide) onHide();
+    }
 };
 } // namespace
+
+bool popupJustClosed(int withinMs)
+{
+    return g_popupClosed.isValid() && g_popupClosed.elapsed() < withinMs;
+}
 
 PopupPicker::PopupPicker(int columns, QWidget* parent)
     : QPushButton(parent), m_columns(columns)

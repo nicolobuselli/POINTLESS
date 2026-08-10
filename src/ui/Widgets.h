@@ -401,6 +401,15 @@ QLabel*      makeSectionTitle(const QString& text);
 QFrame*      makeSeparatorLine();
 QPushButton* makeIconButton(const QString& iconRes);
 
+// ── Popup click-through guard ────────────────────────────────
+// Qt closes a Qt::Popup on a press outside it and then REPLAYS that press to
+// the widget underneath (qt_replay_popup_mouse_event). A popup that floats
+// over the canvas (every PopupPicker in the right column does) would therefore
+// have its dismissing click land on the canvas as a real click. Any widget
+// whose click has side effects — the canvas clearing the selection — must skip
+// a press that arrives right after a popup closed.
+bool popupJustClosed(int withinMs = 250);
+
 // ── Cursors ──────────────────────────────────────────────────
 // Custom SVG glyphs (Qt has no rotate/stretch shapes). `appCursor` is set on
 // the main window so it replaces the system arrow everywhere; widgets that

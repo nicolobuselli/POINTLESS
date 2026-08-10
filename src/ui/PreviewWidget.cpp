@@ -571,6 +571,13 @@ void PreviewWidget::wheelEvent(QWheelEvent* event)
 
 void PreviewWidget::mousePressEvent(QMouseEvent* event)
 {
+    // A popup (mode picker, Algorithm, colour picker…) floats over the canvas,
+    // and Qt replays the press that dismissed it to the widget underneath —
+    // which lands here as a click on empty canvas and would clear the whole
+    // selection. Interacting with a popup must never deselect the image, so
+    // swallow that replayed press.
+    if (popupJustClosed()) { event->accept(); return; }
+
     m_snapped = false;   // cleared here; Move drags re-derive it every move
     m_gestureMoved = false;   // set true once the mouse clears the jitter threshold below
     m_pressPos = event->position();
