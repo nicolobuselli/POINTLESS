@@ -542,7 +542,7 @@ bool DitherRenderer::gpuRenderable(const DitherSettings& s)
     if (!(isOrdered(s.algorithm) || isThreshold(s.algorithm))) return false;
     if (!s.tonal.enabled) return false;                  // Fill "−": layer paints nothing
     if (s.tonal.mode == ToneMode::Palette) return false; // OkLab nearest-match: CPU
-    if (s.cornerRadius > 0.0f && qBound(1, s.pixelSize, 100) > 1)
+    if (s.cornerRadius > 0.0f && clampPixelSize(s.pixelSize) > 1)
         return false;                                    // QPainter connected rounding
     if (s.tonal.mode == ToneMode::FixedTones) {
         const int nT = int(s.tonal.tones.size());
@@ -652,7 +652,7 @@ QImage DitherRenderer::render(const QImage& input, const DitherSettings& s)
 {
     if (input.isNull()) return {};
 
-    const int ps = qBound(1, s.pixelSize, 100);
+    const int ps = clampPixelSize(s.pixelSize);
     QImage work = input;
     if (ps > 1) {
         work = input.scaled(qMax(1, input.width()  / ps),
@@ -794,7 +794,7 @@ int DitherRenderer::paintMergedRects(const QImage& input, const DitherSettings& 
 
     // Build the quantised grid at cell resolution (the small image, before the
     // block upscale render() does), so each pixel here is exactly one cell.
-    const int ps = qBound(1, s.pixelSize, 100);
+    const int ps = clampPixelSize(s.pixelSize);
     QImage work = input;
     if (ps > 1)
         work = input.scaled(qMax(1, input.width() / ps), qMax(1, input.height() / ps),

@@ -271,7 +271,7 @@ const AsciiGpuAtlas& AsciiRenderer::gpuAtlas(const AsciiSettings& s)
     // would then stop growing with the slider well short of its max, freezing
     // the on-screen glyph size (reported: authored cellSize 38 already hit a
     // 128 cap here after ~3.7x compensation from a large-photo/small-frame doc).
-    const int     cellH   = qBound(3, s.cellSize, 512);
+    const int     cellH   = qBound(3, s.cellSize, 4096);
     const QFont   font    = settingsFont(s, cellH);
     const QString charset = s.effectiveCharset();
     const QFontMetricsF fm(font);
@@ -354,7 +354,7 @@ void AsciiRenderer::render(const QImage& input, QPainter& output,
     const int imgW  = rgb.width();
     const int imgH  = rgb.height();
     // 512 not the slider's 4..100 — see gpuAtlas's identical clamp above.
-    const int cellH = qBound(3, params.cellSize, 512);
+    const int cellH = qBound(3, params.cellSize, 4096);
 
     const QFont font = settingsFont(params, cellH);
 

@@ -485,6 +485,15 @@ struct DitherSettings {
     TonalSettings tonal { ToneMode::ImageColors, defaultAccentTones(1) };
 };
 
+// Working-raster clamp for DitherSettings::pixelSize — NOT the UI range.
+// pixelSize is authored in FRAME px and then divided by the layer's placement
+// scale (compensateSymbolScale, RenderWorker): a photo fitted into the frame at
+// 0.35× turns a UI value of 35 into 100 working px. Clamping the working value
+// at the UI maximum (100) therefore froze the effect at ~35 on any downscaled
+// layer. This guard only exists to reject absurd values, so it keeps headroom
+// for the largest sane downscale.
+inline int clampPixelSize(int ps) { return qBound(1, ps, 4096); }
+
 inline bool operator==(const DitherSettings& a, const DitherSettings& b) {
     return a.algorithm == b.algorithm && a.bayerSize == b.bayerSize
         && a.pixelSize == b.pixelSize && a.strength == b.strength

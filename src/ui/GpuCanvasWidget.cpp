@@ -222,7 +222,7 @@ void fillDitherParams(float* u, const GpuLayer& l, int maskW, int maskH)
     const DitherSettings& s = l.ditherSettings;
     const float cw = float(l.contentSize.width());
     const float ch = float(l.contentSize.height());
-    const int   ps = qBound(1, s.pixelSize, 100);
+    const int   ps = clampPixelSize(s.pixelSize);
     // CPU cell grid: work = input.scaled(size/ps) → floor division, min 1.
     const float cellsW = qMax(1.0f, std::floor(cw / float(ps)));
     const float cellsH = qMax(1.0f, std::floor(ch / float(ps)));

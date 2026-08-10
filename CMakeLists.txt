@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(POINTLESS VERSION 1.2.2 LANGUAGES CXX)
+project(POINTLESS VERSION 1.2.3 LANGUAGES CXX)
 
 # ── C++ standard ────────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD 17)
