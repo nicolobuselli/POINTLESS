@@ -150,8 +150,6 @@ public:
         setFixedHeight(barH);
 
         auto* hl = new QHBoxLayout(this);
-        // Left gutter 40 = left column gutter. Right = 0: close button sits
-        // flush against the window's right edge.
         hl->setContentsMargins(Ui::px(Ui::kColLeft), 0, 0, 0);
         hl->setSpacing(0);
 
@@ -162,13 +160,20 @@ public:
         logo->setPixmap(QIcon(":/logo_wordmark.svg").pixmap(QSize(lw, lh)));
         logo->setAttribute(Qt::WA_TransparentForMouseEvents);  // drag through it
         hl->addWidget(logo);
-        hl->addStretch(1);
+
+        // Keep a real caption target between the wordmark and the window
+        // controls.  A plain stretch may legally collapse to zero when the
+        // window is narrower than the layout's size hint, leaving no place
+        // from which Windows can start a native move.
+        hl->addSpacerItem(new QSpacerItem(Ui::px(120), 0,
+                                           QSizePolicy::Expanding,
+                                           QSizePolicy::Minimum));
 
         auto mkBtn = [&](const QString& icon, const char* obj) {
             auto* b = new QPushButton;
             b->setObjectName(obj);
             b->setCursor(appCursor());
-            b->setFixedSize(Ui::px(48), barH);   // full bar height: hover/press fill top-to-bottom
+            b->setFixedSize(Ui::px(64), barH);   // equal centred hover areas for all window controls
             b->setIcon(QIcon(icon));
             b->setIconSize(QSize(Ui::px(20), Ui::px(20)));
             return b;
@@ -209,7 +214,7 @@ MainWindow::MainWindow(QWidget* parent)
 {
     setWindowTitle("POINTLESS");
     setWindowIcon(QIcon(":/logo.png"));
-    setMinimumSize(1100, 680);
+    setMinimumHeight(680);
     // App-wide default cursor: children inherit it unless they set their own
     // (IBeam in line edits, pointing hand on buttons, the canvas handles).
     setCursor(appCursor());
@@ -375,6 +380,22 @@ MainWindow::MainWindow(QWidget* parent)
     rootV->addWidget(content, 1);
 
     setCentralWidget(central);
+
+    // QSplitter never shrinks a child below its minimum size.  The previous
+    // hard-coded 1100 px window minimum could nevertheless be smaller than
+    // the two scaled side-panel minima plus the canvas (especially on a
+    // high-DPI screen).  Windows then resized the outer window while Qt kept
+    // the children wider, clipping the panels and making splitter borders
+    // appear in the middle of their content.  Use the constructed layout's
+    // actual minimum, with an 800 px compact-window floor.
+    // QSplitter::minimumSizeHint() does not reliably include the sum of all
+    // child minima, so calculate the horizontal contract explicitly.
+    const int centerMinW = qMax(m_preview->minimumWidth(),
+                                centerSplit->minimumSizeHint().width());
+    const int contentMinW = m_left->minimumWidth() + centerMinW
+                          + m_right->minimumWidth()
+                          + 2 * mainSplit->handleWidth();
+    setMinimumWidth(qMax(800, contentMinW));
 
     qApp->installEventFilter(this);
 
@@ -708,6 +729,15 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         if (::GetMonitorInfoW(mon, &mi)) {
             const RECT wk = mi.rcWork, mr = mi.rcMonitor;
             auto* mmi = reinterpret_cast<MINMAXINFO*>(msg->lParam);
+            const qreal dpr = ::GetDpiForWindow(msg->hwnd) / 96.0;
+            // This handler returns the message as fully handled, so mirror
+            // QWidget's logical minimum into Win32's physical track size.
+            // Without it Windows can resize our frameless window below Qt's
+            // layout contract and the splitter children are simply clipped.
+            mmi->ptMinTrackSize.x = qMin<LONG>(wk.right - wk.left,
+                                               qCeil(minimumWidth() * dpr));
+            mmi->ptMinTrackSize.y = qMin<LONG>(wk.bottom - wk.top,
+                                               qCeil(minimumHeight() * dpr));
             mmi->ptMaxPosition.x  = wk.left - mr.left;    // taskbar offset within monitor
             mmi->ptMaxPosition.y  = wk.top  - mr.top;
             mmi->ptMaxSize.x      = wk.right  - wk.left;
@@ -745,9 +775,8 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
             if (B)      { *result = HTBOTTOM;      return true; }
         }
         // Over the custom caption (but not its buttons) → native drag/snap.
-        // The vertical/horizontal band is derived from the window's own
-        // just-queried rect (w) and the same design-scale formula Ui::px()
-        // uses, NOT from m_titleBar->height()/width()/mapFromGlobal(): those
+        // The horizontal bounds are derived from the window's just-queried
+        // rect (w), NOT from m_titleBar->width()/mapFromGlobal(): those
         // route through Qt's cached widget-layout geometry, which can lag a
         // live resize/maximize by a frame (confirmed by logging — a stale
         // rect once reported 960x28 at (50,176) while the real window was
@@ -760,7 +789,10 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
         // data fetched in this exact call can't ever be stale.
         if (m_titleBar) {
             const double winWidthLogical = (w.right - w.left) / dpr;
-            const int titleH = qRound(44.0 * (winWidthLogical / Ui::kDesignWidth));
+            // Match WinTitleBar's fixed logical height.  Scaling this from the
+            // current window width made the draggable strip progressively
+            // thinner while the visible title bar itself stayed unchanged.
+            const int titleH = Ui::px(44);
             const int localX = qRound((gx - w.left) / dpr);
             const int localY = qRound((gy - w.top)  / dpr);
             if (localY >= 0 && localY < titleH

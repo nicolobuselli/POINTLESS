@@ -2189,7 +2189,7 @@ ModePanel::ModePanel(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName("sidePanel");
-    setMinimumWidth(Ui::px(370));   // gutter shrank 40→20→60, columns tightened 10px more
+    setMinimumWidth(Ui::px(310));   // compact window: controls still fit above the 800px floor
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);

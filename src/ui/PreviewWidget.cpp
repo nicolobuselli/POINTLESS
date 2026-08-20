@@ -87,7 +87,9 @@ PreviewWidget::PreviewWidget(QWidget* parent)
     : QWidget(parent)
 {
     setAcceptDrops(true);
-    setMinimumSize(300, 200);
+    // At the compact 800 px window floor the canvas is the expendable column:
+    // let it collapse completely while preserving the two control panels.
+    setMinimumSize(0, 200);
     setAttribute(Qt::WA_OpaquePaintEvent);
     setFocusPolicy(Qt::StrongFocus);   // needed for Backspace to delete a selected loc dot
     setMouseTracking(true);            // hover-grow the passive loc dot without a button held
