@@ -408,7 +408,14 @@ protected:
         if (m_moveClip >= 0) {
             TimelineWidget::ClipRow& c = m_owner->m_clips[m_moveClip];
             const int span = m_owner->dispEndFrame() - m_owner->m_anim.frameStart;
-            c.offset = qBound(0, m_moveOrigOff + xToFrame(e->pos().x()) - m_moveRefFrm, span);
+            // Keep at least one trimmed frame at/after the timeline start, but
+            // allow the clip to begin before it.  A negative offset is how a
+            // source frame such as 18 can line up with timeline frame 0 while
+            // its preceding frames remain available before zero.
+            const int minOffset = -c.trimOut;
+            c.offset = qBound(minOffset,
+                              m_moveOrigOff + xToFrame(e->pos().x()) - m_moveRefFrm,
+                              span);
             emitClip(c);
             return;
         }

@@ -1371,7 +1371,10 @@ void MainWindow::syncTimeline()
             c.length  = len;
             c.trimIn  = qBound(0, g.trimIn, len - 1);
             c.trimOut = (g.trimOut < 0) ? len - 1 : qBound(c.trimIn, g.trimOut, len - 1);
-            c.offset  = qMax(0, g.timeOffset);   // qMax, not std::max: windows.h's max macro breaks MSVC
+            // Negative offsets are intentional: they let clip-local frames
+            // before the chosen start point run before timeline frame 0, so
+            // frame 0 can show (for example) source frame 18.
+            c.offset  = g.timeOffset;
             clips.append(c);
         }
     }
@@ -3037,8 +3040,7 @@ void MainWindow::onExport()
         return;
     }
 
-    const QImage&       source = m_images[m_current].source;
-    const SessionParams params = m_images[m_current].state;
+    const SessionImage& img = m_images[m_current];
 
     QString format = m_right->outputFormat().toLower();
     QString name   = m_images[m_current].title.trimmed();   // from the title top-left
@@ -3065,7 +3067,22 @@ void MainWindow::onExport()
         this, "Export", name + "." + format, filter);
     if (savePath.isEmpty()) return;
 
-    QImage canvas = RenderWorker::renderDocument(source, params);
+    // A still-image export is a snapshot of the playhead, just like SVG:
+    // resolve both animated parameters and every video-backed layer at the
+    // exact frame currently displayed instead of rendering the clips' first
+    // source images from the document's base state.
+    const int frame = steppedFrame(img.anim, img.anim.playhead);
+    QImage source = img.source;
+    if (!img.frames.isEmpty()) {
+        const int fi = qBound(0, frame - img.anim.frameStart,
+                              int(img.frames.size()) - 1);
+        source = img.frames[fi];
+    }
+    const SessionParams params = bakeGroupVisibility(img.anim.hasAnimation()
+        ? paramsAtFrame(img.state, img.anim, frame)
+        : img.state, frame);
+    QImage canvas = m_worker->renderDocumentInteractive(
+        source, params, layerSourcesAt(img, frame));
 
     if (format == "jpg") {
         // JPEG has no alpha — flatten on white

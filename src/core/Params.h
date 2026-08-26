@@ -801,7 +801,8 @@ struct ParentGroup {
     int     trimIn       = 0;
     int     trimOut      = -1;
     // Where clip-local frame 0 sits on the timeline, as an offset from
-    // Animation::frameStart (dragging the clip bar sideways).
+    // Animation::frameStart (dragging the clip bar sideways). May be negative
+    // so a later clip frame can coincide with timeline frame 0.
     int     timeOffset   = 0;
 };
 inline bool operator==(const ParentGroup& a, const ParentGroup& b) {

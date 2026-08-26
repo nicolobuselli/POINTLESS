@@ -36,7 +36,7 @@ public:
         int     length  = 0;   // source frames
         int     trimIn  = 0;   // clip-local, inclusive
         int     trimOut = 0;   // clip-local, inclusive
-        int     offset  = 0;   // clip-local frame 0 → this many frames past frameStart
+        int     offset  = 0;   // clip-local frame 0 relative to frameStart; may be negative
     };
     // `layerMedia` maps layerId → mediaId, so a keyframe track can be shown
     // nested under the clip row of the video it animates. `layerNames` gives
