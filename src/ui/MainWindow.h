@@ -46,7 +46,11 @@ public:
     // clicking a .less file once file association is registered).
     void openProjectFromPath(const QString& path);
 
+#ifdef POINTLESS_TESTING
+public slots:
+#else
 private slots:
+#endif
     void onParamsChanged();
     void onRenderComplete(QImage result, bool isPreview);
     void onLayersComplete(GpuFramePackage pkg, bool isPreview);
@@ -92,7 +96,11 @@ private slots:
     void redo();
     void copyToClipboard();
 
+#ifdef POINTLESS_TESTING
+public:
+#else
 private:
+#endif
     // A piece of media in the board's library: a still image or a video clip.
     struct MediaClip {
         QString         name;
@@ -207,7 +215,11 @@ protected:
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 #endif
 
+#ifdef POINTLESS_TESTING
+public:
+#else
 private:
+#endif
     ControlsPanel*    m_left        = nullptr;
     ModePanel*        m_right       = nullptr;
     PreviewWidget*    m_preview     = nullptr;

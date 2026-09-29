@@ -4,9 +4,7 @@
 #include "ui/Widgets.h"
 #include "workers/RenderWorker.h"
 #include "gpu/GpuFramePackage.h"
-#define private public
 #include "ui/MainWindow.h"
-#undef private
 #include <cstdio>
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr,"FAILED line %d: %s\n",__LINE__,#x); return 1; } } while(false)
 static void answer(const QString& text) {

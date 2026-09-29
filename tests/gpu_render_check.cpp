@@ -4,9 +4,7 @@
 #include "core/AsciiRenderer.h"
 #include "core/DitherRenderer.h"
 #include "core/MosaicRenderer.h"
-#define private public
 #include "workers/RenderWorker.h"
-#undef private
 #include <cstdio>
 int main(int argc,char**argv) {
  qInstallMessageHandler([](QtMsgType,const QMessageLogContext&,const QString& message){std::fprintf(stderr,"%s\n",qPrintable(message));});

@@ -206,6 +206,7 @@ add_custom_command(TARGET POINTLESS POST_BUILD
     VERBATIM)
 include(CTest)
 if(BUILD_TESTING)
+    target_compile_definitions(pointless_app PUBLIC POINTLESS_TESTING)
     foreach(check document_state_check export_frame_check audit_regression_check)
         add_executable(${check} tests/${check}.cpp)
         target_link_libraries(${check} PRIVATE pointless_app)

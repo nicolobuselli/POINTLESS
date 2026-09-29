@@ -69,7 +69,11 @@ signals:
     void frameSizeChanged(int w, int h);
     void transformChanged(const LayerTransform& t);
 
+#ifdef POINTLESS_TESTING
+public:
+#else
 private:
+#endif
     void  emitTransform(int field = -1);
     void  setDimensions(float scalePct, float aspectPct);   // silent — fills the X/Y px boxes
 

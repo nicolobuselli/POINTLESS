@@ -7,12 +7,10 @@
 #include "ui/FilmstripWidget.h"
 #include "ui/Theme.h"
 #include "core/AsciiRenderer.h"
-#define private public
 #include "workers/RenderWorker.h"
 #include "ui/ControlsPanel.h"
 #include "ui/Widgets.h"
 #include "ui/MainWindow.h"
-#undef private
 #include <cstdio>
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr,"FAILED line %d: %s\n",__LINE__,#x); return 1; } } while(false)
 int main(int argc, char** argv) {

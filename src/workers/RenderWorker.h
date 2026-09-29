@@ -122,14 +122,22 @@ signals:
     void layersComplete(GpuFramePackage pkg, bool isPreview);
     void renderStarted(bool isPreview);
 
+#ifdef POINTLESS_TESTING
+public slots:
+#else
 private slots:
+#endif
     void onFullTimerTimeout();
     void onFastRenderFinished();
     void onFullRenderFinished();
     void onFastPackageFinished();
     void onFullPackageFinished();
 
+#ifdef POINTLESS_TESTING
+public:
+#else
 private:
+#endif
     static SessionParams scaledForPreview(const SessionParams& params, float scale);
 
     // Caches renderLayer()'s output per layer id: position/rotation/flip don't
