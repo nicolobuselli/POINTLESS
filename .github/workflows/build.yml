@@ -29,6 +29,7 @@ jobs:
           # ShaderTools (needed by CMakeLists.txt for the GPU renderer) IS a
           # separate module and must be requested explicitly.
           modules: 'qtshadertools'
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@8c3695d4a4e1ceabf6a74dc6c79681656dc6b74b'
           cache: true
 
       - name: Fetch ffmpeg
