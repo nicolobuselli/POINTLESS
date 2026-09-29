@@ -1287,8 +1287,8 @@ void PreviewWidget::paintGroupHandles(QPainter& p)
         p.drawRect(QRectF(c.x() - h, c.y() - h, 2 * h, 2 * h));
 }
 
-// Everything drawn ON TOP of the image: selection chrome, handles, loc dots,
-// rubber band, status caption. Shared by the CPU paintEvent and (in GPU mode)
+// Everything drawn ON TOP of the image: selection chrome, handles, loc dots
+// and rubber band. Shared by the CPU paintEvent and (in GPU mode)
 // the transparent overlay child, so both paths render identical chrome.
 void PreviewWidget::paintOverlays(QPainter& p)
 {
@@ -1325,13 +1325,6 @@ void PreviewWidget::paintOverlays(QPainter& p)
         }
     }
 
-    // Status caption — bottom-left
-    p.setPen(QColor("#828282"));
-    QFont f = p.font();
-    f.setPointSize(9);
-    p.setFont(f);
-    p.drawText(rect().adjusted(8, 0, -8, -6),
-               Qt::AlignBottom | Qt::AlignLeft, m_status);
 }
 
 void PreviewWidget::paintEvent(QPaintEvent* /*event*/)

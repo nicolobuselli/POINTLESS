@@ -57,7 +57,8 @@ ControlsPanel::ControlsPanel(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName("sidePanel");
-    setMinimumWidth(Ui::px(310));   // compact window: twin boxes still fit above the 800px floor
+    setMinimumWidth(Ui::px(Ui::kLeftPanelMinW));
+    setMaximumWidth(Ui::px(Ui::kSidePanelMaxW));
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -206,7 +207,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
         bl->setContentsMargins(0, 0, 0, 0);
         bl->setSpacing(Ui::px(Ui::kGapRows));
 
-        auto emitTf = [this](int) { if (!m_updating) emitTransform(); };
+        auto emitTf = [this](int field) { return [this, field](int) { if (!m_updating) emitTransform(field); }; };
 
         // ── Position (X / Y px from frame centre) ──
         {
@@ -221,8 +222,8 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             m_tfY = new DragSpinBox("", -8192, 8192, 0);
             m_tfX->setTextLabel("X");
             m_tfY->setTextLabel("Y");
-            m_tfX->onValueChanged = emitTf;
-            m_tfY->onValueChanged = emitTf;
+            m_tfX->onValueChanged = emitTf(0);
+            m_tfY->onValueChanged = emitTf(1);
             posRow->addWidget(m_tfX, 1);
             posRow->addWidget(m_tfY, 1);
             grp->addLayout(posRow);
@@ -240,7 +241,7 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             rotRow->setSpacing(Ui::px(Ui::kGapTwinBoxes));
 
             m_tfRot = new DragSpinBox(":/icons/rotation.svg", -180, 180, 0, QStringLiteral("°"));
-            m_tfRot->onValueChanged = emitTf;
+            m_tfRot->onValueChanged = emitTf(2);
             rotRow->addWidget(m_tfRot, 1);
 
             // Quick-transform box: rotate 90°, mirror-x, mirror-y — three equal
@@ -274,16 +275,17 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             auto* rot90 = makeQuickBtn(":/icons/rotate90.svg", "Rotate 90°", false);
             connect(rot90, &QPushButton::clicked, this, [this]() {
                 if (m_updating) return;
-                int r = m_tfRot->value() + 90;
+                float r = m_transform.rotation + 90;
                 while (r >  180) r -= 360;
                 while (r < -180) r += 360;
-                m_updating = true; m_tfRot->setValue(r); m_updating = false;
-                emitTransform();
+                m_transform.rotation = r;
+                m_updating = true; m_tfRot->setValue(qRound(r)); m_updating = false;
+                emit transformChanged(m_transform);
             });
             m_flipH = makeQuickBtn(":/icons/mirror_y.svg", "Mirror (y axis)", true);
             m_flipV = makeQuickBtn(":/icons/mirror_x.svg", "Mirror (x axis)", true);
-            connect(m_flipH, &QPushButton::toggled, this, [this](bool) { if (!m_updating) emitTransform(); });
-            connect(m_flipV, &QPushButton::toggled, this, [this](bool) { if (!m_updating) emitTransform(); });
+            connect(m_flipH, &QPushButton::toggled, this, [this](bool) { if (!m_updating) emitTransform(5); });
+            connect(m_flipV, &QPushButton::toggled, this, [this](bool) { if (!m_updating) emitTransform(6); });
 
             rotRow->addWidget(quick, 1);
             rotGrp->addLayout(rotRow);
@@ -305,8 +307,8 @@ ControlsPanel::ControlsPanel(QWidget* parent)
             m_tfDimY = new DragSpinBox("", kDimMinPx, kDimMaxPx, 0);
             m_tfDimX->setTextLabel("X");
             m_tfDimY->setTextLabel("Y");
-            m_tfDimX->onValueChanged = emitTf;
-            m_tfDimY->onValueChanged = emitTf;
+            m_tfDimX->onValueChanged = emitTf(3);
+            m_tfDimY->onValueChanged = emitTf(4);
             dimRow->addWidget(m_tfDimX, 1);
             dimRow->addWidget(m_tfDimY, 1);
             grp->addLayout(dimRow);
@@ -374,6 +376,7 @@ void ControlsPanel::setFrameSize(int w, int h)
 
 void ControlsPanel::setTransform(const LayerTransform& t, QSize nativeSize)
 {
+    m_transform = t;
     m_updating = true;
     // Native size of the layer's source: the basis the Dimensions boxes convert
     // px ↔ scalePct against. Empty (no media yet) → the boxes fall back to the
@@ -428,26 +431,22 @@ void ControlsPanel::setDimensions(float scalePct, float aspectPct)
     m_updating = wasUpdating;
 }
 
-void ControlsPanel::emitTransform()
+void ControlsPanel::emitTransform(int field)
 {
-    LayerTransform t;
-    t.xPct     = m_curFrameW > 0 ? float(m_tfX->value()) / m_curFrameW : 0.0f;
-    t.yPct     = m_curFrameH > 0 ? float(m_tfY->value()) / m_curFrameH : 0.0f;
-    // Width → the uniform scale, height → the extra Y stretch on top of it —
-    // the same split layerScaleXY() applies, so the canvas edge drags and these
-    // boxes write the same two fields.
-    if (m_curSrcW > 0 && m_curSrcH > 0) {
-        const double w = qMax(kDimMinPx, m_tfDimX->value());
-        const double h = qMax(kDimMinPx, m_tfDimY->value());
-        t.scalePct  = float(w / m_curSrcW * 100.0);
-        t.aspectPct = float((h / m_curSrcH) / (w / m_curSrcW) * 100.0);
-    } else {                       // no source yet → keep what the layer had
-        t.scalePct  = m_curScalePct;
-        t.aspectPct = m_curAspectPct;
+    LayerTransform t = m_transform;
+    if (field == 0) t.xPct = float(m_tfX->value()) / qMax(1, m_curFrameW);
+    if (field == 1) t.yPct = float(m_tfY->value()) / qMax(1, m_curFrameH);
+    if (field == 2) t.rotation = float(m_tfRot->value());
+    if (field == 3 && m_curSrcW > 0) {
+        const double oldScale = t.scalePct;
+        t.scalePct = float(double(qMax(kDimMinPx, m_tfDimX->value())) / m_curSrcW * 100.0);
+        t.aspectPct *= float(oldScale / t.scalePct); // preserve the untouched height
     }
-    t.rotation = float(m_tfRot->value());
-    t.flipH    = m_flipH && m_flipH->isChecked();
-    t.flipV    = m_flipV && m_flipV->isChecked();
+    if (field == 4 && m_curSrcH > 0 && t.scalePct > 0)
+        t.aspectPct = float(double(qMax(kDimMinPx, m_tfDimY->value())) / m_curSrcH / (t.scalePct / 100.0) * 100.0);
+    if (field == 5) t.flipH = m_flipH->isChecked();
+    if (field == 6) t.flipV = m_flipV->isChecked();
+    m_transform = t;
     emit transformChanged(t);
 }
 

@@ -1,30 +1,26 @@
-# Downloads a static Windows ffmpeg.exe into tools/ (not committed to git —
-# see .gitignore). Used by CI before build, and can be run locally for the
-# same reason: video import/export needs tools/ffmpeg.exe present.
-$ErrorActionPreference = "Stop"
-
-$dest = Join-Path $PSScriptRoot "ffmpeg.exe"
-if (Test-Path $dest) {
-    Write-Host "tools/ffmpeg.exe already present, skipping download."
+# Reproducible dependency: reviewed Gyan essentials 8.1.1 binary.
+$ErrorActionPreference = 'Stop'
+$expected = '228D7A8556258DE907FDB55F36850078EBC7680B84EC30D84EA02E99BEC1D1EB'
+$dest = Join-Path $PSScriptRoot 'ffmpeg.exe'
+if (Test-Path -LiteralPath $dest) {
+    if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -ne $expected) { throw 'Existing ffmpeg.exe does not match the pinned build.' }
+    Write-Host 'Pinned ffmpeg 8.1.1 verified.'
     exit 0
 }
-
-$zipUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-$zipPath = Join-Path $env:TEMP "ffmpeg-essentials.zip"
-$extractDir = Join-Path $env:TEMP "ffmpeg-essentials-extract"
-
-Write-Host "Downloading ffmpeg from $zipUrl ..."
-Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
-
-if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
-Expand-Archive -Path $zipPath -DestinationPath $extractDir
-
-$exe = Get-ChildItem -Path $extractDir -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-if (-not $exe) {
-    throw "ffmpeg.exe not found inside downloaded archive."
+$url = 'https://github.com/GyanD/codexffmpeg/releases/download/8.1.1/ffmpeg-8.1.1-essentials_build.zip'
+$taskTemp = Join-Path ([IO.Path]::GetTempPath()) ('pointless-ffmpeg-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $taskTemp | Out-Null
+try {
+    $zipPath = Join-Path $taskTemp 'ffmpeg.zip'
+    Invoke-WebRequest -Uri $url -OutFile $zipPath
+    Expand-Archive -LiteralPath $zipPath -DestinationPath (Join-Path $taskTemp 'expanded')
+    $exe = Get-ChildItem -LiteralPath (Join-Path $taskTemp 'expanded') -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+    if (-not $exe -or (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash -ne $expected) { throw 'Downloaded ffmpeg does not match the pinned SHA-256.' }
+    Copy-Item -LiteralPath $exe.FullName -Destination $dest
+} finally {
+    $resolved = [IO.Path]::GetFullPath($taskTemp)
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+    if ($resolved.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -and [IO.Path]::GetFileName($resolved).StartsWith('pointless-ffmpeg-')) {
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    }
 }
-Copy-Item $exe.FullName $dest -Force
-
-Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
-Remove-Item $zipPath -ErrorAction SilentlyContinue
-Write-Host "tools/ffmpeg.exe ready."

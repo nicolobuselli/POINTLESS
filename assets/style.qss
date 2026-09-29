@@ -948,3 +948,55 @@ QMenu::separator {
     background: #555555;
     margin: s(4)px s(8)px;
 }
+
+/* Palette kebab menu: editing follows the palette-choice hover; deletion
+   follows the red save-before-closing X language. QWidgetAction rows need
+   their own selectors because QMenu::item cannot style actions individually. */
+QMenu#paletteActionMenu {
+    background-color: @surface2;
+    border: 1px solid @popupBorder;
+    border-radius: s(8)px;
+    padding: s(6)px;
+}
+QPushButton#paletteEditAction,
+QPushButton#paletteDeleteAction {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: s(8)px;
+    padding: 0 s(15)px;
+    color: @textBody;
+    font-size: s(18)px;
+    font-weight: 500;
+    text-align: left;
+}
+QPushButton#paletteEditAction:hover {
+    background-color: @surface3;
+    border-color: #555555;
+}
+QPushButton#paletteEditAction:pressed {
+    background-color: @surface2;
+    border-color: @boxStrokeHover;
+}
+QPushButton#paletteDeleteAction {
+    background-color: transparent;
+    border-color: transparent;
+    color: @textBody;
+}
+QPushButton#paletteDeleteAction:hover {
+    background-color: rgba(253, 35, 31, 80);
+    border-color: @danger;
+    color: @danger;
+}
+QPushButton#paletteDeleteAction:pressed {
+    background-color: @danger;
+    color: @bgWindow;
+}
+
+QScrollArea#paletteEditorScroll,
+QScrollArea#paletteEditorScroll > QWidget,
+QScrollArea#paletteEditorScroll > QWidget > QWidget,
+#paletteEditorBody,
+#paletteEditorGroup {
+    background: transparent;
+    border: none;
+}

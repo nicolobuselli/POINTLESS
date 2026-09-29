@@ -18,6 +18,7 @@
 #include <QScreen>
 #include <QStyle>
 #include <QMenu>
+#include <QWidgetAction>
 
 namespace {
 constexpr int kMaxTones = 8;
@@ -75,8 +76,8 @@ private:
 //  #algoPopup frame, #algoPopupScroll scroll area, #algoPopupBody grid
 //  margins. Rows carry a swatch preview so they stay a bespoke widget
 //  instead of the plain-text PopupPicker, but the chrome matches.
-//  Deleting a saved palette is a right-click → "Delete palette" menu
-//  entry (no trash icon, no inline confirm row).
+//  Every saved palette ends with the standard kebab icon; its menu owns edit
+//  and delete, so the row itself remains dedicated to selecting the palette.
 // ============================================================
 
 class PalettePopup : public QFrame
@@ -84,6 +85,8 @@ class PalettePopup : public QFrame
 public:
     std::function<void(const std::vector<QColor>&, const QString&)> onSelect;
     std::function<void()> onExtract;
+    std::function<void(int, const PalettePreset&, QWidget*)> onEdit;
+    std::function<void()> onLibraryChanged;
     std::function<void()> onClosed;
 
     explicit PalettePopup(QWidget* parent = nullptr)
@@ -228,15 +231,20 @@ private:
         const PalettePreset& pal = m_library[i];
         const bool selected = (pal.name == m_currentName);
 
-        auto* row = new QPushButton;
-        row->setObjectName("algoCell");
-        row->setProperty("selected", selected);
-        row->setCursor(appCursor());
+        auto* row = new QWidget;
         row->setFixedHeight(Ui::px(46));
-        row->setContextMenuPolicy(Qt::CustomContextMenu);
+        auto* rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(Ui::px(6));
 
-        auto* hl = new QHBoxLayout(row);
-        hl->setContentsMargins(Ui::px(15), 0, Ui::px(15), 0);
+        auto* select = new QPushButton;
+        select->setObjectName("algoCell");
+        select->setProperty("selected", selected);
+        select->setCursor(appCursor());
+        select->setFixedHeight(Ui::px(46));
+
+        auto* hl = new QHBoxLayout(select);
+        hl->setContentsMargins(Ui::px(15), 0, Ui::px(12), 0);
         hl->setSpacing(Ui::px(8));
 
         auto* name = new QLabel(pal.name);
@@ -251,21 +259,72 @@ private:
         hl->addStretch(1);
         hl->addWidget(strip);
 
+        auto* more = makeIconButton(":/icons/kebab.svg");
+        more->setCursor(appCursor());
+        more->ensurePolished();
+        more->setIconSize(QSize(14, 14));
+        more->setToolTip("Palette options");
+
+        rowLayout->addWidget(select, 1);
+        rowLayout->addWidget(more, 0, Qt::AlignVCenter);
+
         const std::vector<QColor> colors = pal.colors;
         const QString             nm     = pal.name;
-        connect(row, &QPushButton::clicked, this, [this, colors, nm]() {
+        connect(select, &QPushButton::clicked, this, [this, colors, nm]() {
             if (onSelect) onSelect(colors, nm);
             hide();
         });
-        connect(row, &QWidget::customContextMenuRequested, this, [this, row, i](QPoint pos) {
-            QMenu menu(row);
-            QAction* del = menu.addAction("Delete palette");
-            connect(del, &QAction::triggered, this, [this, i]() {
+        connect(more, &QPushButton::clicked, this, [this, more, i]() {
+            QMenu menu(more);
+            menu.setObjectName("paletteActionMenu");
+
+            int choice = 0;
+            auto* editAction = new QWidgetAction(&menu);
+            auto* editButton = new QPushButton("Modifica palette");
+            editButton->setObjectName("paletteEditAction");
+            editButton->setCursor(appCursor());
+            editButton->setFixedHeight(Ui::px(Ui::kBoxH));
+            editAction->setDefaultWidget(editButton);
+            menu.addAction(editAction);
+
+            auto* deleteAction = new QWidgetAction(&menu);
+            auto* deleteButton = new QPushButton("Elimina palette");
+            deleteButton->setObjectName("paletteDeleteAction");
+            deleteButton->setCursor(appCursor());
+            deleteButton->setFixedHeight(Ui::px(Ui::kBoxH));
+            deleteAction->setDefaultWidget(deleteButton);
+            menu.addAction(deleteAction);
+
+            editButton->ensurePolished();
+            deleteButton->ensurePolished();
+            const int actionWidth = qMax(
+                editButton->fontMetrics().horizontalAdvance(editButton->text()),
+                deleteButton->fontMetrics().horizontalAdvance(deleteButton->text()))
+                + 2 * Ui::px(15) + 2;
+            editButton->setFixedWidth(actionWidth);
+            deleteButton->setFixedWidth(actionWidth);
+
+            connect(editButton, &QPushButton::clicked, &menu, [&menu, &choice]() {
+                choice = 1;
+                menu.close();
+            });
+            connect(deleteButton, &QPushButton::clicked, &menu, [&menu, &choice]() {
+                choice = 2;
+                menu.close();
+            });
+
+            menu.exec(more->mapToGlobal(QPoint(more->width(), 0)));
+            if (choice == 1) {
+                if (i < 0 || i >= int(m_library.size())) return;
+                const PalettePreset palette = m_library[i];
+                hide();
+                if (onEdit) onEdit(i, palette, more);
+            } else if (choice == 2) {
                 PaletteStore::remove(i);
                 reload();
                 build();
-            });
-            menu.exec(row->mapToGlobal(pos));
+                if (onLibraryChanged) onLibraryChanged();
+            }
         });
         return row;
     }
@@ -283,7 +342,8 @@ private:
 class SavePalettePopup : public QFrame
 {
 public:
-    std::function<void(const QString&)> onSave;   // name
+    // index == -1 creates a palette; otherwise the existing row is replaced.
+    std::function<void(int, const QString&, const std::vector<QColor>&)> onSave;
 
     explicit SavePalettePopup(QWidget* parent = nullptr)
         : QFrame(parent, Qt::Popup)
@@ -298,9 +358,9 @@ public:
 
         auto* tr = new QHBoxLayout;
         tr->setContentsMargins(0, 0, 0, 0);
-        auto* title = new QLabel("Save palette");
-        title->setStyleSheet(QString("background:transparent; color:%2; font-size:%1px; font-weight:700;")
-                             .arg(Ui::px(20)).arg(Ui::kColTextTitle.name()));
+        m_title = new QLabel("Save palette");
+        m_title->setStyleSheet(QString("background:transparent; color:%2; font-size:%1px; font-weight:700;")
+                               .arg(Ui::px(20)).arg(Ui::kColTextTitle.name()));
         auto* x = new QPushButton(QString::fromUtf8("\xC3\x97"));   // ×
         x->setObjectName("closeMini");
         x->setCursor(appCursor());
@@ -308,31 +368,40 @@ public:
         x->setStyleSheet(QString("QPushButton#closeMini{background:transparent;border:none;color:%2;font-size:%1px;font-weight:600;}"
                                  "QPushButton#closeMini:hover{color:%3;}")
                                  .arg(Ui::px(28)).arg(Ui::kColTextLabel.name()).arg(Ui::kColWhite.name()));
-        tr->addWidget(title, 1);
+        tr->addWidget(m_title, 1);
         tr->addWidget(x);
         v->addLayout(tr);
 
-        m_strip = new SwatchStrip(Ui::px(24));
-        v->addWidget(m_strip);
-
         m_name = new QLineEdit;
         m_name->setPlaceholderText("Name…");
+        m_name->setFixedHeight(Ui::px(Ui::kBoxH));
         v->addWidget(m_name);
+
+        m_colorsHost = new QWidget;
+        m_colorsHost->setObjectName("paletteEditorBody");
+        m_colorsHost->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        m_colorsLayout = new QVBoxLayout(m_colorsHost);
+        m_colorsLayout->setContentsMargins(0, 0, 0, 0);
+        m_colorsLayout->setSpacing(Ui::px(Ui::kGapRows));
+        m_colorsLayout->setAlignment(Qt::AlignTop);
+
+        m_colorsScroll = new QScrollArea;
+        m_colorsScroll->setObjectName("paletteEditorScroll");
+        m_colorsScroll->setWidgetResizable(true);
+        m_colorsScroll->setFrameShape(QFrame::NoFrame);
+        m_colorsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_colorsScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        m_colorsScroll->viewport()->setStyleSheet("background:transparent;");
+        m_colorsScroll->setWidget(m_colorsHost);
+        v->addWidget(m_colorsScroll);
 
         auto* br = new QHBoxLayout;
         br->setContentsMargins(0, 0, 0, 0);
         br->addStretch(1);
         auto* save = new QPushButton("Save");
-        save->setObjectName("accentBtn");
-        save->setFixedHeight(Ui::px(36));
+        save->setObjectName("exportBtn");
+        save->setFixedHeight(Ui::px(Ui::kBoxH));
         save->setMinimumWidth(Ui::px(92));
-        save->setStyleSheet(QString("QPushButton#accentBtn{min-height:%1px;padding:0 %2px;font-size:%3px;"
-                                     "background-color:%4;color:%5;}"
-                                     "QPushButton#accentBtn:hover{background-color:%6;}"
-                                     "QPushButton#accentBtn:pressed{background-color:%7;}")
-                                .arg(Ui::px(36)).arg(Ui::px(16)).arg(Ui::px(15))
-                                .arg(Ui::kColLocLime.name()).arg(Ui::kColBgWindow.name())
-                                .arg(Ui::kColLocLimeHover.name()).arg(Ui::kColLocLimePress.name()));
         save->setCursor(appCursor());
         br->addWidget(save);
         v->addLayout(br);
@@ -342,37 +411,106 @@ public:
         connect(m_name, &QLineEdit::returnPressed, this, [this]() { commit(); });
     }
 
-    void showFor(QWidget* anchor, const std::vector<QColor>& colors)
+    void showFor(QWidget* anchor, const QString& name,
+                 const std::vector<QColor>& colors, int index = -1)
     {
-        m_strip->setColors(colors);
-        m_name->clear();
-        adjustSize();
+        m_index  = index;
+        m_colors = colors;
+        m_title->setText(index < 0 ? "Save palette" : "Edit palette");
+        m_name->setText(name);
+        rebuildColors();
         QScreen* scr = anchor->screen() ? anchor->screen() : QGuiApplication::primaryScreen();
         const QRect a = scr->availableGeometry();
-        // Centre the popup over the panel that holds the controls (not off to
-        // the side): horizontally on the panel centre, vertically by the anchor.
-        QWidget* panel = parentWidget() ? parentWidget() : anchor;
-        const QRect pg(panel->mapToGlobal(QPoint(0, 0)), panel->size());
-        int x = pg.center().x() - width() / 2;
-        int y = anchor->mapToGlobal(QPoint(0, anchor->height() + Ui::px(8))).y();
+
+        // Header/name/footer are always visible. Only the colors scroll when
+        // the full editor would cross the available screen (taskbar included).
+        const int contentHeight = m_colorsHost->sizeHint().height();
+        m_colorsScroll->setFixedHeight(contentHeight);
+        ensurePolished();
+        layout()->activate();
+        const int maxPopupHeight = qMax(1, a.height() - 12);
+        const int fullHeight = sizeHint().height();
+        if (fullHeight > maxPopupHeight) {
+            const int overflow = fullHeight - maxPopupHeight;
+            m_colorsScroll->setFixedHeight(
+                qMax(Ui::px(Ui::kBoxH), contentHeight - overflow));
+            layout()->activate();
+        }
+        resize(Ui::px(360), qMin(sizeHint().height(), maxPopupHeight));
+
+        QWidget* column = anchor;
+        while (column->parentWidget() && column->objectName() != "sidePanel")
+            column = column->parentWidget();
+        int x = column->mapToGlobal(QPoint(0, 0)).x() - width();
+        int y = anchor->mapToGlobal(QPoint(0, 0)).y();
         x = qBound(a.left() + 6, x, a.right() - width() - 6);
         if (y + height() > a.bottom() - 6)
             y = qMax(a.top() + 6, a.bottom() - 6 - height());
         move(x, y);
         show();
         m_name->setFocus();
+        m_name->selectAll();
     }
 
 private:
+    void rebuildColors()
+    {
+        while (QLayoutItem* it = m_colorsLayout->takeAt(0)) {
+            delete it->widget();
+            delete it;
+        }
+
+        for (int i = 0; i < int(m_colors.size()); ++i) {
+            auto* group = new QWidget;
+            group->setObjectName("paletteEditorGroup");
+            group->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            auto* layout = new QVBoxLayout(group);
+            layout->setContentsMargins(0, 0, 0, 0);
+            layout->setSpacing(Ui::px(Ui::kGapLabelToCtrl));
+            layout->addWidget(makeParamLabel(QString("Color %1").arg(i + 1)));
+
+            auto* swatch = new FillSwatch(m_colors[i], 1.0f, /*showOpacity=*/false);
+            layout->addWidget(swatch);
+            m_colorsLayout->addWidget(group);
+
+            swatch->onColorEdited = [this, i](QColor color) {
+                if (i >= 0 && i < int(m_colors.size())) m_colors[i] = color;
+            };
+            swatch->onClicked = [this, i, swatch]() {
+                if (i < 0 || i >= int(m_colors.size())) return;
+                auto* picker = new ColorPickerDialog(m_colors[i], 1.0f,
+                                                     /*showOpacity=*/false, this);
+                picker->setAttribute(Qt::WA_DeleteOnClose);
+                picker->moveNextTo(swatch);
+                picker->onColorChanged = [this, i, swatch](QColor color, float) {
+                    if (i < 0 || i >= int(m_colors.size())) return;
+                    m_colors[i] = color;
+                    swatch->setColor(color);
+                };
+                picker->show();
+                picker->raise();
+                picker->activateWindow();
+            };
+        }
+        m_colorsLayout->invalidate();
+        m_colorsLayout->activate();
+        m_colorsHost->adjustSize();
+    }
+
     void commit()
     {
         const QString n = m_name->text().trimmed();
-        if (n.isEmpty()) return;
-        if (onSave) onSave(n);
+        if (n.isEmpty() || m_colors.empty()) return;
+        if (onSave) onSave(m_index, n, m_colors);
         hide();
     }
-    SwatchStrip* m_strip = nullptr;
-    QLineEdit*   m_name  = nullptr;
+    QLabel*               m_title        = nullptr;
+    QLineEdit*            m_name         = nullptr;
+    QWidget*              m_colorsHost   = nullptr;
+    QScrollArea*           m_colorsScroll = nullptr;
+    QVBoxLayout*          m_colorsLayout = nullptr;
+    std::vector<QColor>    m_colors;
+    int                    m_index = -1;
 };
 
 // ============================================================
@@ -477,6 +615,13 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
                                                           : ToneMode::FixedTones);
     };
     m_palettePopup->onExtract = [this]() { extractFromImage(); };
+    m_palettePopup->onEdit = [this](int index, const PalettePreset& palette, QWidget* anchor) {
+        m_savePopup->showFor(anchor, palette.name, palette.colors, index);
+    };
+    m_palettePopup->onLibraryChanged = [this]() {
+        reloadLibrary();
+        m_paletteName->setText(matchLibraryName());
+    };
     m_palettePopup->onClosed = [this]() {
         m_paletteChevron->setDirection(ChevronButton::Down);
         m_lastPopupClose = QDateTime::currentMSecsSinceEpoch();
@@ -505,11 +650,28 @@ TonalControlsWidget::TonalControlsWidget(const TonalSettings& initial, QWidget* 
 
     // ── Save palette popup (opened by the favourite button) ──────
     m_savePopup = new SavePalettePopup(this);
-    m_savePopup->onSave = [this](const QString& name) {
-        PaletteStore::save(name, currentColors());
+    m_savePopup->onSave = [this](int index, const QString& name,
+                                 const std::vector<QColor>& colors) {
+        const QString activeName = matchLibraryName();
+        const QString editedName = (index >= 0 && index < int(m_library.size()))
+                                 ? m_library[index].name : QString();
+        const bool editingActive = !editedName.isEmpty() && activeName == editedName;
+        if (index < 0)
+            PaletteStore::save(name, colors);
+        else if (!PaletteStore::update(index, name, colors))
+            return;
         reloadLibrary();
-        m_paletteName->setText(name);
-        refreshPreview();
+
+        // Editing the palette currently in use updates the layer immediately;
+        // editing any other saved palette leaves the document untouched.
+        if (index < 0 || editingActive) {
+            applyPalette(colors, name,
+                         m_settings.mode == ToneMode::Palette ? ToneMode::Palette
+                                                              : ToneMode::FixedTones);
+        } else {
+            m_paletteName->setText(matchLibraryName());
+            refreshPreview();
+        }
     };
 
     // ── Signals ─────────────────────────────────────────────────
@@ -861,7 +1023,7 @@ QString TonalControlsWidget::matchLibraryName() const
 
 void TonalControlsWidget::beginSavePalette()
 {
-    if (m_savePopup) m_savePopup->showFor(m_paletteHeader, currentColors());
+    if (m_savePopup) m_savePopup->showFor(m_paletteHeader, QString(), currentColors());
 }
 
 void TonalControlsWidget::commitSavePalette()

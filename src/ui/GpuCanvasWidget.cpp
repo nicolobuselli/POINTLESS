@@ -3,6 +3,7 @@
 #include "../core/DitherRenderer.h"
 #include "../core/DotGridRenderer.h"
 #include "../core/GridGenerator.h"
+#include "../core/MosaicRenderer.h"
 
 #include <rhi/qrhi.h>
 #include <QCoreApplication>
@@ -237,7 +238,7 @@ void fillDitherParams(float* u, const GpuLayer& l, int maskW, int maskH)
     const bool lineHatch    = (s.algorithm == DitherAlgorithm::LineHatch);
     u[24] = thresholdAlg ? 2.0f : (lineHatch ? 1.0f : 0.0f);
     const bool imageColors = (s.tonal.mode == ToneMode::ImageColors);
-    u[25] = imageColors ? 1.0f : 0.0f;
+    u[25] = imageColors ? 1.0f : (s.tonal.mode == ToneMode::Palette ? -1.0f : 0.0f);
     u[27] = float(qBound(2, s.levels, 16));
 
     u[28] = s.lineAngle;
@@ -318,7 +319,7 @@ int fillAsciiGridParams(float* u, const GpuLayer& l, const AsciiGpuAtlas& atlas)
     const int  nTones = imageColors ? 0 : int(qMin<size_t>(s.tonal.tones.size(), 8));
     u[24] = float(atlas.nChars);
     u[25] = s.orderedDither ? 1.0f : 0.0f;
-    u[26] = imageColors ? 1.0f : 0.0f;
+    u[26] = imageColors ? 1.0f : (s.tonal.mode == ToneMode::Palette ? -1.0f : 0.0f);
     u[27] = float(nTones);
 
     u[29] = float(qMax(1, atlas.atlasCols));
@@ -380,14 +381,14 @@ int fillAsciiGridParams(float* u, const GpuLayer& l, const AsciiGpuAtlas& atlas)
     return gl.count;
 }
 
-// std140 mirror of mosaic.vert's `buf`: 16 mvp + 16 dims/p0/p1/p2 + 8
-// toneLevel + 32 toneColor + 12 locFieldC + 4 locScale + 4 locOn + 20
-// maskPts + 16 grid = 128 floats (KEEP IN SYNC with mosaic.vert AND
+// std140 mirror of mosaic.vert's `buf`: base tile/grid data (128 floats) +
+// 32 text rect + 32 text color + 4 atlas meta + 4 text-padding loc field +
+// 4 loc scale/on = 204 floats (KEEP IN SYNC with mosaic.vert AND
 // MosaicRenderer::render). Returns the instance count (GridGpuLayout).
-constexpr quint32 kMosUboFloats = 128;
+constexpr quint32 kMosUboFloats = 204;
 constexpr quint32 kMosUboBytes  = kMosUboFloats * sizeof(float);
 
-int fillMosaicParams(float* u, const GpuLayer& l)
+int fillMosaicParams(float* u, const GpuLayer& l, const MosaicGpuTextAtlas& atlas)
 {
     const MosaicSettings& m = l.mosaicSettings;
     const float w  = float(l.contentSize.width());
@@ -406,7 +407,7 @@ int fillMosaicParams(float* u, const GpuLayer& l)
     const bool imageColors = (m.tonal.mode == ToneMode::ImageColors);
     const int  nTones = imageColors ? 0 : int(qMin<size_t>(m.tonal.tones.size(), 8));
     u[24] = qBound(0.0f, m.cornerRadius, 100.0f) / 100.0f;
-    u[25] = imageColors ? 1.0f : 0.0f;
+    u[25] = imageColors ? 1.0f : (m.tonal.mode == ToneMode::Palette ? -1.0f : 0.0f);
     u[26] = float(nTones);
     const bool inkPaper = (!imageColors && m.tonal.tones.size() == 1);
     u[27] = inkPaper
@@ -460,6 +461,29 @@ int fillMosaicParams(float* u, const GpuLayer& l)
     u[117] = margin;
     u[120] = gl.m11; u[121] = gl.m12; u[122] = gl.m21; u[123] = gl.m22;
     u[124] = gl.dx;  u[125] = gl.dy;  u[126] = w * 0.5f; u[127] = h * 0.5f;
+
+    const float aw = qMax(1, atlas.image.width());
+    const float ah = qMax(1, atlas.image.height());
+    int textCount = 0;
+    for (int i = 0; i < 8; ++i) {
+        const QRect r = atlas.rects[size_t(i)];
+        if (!r.isEmpty()) ++textCount;
+        u[128 + i * 4 + 0] = r.x() / aw;
+        u[128 + i * 4 + 1] = r.y() / ah;
+        u[128 + i * 4 + 2] = r.width() / aw;
+        u[128 + i * 4 + 3] = r.height() / ah;
+        const QColor tc = i < int(m.textColors.size()) ? m.textColors[size_t(i)] : QColor{};
+        u[160 + i * 4 + 0] = tc.isValid() ? float(tc.redF()) : 0.0f;
+        u[160 + i * 4 + 1] = tc.isValid() ? float(tc.greenF()) : 0.0f;
+        u[160 + i * 4 + 2] = tc.isValid() ? float(tc.blueF()) : 0.0f;
+        u[160 + i * 4 + 3] = tc.isValid() ? float(tc.alphaF()) : -1.0f;
+    }
+    u[192] = aw; u[193] = ah;
+    u[194] = qBound(0, m.textPadding, 45) / 100.0f;
+    u[195] = float(textCount);
+    const LocField pad = locField(m.loc, LocParam::MsTextPadding, w, h);
+    u[196] = pad.cx; u[197] = pad.cy; u[198] = pad.rIn; u[199] = pad.rOut;
+    u[200] = pad.scale; u[201] = pad.on ? 1.0f : 0.0f;
     return gl.count;
 }
 
@@ -507,7 +531,7 @@ void fillAsciiParams(float* u, const GpuLayer& l, const AsciiGpuAtlas& atlas)
     u[28] = float(atlas.nChars);
     u[29] = qMax(0.01f, s.gamma);
     u[30] = s.orderedDither ? 1.0f : 0.0f;
-    u[31] = imageColors ? 1.0f : 0.0f;
+    u[31] = imageColors ? 1.0f : (s.tonal.mode == ToneMode::Palette ? -1.0f : 0.0f);
     u[32] = float(qBound(0, s.stipple, 100));
     u[33] = float(atlas.image.height());
     u[34] = float(nTones);
@@ -712,7 +736,7 @@ void GpuCanvasWidget::initialize(QRhiCommandBuffer* cb)
         m_blitSrbTex = nullptr;
     }
 
-    if (!m_initialized && m_rhi) {
+    if (!m_initialized && m_rhi && qEnvironmentVariableIsSet("POINTLESS_GPU_DIAGNOSTICS")) {
         QFile log(QDir(QCoreApplication::applicationDirPath()).filePath("gpu_spike.log"));
         if (log.open(QIODevice::WriteOnly | QIODevice::Text)) {
             log.write("QRhi backend: ");
@@ -721,7 +745,7 @@ void GpuCanvasWidget::initialize(QRhiCommandBuffer* cb)
             log.write(m_rhi->driverInfo().deviceName.constData());
             log.write("\n");
         }
-        m_initialized = true;
+
     }
 
     if (m_blitPipeline)
@@ -784,7 +808,8 @@ void GpuCanvasWidget::initialize(QRhiCommandBuffer* cb)
     tb.srcAlpha = QRhiGraphicsPipeline::One;
     tb.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
     m_blitPipeline->setTargetBlends({ tb });
-    m_blitPipeline->create();
+    if (!m_blitPipeline->create()) { m_gpuFailed = true; emit renderFailed(); return; }
+    m_initialized = true;
 }
 
 void GpuCanvasWidget::ensureAccumTargets(const QSize& size)
@@ -1166,7 +1191,7 @@ void GpuCanvasWidget::ensureLayerTextures(QRhiResourceUpdateBatch* rub)
                 || ar.atlasTex->pixelSize() != atlas.image.size()) {
                 if (!ar.atlasTex || ar.atlasTex->pixelSize() != atlas.image.size()) {
                     ar.atlasTex.reset(m_rhi->newTexture(QRhiTexture::RGBA8, atlas.image.size()));
-                    ar.atlasTex->create();
+                    if (!ar.atlasTex->create()) { m_gpuFailed = true; emit renderFailed(); return; }
                     srbDirty = true;
                 }
                 rub->uploadTexture(ar.atlasTex.get(), atlas.image);
@@ -1207,7 +1232,7 @@ void GpuCanvasWidget::ensureLayerTextures(QRhiResourceUpdateBatch* rub)
             // Dot Grid pass — mosaic.vert rebuilds the lattice and samples
             // the adjust chain's source per tile. Every slider = UBO only.
             QRhiTexture* srcTex = ensureAdjustRes(l, true, rub);
-            DotRes& mr = m_mosRes[l.id];
+            MosRes& mr = m_mosRes[l.id];
             if (!mr.tex || mr.size != l.contentSize) {
                 mr.rt.reset();
                 mr.tex.reset(m_rhi->newTexture(QRhiTexture::RGBA8, l.contentSize, 1,
@@ -1220,6 +1245,18 @@ void GpuCanvasWidget::ensureLayerTextures(QRhiResourceUpdateBatch* rub)
                 mr.size = l.contentSize;
             }
             bool srbDirty = (mr.srcBound != srcTex);
+            const MosaicGpuTextAtlas atlas = MosaicRenderer::gpuTextAtlas(l.mosaicSettings);
+            if (!atlas.image.isNull() &&
+                (!mr.atlasTex || mr.atlasTex->pixelSize() != atlas.image.size())) {
+                mr.atlasTex.reset(m_rhi->newTexture(QRhiTexture::RGBA8, atlas.image.size()));
+                mr.atlasTex->create();
+                mr.atlasKey = -1;
+                srbDirty = true;
+            }
+            if (!atlas.image.isNull() && mr.atlasKey != atlas.image.cacheKey()) {
+                rub->uploadTexture(mr.atlasTex.get(), atlas.image);
+                mr.atlasKey = atlas.image.cacheKey();
+            }
             if (!mr.ubo) {
                 mr.ubo.reset(m_rhi->newBuffer(QRhiBuffer::Dynamic,
                                               QRhiBuffer::UniformBuffer, kMosUboBytes));
@@ -1230,10 +1267,15 @@ void GpuCanvasWidget::ensureLayerTextures(QRhiResourceUpdateBatch* rub)
                 mr.srb.reset(m_rhi->newShaderResourceBindings());
                 mr.srb->setBindings({
                     QRhiShaderResourceBinding::uniformBuffer(
-                        0, QRhiShaderResourceBinding::VertexStage, mr.ubo.get()),
+                        0, QRhiShaderResourceBinding::VertexStage
+                         | QRhiShaderResourceBinding::FragmentStage, mr.ubo.get()),
                     QRhiShaderResourceBinding::sampledTexture(
                         1, QRhiShaderResourceBinding::VertexStage,
                         srcTex, m_mipSampler.get()),
+                    QRhiShaderResourceBinding::sampledTexture(
+                        2, QRhiShaderResourceBinding::FragmentStage,
+                        mr.atlasTex ? mr.atlasTex.get() : m_dummyTex.get(),
+                        m_sampler.get()),
                 });
                 mr.srb->create();
                 mr.srcBound = srcTex;
@@ -1243,7 +1285,7 @@ void GpuCanvasWidget::ensureLayerTextures(QRhiResourceUpdateBatch* rub)
                       float(l.contentSize.height()), 0.0f, -1.0f, 1.0f);
             float ubo[kMosUboFloats] = {};
             writeMat(ubo, mvp);
-            mr.dotCount = fillMosaicParams(ubo, l);
+            mr.count = fillMosaicParams(ubo, l, atlas);
             rub->updateDynamicBuffer(mr.ubo.get(), 0, kMosUboBytes, ubo);
             m_frameTex.push_back(mr.tex.get());
             continue;
@@ -1325,9 +1367,10 @@ void GpuCanvasWidget::ensureLayerTextures(QRhiResourceUpdateBatch* rub)
         }
 
         LayerTex& lt = m_layerTex[layerTexKey(l.id, l.image.size())];
+        lt.stamp = ++m_textureStamp;
         if (!lt.tex) {
             lt.tex.reset(m_rhi->newTexture(QRhiTexture::RGBA8, l.image.size()));
-            lt.tex->create();
+            if (!lt.tex->create()) { m_gpuFailed = true; emit renderFailed(); return; }
             lt.key = -1;
         }
         if (lt.key != l.image.cacheKey()) {
@@ -1342,6 +1385,26 @@ void GpuCanvasWidget::ensureLayerTextures(QRhiResourceUpdateBatch* rub)
     for (auto it = m_layerTex.begin(); it != m_layerTex.end();) {
         if (!aliveIds.contains(int(it->first >> 32))) it = m_layerTex.erase(it);
         else ++it;
+    }
+    // Keep at most three sizes per layer and 256 MiB of raster textures.
+    // Current-frame textures cannot be retired until their draw has completed.
+    for (;;) {
+        qint64 bytes = 0;
+        QHash<int, int> counts;
+        for (const auto& entry : m_layerTex) {
+            const QSize size = entry.second.tex->pixelSize();
+            bytes += qint64(size.width()) * size.height() * 4;
+            ++counts[int(entry.first >> 32)];
+        }
+        auto victim = m_layerTex.end();
+        for (auto it = m_layerTex.begin(); it != m_layerTex.end(); ++it) {
+            if (bytes <= 256LL * 1024 * 1024 && counts.value(int(it->first >> 32)) <= 3) continue;
+            if (std::find(m_frameTex.begin(), m_frameTex.end(), it->second.tex.get()) != m_frameTex.end()) continue;
+            if (victim == m_layerTex.end() || it->second.stamp < victim->second.stamp) victim = it;
+        }
+        if (victim == m_layerTex.end()) break;
+        m_compSrbs.clear(); m_srbSig.clear();
+        m_layerTex.erase(victim);
     }
     for (auto it = m_dotRes.begin(); it != m_dotRes.end();) {
         if (!aliveIds.contains(it->first)) it = m_dotRes.erase(it);
@@ -1644,9 +1707,20 @@ QMatrix4x4 GpuCanvasWidget::presentMatrix() const
 
 void GpuCanvasWidget::render(QRhiCommandBuffer* cb)
 {
-    if (!m_rhi || !m_blitPipeline)
+    if (m_gpuFailed || !m_rhi || !m_blitPipeline)
         return;
 
+    const int maxTexture = m_rhi->resourceLimit(QRhi::TextureSizeMax);
+    auto fits = [maxTexture](QSize size) { return size.width() <= maxTexture && size.height() <= maxTexture; };
+    bool supported = m_packageMode ? fits(m_pkg.frame) : fits(m_image.size());
+    if (m_packageMode) for (const auto& layer : m_pkg.layers) {
+        supported = supported && fits(layer.image.size()) && fits(layer.contentSize);
+        if (layer.asciiScreen || layer.asciiInstanced) {
+            const auto atlas = AsciiRenderer::gpuAtlas(layer.asciiSettings);
+            supported = supported && !atlas.image.isNull() && fits(atlas.image.size());
+        }
+    }
+    if (!supported) { m_gpuFailed = true; emit renderFailed(); return; }
     QRhiResourceUpdateBatch* rub = m_rhi->nextResourceUpdateBatch();
     if (m_vbufDirty) {
         rub->uploadStaticBuffer(m_vbuf.get(), kQuad);
@@ -1671,6 +1745,7 @@ void GpuCanvasWidget::render(QRhiCommandBuffer* cb)
             m_presentTex = m_accum[n & 1].get();
         } else {
         ensureLayerTextures(rub);
+        if (m_gpuFailed) { rub->release(); return; }
         ensureAdjPipelines();
         ensureDotPipeline();
         ensureHalfPipeline();
@@ -1800,15 +1875,15 @@ void GpuCanvasWidget::render(QRhiCommandBuffer* cb)
             if (l.mosaicScreen) {
                 auto mrIt = m_mosRes.find(l.id);
                 if (mrIt == m_mosRes.end() || !mrIt->second.rt) continue;
-                DotRes& mr = mrIt->second;
+                MosRes& mr = mrIt->second;
                 cb->beginPass(mr.rt.get(), Qt::transparent, { 1.0f, 0 }, rub);
                 rub = nullptr;
-                if (m_mosPipeline && mr.dotCount > 0) {
+                if (m_mosPipeline && mr.count > 0) {
                     cb->setGraphicsPipeline(m_mosPipeline.get());
                     cb->setViewport({ 0, 0, float(mr.size.width()), float(mr.size.height()) });
                     cb->setShaderResources(mr.srb.get());
                     cb->setVertexInput(0, 1, &vbufBinding);
-                    cb->draw(6, mr.dotCount);
+                    cb->draw(6, mr.count);
                 }
                 cb->endPass();
                 continue;

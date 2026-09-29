@@ -1,0 +1,36 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "profile",
+      "displayName": "POINTLESS — Qt 6.11.1 MinGW Profile",
+      "generator": "MinGW Makefiles",
+      "binaryDir": "${sourceDir}/build/Desktop_Qt_6_11_1_MinGW_64_bit-Profile",
+      "environment": {
+        "PATH": "C:/Qt/6.11.1/mingw_64/bin;C:/Qt/Tools/mingw1310_64/bin;$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.11.1/mingw_64",
+        "CMAKE_CXX_COMPILER": "C:/Qt/Tools/mingw1310_64/bin/g++.exe",
+        "BUILD_TESTING": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "profile",
+      "configurePreset": "profile",
+      "jobs": 4
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "profile",
+      "configurePreset": "profile",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

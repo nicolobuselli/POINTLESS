@@ -1,4 +1,6 @@
 #include "RenderWorker.h"
+#include <QSaveFile>
+#include <limits>
 #include "../core/ImageAdjuster.h"
 #include "../core/DotGridRenderer.h"
 #include "../core/HalftoneRenderer.h"
@@ -431,6 +433,18 @@ void RenderWorker::pruneLayerCache(QHash<int, QHash<qint64, LayerCacheEntry>>& c
             sizes.erase(oldest);
         }
     }
+    qint64 bytes = 0;
+    for (const auto& sizes : cache) for (const auto& entry : sizes) bytes += entry.rendered.sizeInBytes();
+    while (bytes > 256LL * 1024 * 1024) {
+        int layerId = -1; qint64 sizeKey = 0; quint64 oldest = std::numeric_limits<quint64>::max();
+        for (auto l = cache.begin(); l != cache.end(); ++l)
+            for (auto v = l->begin(); v != l->end(); ++v)
+                if (v->stamp < oldest) { oldest = v->stamp; layerId = l.key(); sizeKey = v.key(); }
+        if (layerId < 0) break;
+        bytes -= cache[layerId][sizeKey].rendered.sizeInBytes();
+        cache[layerId].remove(sizeKey);
+    }
+
 }
 
 QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParams& params,
@@ -469,14 +483,14 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
         jobs.push_back({src, *it, {}});
     }
 
-    QtConcurrent::blockingMap(jobs, [outSize, cache, cacheMutex](Job& j) {
+    auto renderJob = [outSize, cache, cacheMutex, &params](Job& j) {
         // Cache key = everything that affects renderLayer's pixel output:
         // content settings + scale (via compensate/prerender), but NOT
         // position/rotation/flip, which only matter to placeOnFrame below.
         Layer contentKey = j.origLayer;
         contentKey.transform.xPct = contentKey.transform.yPct = contentKey.transform.rotation = 0.0f;
         contentKey.transform.flipH = contentKey.transform.flipV = false;
-        const void* srcBits = static_cast<const void*>(j.origSrc.constBits());
+        const qint64 srcBits = j.origSrc.cacheKey();
 
         const qint64 sizeKey = rasterSizeKey(j.origSrc.size());
 
@@ -488,7 +502,7 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
             if (layerIt != cache->end()) {
                 auto sizeIt = layerIt->find(sizeKey);
                 if (sizeIt != layerIt->end() && sizeIt->key == contentKey
-                    && sizeIt->srcBits == srcBits) {
+                    && sizeIt->srcBits == srcBits && !sizeIt->gpuPackage) {
                     rendered = sizeIt->rendered;
                     sizeIt->stamp = s_cacheClock++;   // keep this size hot
                     hit = true;
@@ -505,7 +519,8 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
             if (cache) {
                 QMutexLocker lock(cacheMutex);
                 (*cache)[j.origLayer.id][sizeKey] =
-                    { contentKey, j.origSrc.size(), srcBits, rendered, s_cacheClock++ };
+                    { contentKey, j.origSrc.size(), srcBits, rendered, false, s_cacheClock++ };
+                pruneLayerCache(*cache, params);
             }
         }
 
@@ -516,15 +531,24 @@ QImage RenderWorker::renderDocumentImpl(const QImage& source, const SessionParam
         const LayerTransform placementTf =
             effectivePlacementTf(j.origLayer, j.origSrc.size());
         j.placed = placeOnFrame(rendered, placementTf, outSize);
-    });
+    };
+    const int batchSize = int(qBound(qint64(1), (128LL * 1024 * 1024) / qMax(qint64(1), qint64(outSize.width()) * outSize.height() * 4), qint64(4)));
+    for (size_t begin = 0; begin < jobs.size(); begin += size_t(batchSize)) {
+        std::vector<Job*> batch;
+        for (size_t i = begin; i < qMin(jobs.size(), begin + size_t(batchSize)); ++i) batch.push_back(&jobs[i]);
+        QtConcurrent::blockingMap(batch, [&](Job* j) { renderJob(*j); });
+        for (auto* j : batch) {
+            BlendCompositor::compositeOver(canvas, j->placed, j->origLayer.blend);
+            j->placed = {};
+        }
+    }
 
     if (cache) {
         QMutexLocker lock(cacheMutex);
         pruneLayerCache(*cache, params);
     }
 
-    for (const Job& j : jobs)
-        BlendCompositor::compositeOver(canvas, j.placed, j.origLayer.blend);
+
 
     return canvas;
 }
@@ -569,10 +593,17 @@ static bool layerGpuCheap(const Layer& l)
     return false;
 }
 
-static bool allVisibleLayersGpuCheap(const SessionParams& params)
+bool RenderWorker::canRenderOnGpu(const SessionParams& params, const QHash<int, QImage>& sources, QSize fallback)
 {
-    for (const Layer& l : params.layers)
-        if (l.visible && !layerGpuCheap(l)) return false;
+    for (const Layer& layer : params.layers) {
+        if (!layer.visible) continue;
+        Layer probe = layer;
+        if (probe.kind == LayerKind::Ascii) {
+            aspectBakeSize(probe, sources.contains(layer.id) ? sources.value(layer.id).size() : fallback);
+            compensateSymbolScale(probe);
+        }
+        if (!layerGpuCheap(probe)) return false;
+    }
     return true;
 }
 
@@ -631,12 +662,14 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
                        && DitherRenderer::gpuRenderable(it->dither));
         j.mosaicScr = (it->kind == LayerKind::Mosaic
                        && MosaicRenderer::gpuRenderable(it->mosaic));
-        j.asciiScr  = (it->kind == LayerKind::Ascii
-                       && AsciiRenderer::gpuRenderable(it->ascii));
+        Layer atlasLayer = *it;
+        aspectBakeSize(atlasLayer, src.size());
+        compensateSymbolScale(atlasLayer);
+        j.asciiScr = (it->kind == LayerKind::Ascii && AsciiRenderer::gpuRenderable(atlasLayer.ascii));
         jobs.push_back(std::move(j));
     }
 
-    QtConcurrent::blockingMap(jobs, [this](Job& j) {
+    QtConcurrent::blockingMap(jobs, [this, &params](Job& j) {
         // Same cache key discipline as renderDocumentImpl.
         Layer contentKey = j.origLayer;
         contentKey.transform.xPct = contentKey.transform.yPct = contentKey.transform.rotation = 0.0f;
@@ -659,7 +692,7 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
             contentKey.transform.scalePct  = 100.0f;
             contentKey.transform.aspectPct = 100.0f;
         }
-        const void* srcBits = static_cast<const void*>(j.origSrc.constBits());
+        const qint64 srcBits = j.origSrc.cacheKey();
         const qint64 sizeKey = rasterSizeKey(j.origSrc.size());
 
         // GPU-halftone / GPU Dot Grid / GPU dither: the "render" is just the
@@ -679,7 +712,7 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
             if (layerIt != m_layerCache.end()) {
                 auto sizeIt = layerIt->find(sizeKey);
                 if (sizeIt != layerIt->end() && sizeIt->key == contentKey
-                    && sizeIt->srcBits == srcBits) {
+                    && sizeIt->srcBits == srcBits && sizeIt->gpuPackage) {
                     j.rendered = sizeIt->rendered;
                     sizeIt->stamp = s_cacheClock++;   // keep this size hot
                     hit = true;
@@ -714,7 +747,8 @@ GpuFramePackage RenderWorker::renderLayersPackage(const QImage& source, const Se
                 j.rendered = j.rendered.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
             QMutexLocker lock(&m_layerCacheMutex);
             m_layerCache[j.origLayer.id][sizeKey] =
-                { contentKey, j.origSrc.size(), srcBits, j.rendered, s_cacheClock++ };
+                { contentKey, j.origSrc.size(), srcBits, j.rendered, true, s_cacheClock++ };
+            pruneLayerCache(m_layerCache, params);
         }
     });
 
@@ -839,7 +873,7 @@ static bool layerFillEnabled(const Layer& l)
 
 bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source,
                                        const SessionParams& params,
-                                       const QHash<int, QImage>& layerSrc)
+                                       const QHash<int, QImage>& layerSrc, std::atomic_bool* cancel)
 {
     QSize frame = (params.frameW > 0 && params.frameH > 0)
                 ? QSize(params.frameW, params.frameH)
@@ -852,12 +886,25 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
     if (frame.isEmpty()) return false;
 
     QSvgGenerator gen;
-    gen.setFileName(path);
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) return false;
+    gen.setOutputDevice(&file);
     gen.setSize(frame);
     gen.setViewBox(QRect(QPoint(0, 0), frame));
-    gen.setTitle("ULTRA Ditherer");
+    gen.setTitle("POINTLESS");
 
-    QPainter p(&gen);
+    QPainter p;
+    if (!p.begin(&gen)) return false;
+    // Blends depend on the complete backdrop, not just the current layer.
+    const bool flatten = std::any_of(params.layers.begin(), params.layers.end(),
+        [](const Layer& l) { return l.visible && l.blend != BlendMode::Normal; });
+    if (flatten) {
+        const QImage flat = renderDocument(source, params, layerSrc);
+        if (flat.isNull()) return false;
+        p.drawImage(0, 0, flat);
+        if (!p.end()) return false;
+        return (!cancel || !cancel->load()) && file.commit();
+    }
 
     if (params.backgroundOpacity > 0.0f && params.background.alpha() > 0) {
         QColor bg = params.background;
@@ -867,6 +914,7 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
 
     // Stored top→bottom; paint bottom→top.
     for (auto it = params.layers.rbegin(); it != params.layers.rend(); ++it) {
+        if (cancel && cancel->load()) return false;
         Layer layer = *it;
         if (!layer.visible || !layerFillEnabled(layer)) continue;
         QImage src = layerSrc.contains(layer.id) ? layerSrc.value(layer.id) : source;
@@ -935,8 +983,8 @@ bool RenderWorker::renderDocumentToSvg(const QString& path, const QImage& source
         p.restore();
     }
 
-    p.end();
-    return true;
+    if (!p.end()) return false;
+    return (!cancel || !cancel->load()) && file.commit();
 }
 
 int RenderWorker::estimateSvgElements(const QImage& source, const SessionParams& params,
@@ -1003,11 +1051,26 @@ RenderWorker::RenderWorker(QObject* parent)
             this, &RenderWorker::onFullPackageFinished);
 }
 
-RenderWorker::~RenderWorker() = default;
+RenderWorker::~RenderWorker()
+{
+    invalidatePending();
+    m_fastWatcher.waitForFinished();
+    m_fullWatcher.waitForFinished();
+    m_fastPkgWatcher.waitForFinished();
+    m_fullPkgWatcher.waitForFinished();
+}
+
+void RenderWorker::invalidatePending()
+{
+    ++m_revision;
+    m_fullTimer.stop();
+    m_fastPending = m_fullPending = false;
+}
 
 void RenderWorker::requestRender(const QImage& source, const SessionParams& params,
                                  bool fullPass, const QHash<int, QImage>& layerSrc)
 {
+    ++m_revision;
     m_sourceImage  = source;
     m_latestParams = params;
     m_layerSrc     = layerSrc;
@@ -1025,6 +1088,7 @@ void RenderWorker::requestRender(const QImage& source, const SessionParams& para
 void RenderWorker::requestFullRender(const QImage& source, const SessionParams& params,
                                      const QHash<int, QImage>& layerSrc)
 {
+    ++m_revision;
     m_sourceImage  = source;
     m_latestParams = params;
     m_layerSrc     = layerSrc;
@@ -1051,17 +1115,21 @@ static QHash<int, QImage> scaledLayerSrc(const QHash<int, QImage>& src, float sc
 // header). GUI-thread only — launchFast copies the result into the lambda.
 QHash<int, QImage> RenderWorker::scaledLayerSrcCached(const QHash<int, QImage>& src, float scale)
 {
+    for (auto it = m_scaledLayerSrcCache.begin(); it != m_scaledLayerSrcCache.end();) {
+        if (!src.contains(it.key())) it = m_scaledLayerSrcCache.erase(it); else ++it;
+    }
+
     if (qAbs(scale - 1.0f) < 0.001f) return src;
     QHash<int, QImage> out;
     for (auto it = src.begin(); it != src.end(); ++it) {
         const QImage& im = it.value();
         if (im.isNull()) { out.insert(it.key(), im); continue; }
         ScaledSrcEntry& c = m_scaledLayerSrcCache[it.key()];
-        if (c.bits != im.constBits() || qAbs(c.k - scale) > 0.0001f) {
+        if (c.bits != im.cacheKey() || qAbs(c.k - scale) > 0.0001f) {
             c.img  = im.scaled(qMax(1, qRound(im.width()  * scale)),
                                qMax(1, qRound(im.height() * scale)),
                                Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            c.bits = im.constBits();
+            c.bits = im.cacheKey();
             c.k    = scale;
         }
         out.insert(it.key(), c.img);
@@ -1149,7 +1217,7 @@ void RenderWorker::launchFast()
     // pattern) once the full pass landed at true native frame resolution.
     const int srcMax   = qMax(m_sourceImage.width(), m_sourceImage.height());
     const int frameMax = qMax(qMax(1, m_latestParams.frameW), m_latestParams.frameH);
-    const bool gpuLiveDoc = m_gpuPackages && allVisibleLayersGpuCheap(m_latestParams);
+    const bool gpuLiveDoc = m_gpuPackages && canRenderOnGpu(m_latestParams, m_layerSrc, m_sourceImage.size());
     const int docMax   = gpuLiveDoc ? frameMax : qMax(srcMax, frameMax);
     const float k = (docMax > m_interactivePx) ? float(m_interactivePx) / float(docMax) : 1.0f;
 
@@ -1163,7 +1231,7 @@ void RenderWorker::launchFast()
         // would allocate a new buffer with a new address every time, and the
         // layer-render cache below keys on that address, so it would never
         // hit and every interactive frame would fully re-render each layer.
-        const void* origBits = m_sourceImage.constBits();
+        const qint64 origBits = m_sourceImage.cacheKey();
         if (m_cachedSmallSrc.isNull() || m_cachedSmallSrcOrigBits != origBits
             || qAbs(m_cachedSmallSrcK - k) > 0.0001f) {
             m_cachedSmallSrc = m_sourceImage.scaled(
@@ -1188,6 +1256,7 @@ void RenderWorker::launchFast()
         }
     }
 
+    m_fastRevision = m_revision;
     emit renderStarted(true);
 
     if (m_gpuPackages) {
@@ -1219,6 +1288,7 @@ void RenderWorker::launchFull()
     const SessionParams p = m_latestParams;
     const QHash<int,QImage> ls = m_layerSrc;
 
+    m_fullRevision = m_revision;
     emit renderStarted(false);
 
     if (m_gpuPackages) {
@@ -1244,7 +1314,7 @@ void RenderWorker::onFullTimerTimeout()
 void RenderWorker::onFastRenderFinished()
 {
     QImage result = m_fastWatcher.result();
-    emit renderComplete(result, true);
+    if (m_fastRevision == m_revision) emit renderComplete(result, true);
 
     if (m_fastPending) {
         m_fastPending = false;
@@ -1255,7 +1325,7 @@ void RenderWorker::onFastRenderFinished()
 void RenderWorker::onFullRenderFinished()
 {
     QImage result = m_fullWatcher.result();
-    emit renderComplete(result, false);
+    if (m_fullRevision == m_revision) emit renderComplete(result, false);
 
     if (m_fullPending) {
         m_fullPending = false;
@@ -1265,7 +1335,7 @@ void RenderWorker::onFullRenderFinished()
 
 void RenderWorker::onFastPackageFinished()
 {
-    emit layersComplete(m_fastPkgWatcher.result(), true);
+    if (m_fastRevision == m_revision) emit layersComplete(m_fastPkgWatcher.result(), true);
     if (m_fastPending) {
         m_fastPending = false;
         launchFast();
@@ -1274,7 +1344,7 @@ void RenderWorker::onFastPackageFinished()
 
 void RenderWorker::onFullPackageFinished()
 {
-    emit layersComplete(m_fullPkgWatcher.result(), false);
+    if (m_fullRevision == m_revision) emit layersComplete(m_fullPkgWatcher.result(), false);
     if (m_fullPending) {
         m_fullPending = false;
         launchFull();

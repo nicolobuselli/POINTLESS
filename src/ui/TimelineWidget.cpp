@@ -829,16 +829,17 @@ TimelineWidget::TimelineWidget(QWidget* parent) : QWidget(parent)
     // rendered (stutter/stop-motion look), duration and export length are
     // untouched (see Animation::steppedFrame).
     auto* fpsLbl = new QLabel("fps");
+    fpsLbl->setToolTip("Effect sample rate. Document duration and export frame rate stay unchanged.");
     fpsLbl->setObjectName("tlRangeLbl");
     bar->addWidget(fpsLbl);
 
     m_fpsPicker = new PopupPicker(1);
     m_fpsPicker->setMinimumWidth(Ui::px(60));
     m_fpsPicker->setEntries({
-        { 24, "24" },
-        { 15, "15" },
-        { 12, "12" },
-        { 8,  "8"  },
+        { 24, "24", {}, {} },
+        { 15, "15", {}, {} },
+        { 12, "12", {}, {} },
+        { 8, "8", {}, {} },
     });
     m_fpsPicker->onSelected = [this](QVariant v) {
         if (m_updating) return;
@@ -1057,7 +1058,14 @@ void TimelineWidget::syncControls()
     m_frameSpin->setValue(m_anim.playhead);
     m_startSpin->setValue(m_anim.frameStart);
     m_endSpin->setValue(m_anim.frameEnd);
-    m_fpsPicker->setValue(m_anim.stepFps);
+    QVector<PopupPickerEntry> rates{{m_anim.fps, QString::number(m_anim.fps), {}, "Native document rate"}};
+    for (int rate : {24,15,12,8}) if (rate < m_anim.fps) rates.append({rate,QString::number(rate),{},"Effect samples per second"});
+    const int selected = qMin(m_anim.fps, m_anim.stepFps);
+    if (std::none_of(rates.cbegin(), rates.cend(), [selected](const auto& item){return item.value.toInt()==selected;}))
+        rates.append({selected,QString::number(selected),{},"Saved effect sample rate"});
+    m_fpsPicker->setEntries(rates);
+    m_fpsPicker->setValue(selected);
+    m_fpsPicker->setToolTip(QString("Document: %1 fps. Effect: %2 samples per second.").arg(m_anim.fps).arg(m_anim.stepFps));
     m_updating = prev;
 }
 

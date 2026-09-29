@@ -1,11 +1,20 @@
 #include "ProjectIO.h"
+#include "FrameStore.h"
 
 #include <QBuffer>
+#include <QImageReader>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
+#include <QTemporaryDir>
+#include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
+#include <cmath>
+#include <algorithm>
+#include <functional>
 
 namespace {
 
@@ -24,13 +33,17 @@ QString imageToBase64(const QImage& img) {
     QByteArray bytes;
     QBuffer buf(&bytes);
     buf.open(QIODevice::WriteOnly);
-    img.save(&buf, "PNG");
+    if (!img.save(&buf, "PNG")) return {};
     return QString::fromLatin1(bytes.toBase64());
 }
-QImage imageFromBase64(const QString& s) {
-    QImage img;
-    img.loadFromData(QByteArray::fromBase64(s.toLatin1()), "PNG");
-    return img;
+QImage imageFromBase64(const QString& s, qint64 budget = 512LL * 1024 * 1024) {
+    QByteArray bytes = QByteArray::fromBase64(s.toLatin1());
+    QBuffer buffer(&bytes); buffer.open(QIODevice::ReadOnly);
+    QImageReader reader(&buffer, "PNG");
+    const QSize size = reader.size();
+    if (size.isEmpty() || size.width() > 32768 || size.height() > 32768
+        || qint64(size.width()) * size.height() * 4 > budget) return {};
+    return reader.read();
 }
 
 // ── GridSettings ────────────────────────────────────────────
@@ -392,6 +405,7 @@ QJsonObject toJson(const ParentGroup& p) {
     return {
         { "mediaId", p.mediaId }, { "name", p.name },
         { "collapsed", p.collapsed }, { "groupVisible", p.groupVisible },
+        { "trimIn", p.trimIn }, { "trimOut", p.trimOut }, { "timeOffset", p.timeOffset },
     };
 }
 ParentGroup parentFromJson(const QJsonObject& o) {
@@ -400,6 +414,9 @@ ParentGroup parentFromJson(const QJsonObject& o) {
     p.name         = o["name"].toString(p.name);
     p.collapsed    = o["collapsed"].toBool(p.collapsed);
     p.groupVisible = o["groupVisible"].toBool(p.groupVisible);
+    p.trimIn = o["trimIn"].toInt(p.trimIn);
+    p.trimOut = o["trimOut"].toInt(p.trimOut);
+    p.timeOffset = o["timeOffset"].toInt(p.timeOffset);
     return p;
 }
 
@@ -479,35 +496,86 @@ Animation animFromJson(const QJsonObject& o) {
 
 namespace ProjectIO {
 
-bool save(const QString& path, const ProjectData& data, QString* error)
+bool save(const QString& path, const ProjectData& data, QString* error, std::atomic_bool* cancel)
 {
+    if (data.media.size() > 256 || data.params.layers.size() > 256) { if (error) *error = "Projects support at most 256 sources and 256 layers."; return false; }
     QJsonObject media;
+    qint64 sourceBytes = 0;
+    qint64 encodedBytes = 0;
     for (auto it = data.media.cbegin(); it != data.media.cend(); ++it) {
+        if (cancel && cancel->load()) { if (error) *error = "Canceled."; return false; }
+        sourceBytes += it.value().frames.isEmpty() ? it.value().image.sizeInBytes() : 0;
+        QJsonArray frames;
+        for (const auto& frame : it.value().frames) {
+            sourceBytes += FrameStore::ownedBytes(frame);
+            if (sourceBytes > 512LL * 1024 * 1024 || (cancel && cancel->load())) { if (error) *error = "Canceled or sources exceed 512 MiB."; return false; }
+            const QString encoded = imageToBase64(frame);
+            if (encoded.isEmpty()) { if (error) *error = "Could not encode a video frame."; return false; }
+            encodedBytes += encoded.size();
+            if (encodedBytes > 768LL * 1024 * 1024) { if (error) *error = "Project exceeds 768 MiB."; return false; }
+            frames.append(encoded);
+        }
+        if (sourceBytes > 512LL * 1024 * 1024) { if (error) *error = "Sources exceed 512 MiB."; return false; }
+        const QString png = imageToBase64(it.value().image);
+        if (png.isEmpty()) {
+            if (error) *error = "Could not encode a source image.";
+            return false;
+        }
+        encodedBytes += png.size();
+        if (encodedBytes > 768LL * 1024 * 1024) { if (error) *error = "Project exceeds 768 MiB."; return false; }
         media[QString::number(it.key())] = QJsonObject{
-            { "name", it.value().name }, { "png", imageToBase64(it.value().image) },
+            { "name", it.value().name }, { "png", png },
+            { "frames", frames }, { "fps", it.value().fps },
         };
     }
 
-    const QJsonObject root{
-        { "formatVersion", 1 }, { "title", data.title },
+    QJsonObject root{
+        { "formatVersion", 2 }, { "title", data.title },
         { "params", toJson(data.params) }, { "animation", toJson(data.anim) },
         { "media", media },
     };
 
-    QFile f(path);
+    QJsonObject assets;
+    std::function<bool(const QJsonValue&)> collect;
+    collect = [&](const QJsonValue& value) {
+        if (value.isArray()) { for (const auto& v : value.toArray()) if (!collect(v)) return false; }
+        if (value.isObject()) {
+            const auto object = value.toObject();
+            for (auto it = object.begin(); it != object.end(); ++it) {
+                if ((it.key() == "svgPath" || it.key() == "patternPath") && !it.value().toString().isEmpty()) {
+                    QFile asset(it.value().toString());
+                    if (!asset.open(QIODevice::ReadOnly) || asset.size() > 16 * 1024 * 1024) return false;
+                    assets[it.value().toString()] = QString::fromLatin1(asset.readAll().toBase64());
+                } else if (!collect(it.value())) return false;
+            }
+        }
+        return true;
+    };
+    if (!collect(root["params"])) { if (error) *error = "A custom SVG or pattern is missing or exceeds 16 MiB."; return false; }
+    root["embeddedAssets"] = assets;
+    QSaveFile f(path);
     if (!f.open(QIODevice::WriteOnly)) {
         if (error) *error = f.errorString();
         return false;
     }
-    f.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Compact);
+    if (bytes.size() > 768LL * 1024 * 1024 || (cancel && cancel->load())) { if (error) *error = "Canceled or project exceeds 768 MiB."; return false; }
+    if (f.write(bytes) != bytes.size() || !f.commit()) {
+        if (error) *error = f.errorString();
+        return false;
+    }
     return true;
 }
 
-bool load(const QString& path, ProjectData* out, QString* error)
+bool load(const QString& path, ProjectData* out, QString* error, std::atomic_bool* cancel)
 {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
         if (error) *error = f.errorString();
+        return false;
+    }
+    if (f.size() > 768LL * 1024 * 1024) {
+        if (error) *error = "Project file exceeds the 768 MiB limit.";
         return false;
     }
     QJsonParseError perr;
@@ -517,20 +585,166 @@ bool load(const QString& path, ProjectData* out, QString* error)
         return false;
     }
 
-    const QJsonObject root = doc.object();
-    out->title = root["title"].toString(QFileInfo(path).completeBaseName());
-    out->params = sessionFromJson(root["params"].toObject());
-    out->anim   = animFromJson(root["animation"].toObject());
-
-    out->media.clear();
+    auto fail = [&](const QString& message) {
+        if (error) *error = message;
+        return false;
+    };
+    if (!out) return fail("No destination document.");
+    QJsonObject root = doc.object();
+    if (root["formatVersion"].toInt(-1) != 1 && root["formatVersion"].toInt(-1) != 2)
+        return fail("Unsupported or missing project version.");
+    if (!root["params"].isObject() || !root["animation"].isObject() || !root["media"].isObject())
+        return fail("Incomplete project: params, animation and media are required.");
+    // Resolve embedded paths into a process-owned temporary cache. Filenames
+    // come from content hashes, never from paths supplied by the project.
+    static QTemporaryDir assetCache;
+    const auto embedded = root["embeddedAssets"].toObject();
+    if (embedded.size() > 256) return fail("Too many embedded assets.");
+    QHash<QString, QString> resolved;
+    for (auto it = embedded.begin(); it != embedded.end(); ++it) {
+        const QByteArray bytes = QByteArray::fromBase64(it.value().toString().toLatin1());
+        if (bytes.isEmpty() || bytes.size() > 16 * 1024 * 1024 || !assetCache.isValid()) return fail("Invalid embedded asset.");
+        const QString name = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())
+            + (it.key().endsWith(".svg", Qt::CaseInsensitive) ? ".svg" : ".img");
+        const QString assetPath = assetCache.filePath(name);
+        QSaveFile asset(assetPath);
+        if (!asset.open(QIODevice::WriteOnly) || asset.write(bytes) != bytes.size() || !asset.commit()) return fail("Cannot restore embedded asset.");
+        resolved.insert(it.key(), assetPath);
+    }
+    std::function<QJsonValue(QJsonValue)> resolve;
+    resolve = [&](QJsonValue value) -> QJsonValue {
+        if (value.isArray()) { auto array = value.toArray(); for (int i = 0; i < array.size(); ++i) array[i] = resolve(array[i]); return array; }
+        if (value.isObject()) {
+            auto object = value.toObject();
+            for (auto it = object.begin(); it != object.end(); ++it) {
+                if ((it.key() == "svgPath" || it.key() == "patternPath") && resolved.contains(it.value().toString())) it.value() = resolved.value(it.value().toString());
+                else it.value() = resolve(it.value());
+            }
+            return object;
+        }
+        return value;
+    };
+    root["params"] = resolve(root["params"]);
+    const auto po = root["params"].toObject();
+    if (!po["layers"].isArray() || !po["parents"].isArray())
+        return fail("Invalid layer structure.");
+    // Reject invalid numeric/type data before it can reach render allocations.
+    std::function<bool(const QJsonValue&, const QString&)> validValue;
+    validValue = [&](const QJsonValue& v, const QString& key) {
+        if (v.isDouble()) {
+            const double n = v.toDouble();
+            if (!std::isfinite(n) || std::abs(n) > 1000000) return false;
+            if ((key == "frameW" || key == "frameH") && (n < 16 || n > 8192 || n != std::floor(n))) return false;
+            if ((key == "opacity" || key == "backgroundOpacity") && (n < 0 || n > 1)) return false;
+            if ((key == "scalePct" || key == "aspectPct" || key == "spacing" || key == "cellSize" || key == "pixelSize") && n <= 0) return false;
+        }
+        if (v.isArray()) {
+            const auto array = v.toArray();
+            if (array.size() > 100000) return false;
+            for (const auto& x : array) if (!validValue(x, key)) return false;
+        }
+        if (v.isObject()) {
+            const auto object = v.toObject();
+            for (auto it = object.begin(); it != object.end(); ++it)
+                if (!validValue(it.value(), it.key())) return false;
+        }
+        return true;
+    };
+    if (!validValue(root, {})) return fail("A project value is outside the supported limits.");
+    std::function<bool(const QJsonObject&, const QJsonObject&)> typesMatch;
+    typesMatch = [&](const QJsonObject& object, const QJsonObject& model) {
+        for (auto it = model.begin(); it != model.end(); ++it) {
+            if (!object.contains(it.key())) continue; // older optional fields retain defaults
+            const auto value = object[it.key()];
+            if (value.type() != it.value().type()) return false;
+            if (value.isObject() && !typesMatch(value.toObject(), it.value().toObject())) return false;
+        }
+        return true;
+    };
+    if (!typesMatch(po, toJson(SessionParams{})) || !typesMatch(root["animation"].toObject(), toJson(Animation{}))) return fail("Incorrect project field type.");
+    for (const auto& value : po["layers"].toArray())
+        if (!value.isObject() || !typesMatch(value.toObject(), toJson(Layer{}))) return fail("Incorrect layer field type.");
+    for (const auto& value : po["parents"].toArray())
+        if (!value.isObject() || !typesMatch(value.toObject(), toJson(ParentGroup{}))) return fail("Incorrect parent field type.");
+    ProjectData candidate;
+    candidate.title = root["title"].toString(QFileInfo(path).completeBaseName());
+    candidate.params = sessionFromJson(po);
+    candidate.anim = animFromJson(root["animation"].toObject());
+    if (candidate.params.frameW < 16 || candidate.params.frameW > 8192
+        || candidate.params.frameH < 16 || candidate.params.frameH > 8192
+        || candidate.params.layers.size() > 256 || candidate.anim.frameStart < 0
+        || candidate.anim.frameEnd < candidate.anim.frameStart
+        || candidate.anim.frameEnd > 100000 || candidate.anim.fps < 1 || candidate.anim.fps > 240
+        || candidate.anim.stepFps < 1 || candidate.anim.stepFps > 240)
+        return fail("Invalid frame dimensions or timeline range.");
     const QJsonObject media = root["media"].toObject();
+    if (media.size() > 256) return fail("Too many sources (maximum 256).");
+    qint64 decodedBytes = 0;
     for (auto it = media.constBegin(); it != media.constEnd(); ++it) {
+        if (cancel && cancel->load()) return fail("Canceled.");
         bool ok = false;
         const int mediaId = it.key().toInt(&ok);
-        if (!ok) continue;
+        if (!ok || mediaId < 1 || !it.value().isObject()) return fail("Invalid source ID.");
         const QJsonObject mo = it.value().toObject();
-        out->media.insert(mediaId, { mo["name"].toString(), imageFromBase64(mo["png"].toString()) });
+        QImage image = imageFromBase64(mo["png"].toString(), mo["frames"].toArray().isEmpty()
+            ? 512LL * 1024 * 1024 - decodedBytes : 512LL * 1024 * 1024);
+        if (image.isNull()) return fail("A source image is missing or invalid.");
+        if (mo["frames"].toArray().isEmpty()) decodedBytes += image.sizeInBytes();
+        if (decodedBytes > 512LL * 1024 * 1024) return fail("Project sources exceed the 512 MiB memory budget.");
+        MediaEntry entry; entry.name = mo["name"].toString(); entry.image = image;
+        entry.fps = mo["fps"].toDouble(24.0);
+        if (!std::isfinite(entry.fps) || entry.fps < 0 || entry.fps > 240 || (!mo["frames"].toArray().isEmpty() && entry.fps == 0)) return fail("Invalid source frame rate.");
+        if (mo.contains("frames") && !mo["frames"].isArray()) return fail("Invalid video frame list.");
+        FrameStore videoFrames; QString cacheError;
+        for (const auto& value : mo["frames"].toArray()) {
+            if (cancel && cancel->load()) return fail("Canceled.");
+            QImage frame = imageFromBase64(value.toString());
+            if (frame.isNull() || frame.size() != image.size()) return fail("Invalid video frame.");
+            if (!videoFrames.append(frame, cacheError)) return fail(cacheError);
+        }
+        if (videoFrames.count()) {
+            entry.frames = videoFrames.finish(cacheError);
+            if (entry.frames.isEmpty()) return fail(cacheError);
+            entry.image = entry.frames.first();
+        }
+        candidate.media.insert(mediaId, std::move(entry));
     }
+    QSet<int> ids, parents;
+    int maxId = 0;
+    for (const auto& l : candidate.params.layers) {
+        if (l.id < 1 || ids.contains(l.id) || int(l.kind) < 0 || int(l.kind) > int(LayerKind::Halftone)
+            || int(l.blend) < 0 || int(l.blend) > int(BlendMode::Luminosity)
+            || !candidate.media.contains(l.mediaId)) return fail("Invalid layer or missing source reference.");
+        auto enumIn = [](int value, int maximum) { return value >= 0 && value <= maximum; };
+        if (!enumIn(int(l.dither.algorithm), int(DitherAlgorithm::CustomPattern))
+            || !enumIn(int(l.halftone.dotShape), int(ScreenDotShape::Ink))) return fail("Unknown rendering option.");
+        for (const auto& shape : l.dotGrid.shapes) {
+            if (!enumIn(int(shape.shape), int(DotGridShape::CustomSVG))) return fail("Unknown dot shape.");
+            if (shape.shape == DotGridShape::CustomSVG && !QFileInfo::exists(shape.svgPath)) return fail("A custom SVG is missing. Restore its original path and reopen the project.");
+        }
+        if (l.dither.algorithm == DitherAlgorithm::CustomPattern && !QFileInfo::exists(l.dither.patternPath)) return fail("A custom pattern is missing.");
+        ids.insert(l.id); maxId = qMax(maxId, l.id);
+    }
+    for (const auto& g : candidate.params.parents) {
+        if (!candidate.media.contains(g.mediaId) || parents.contains(g.mediaId))
+            return fail("Invalid parent source reference.");
+        parents.insert(g.mediaId);
+    }
+    candidate.params.nextLayerId = qMax(candidate.params.nextLayerId, maxId + 1);
+    if (!ids.contains(candidate.params.activeLayerId))
+        candidate.params.activeLayerId = candidate.params.layers.empty() ? -1 : candidate.params.layers.front().id;
+    for (auto& track : candidate.anim.tracks) {
+        if ((track.layerId != -1 && !ids.contains(track.layerId)) || int(track.param) < 0
+            || int(track.param) >= int(ParamId::Count)) return fail("Invalid animation track.");
+        std::sort(track.keys.begin(), track.keys.end(), [](const auto& x, const auto& y){ return x.frame < y.frame; });
+        int last = -1;
+        for (const auto& key : track.keys) {
+            if (key.frame < 0 || key.frame > 100000 || key.frame == last
+                || int(key.easing) < 0 || int(key.easing) > int(Easing::EaseInOut)) return fail("Invalid keyframe.");
+            last = key.frame;
+        }
+    }
+    *out = std::move(candidate);
     return true;
 }
 

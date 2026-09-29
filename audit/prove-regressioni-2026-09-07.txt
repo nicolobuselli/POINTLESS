@@ -1,0 +1,16 @@
+Internal ctest changing into directory: C:/Users/busel/OneDrive/Desktop/ULTRA_Ditherer/build/Desktop_Qt_6_11_1_MinGW_64_bit-Profile
+Test project C:/Users/busel/OneDrive/Desktop/ULTRA_Ditherer/build/Desktop_Qt_6_11_1_MinGW_64_bit-Profile
+    Start 1: document_state_check
+1/5 Test #1: document_state_check .............   Passed    0.18 sec
+    Start 2: export_frame_check
+2/5 Test #2: export_frame_check ...............   Passed    0.08 sec
+    Start 3: audit_regression_check
+3/5 Test #3: audit_regression_check ...........   Passed   10.12 sec
+    Start 4: nearest_glyph_check
+4/5 Test #4: nearest_glyph_check ..............   Passed    0.03 sec
+    Start 5: gpu_render_check
+5/5 Test #5: gpu_render_check .................   Passed    0.60 sec
+
+100% tests passed, 0 tests failed out of 5
+
+Total Test time (real) =  11.02 sec

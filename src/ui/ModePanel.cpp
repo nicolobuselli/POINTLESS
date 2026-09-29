@@ -728,7 +728,7 @@ private:
         rowl->addWidget(gut);
         ov->addLayout(rowl);
 
-        // SVG row: a left preview+name box and an accent action button. Aligns
+        // SVG row: a left preview+name box and a standard box action button. Aligns
         // with the combo above (stops at the same box gutter, not the symbol one).
         slot.svgRow = new QWidget;
         auto* sr = new QHBoxLayout(slot.svgRow);
@@ -752,10 +752,8 @@ private:
         sr->addWidget(slot.svgNameBox, 1);
 
         slot.svgBtn = new QPushButton;
-        slot.svgBtn->setObjectName("accentBtn");                // orange (colour via QSS)
+        slot.svgBtn->setObjectName("exportBtn");                // standard box chrome
         slot.svgBtn->setCursor(appCursor());
-        // Pin the height to match the name box: #accentBtn carries a literal
-        // min-height:40px (unscaled) that would otherwise mis-size it.
         slot.svgBtn->setStyleSheet(QString("min-height:%1px; max-height:%1px;").arg(Ui::px(Ui::kBoxH)));
         slot.svgBtn->setFixedHeight(Ui::px(Ui::kBoxH));
         sr->addWidget(slot.svgBtn, 1);
@@ -2189,7 +2187,8 @@ ModePanel::ModePanel(QWidget* parent)
     : QWidget(parent)
 {
     setObjectName("sidePanel");
-    setMinimumWidth(Ui::px(310));   // compact window: controls still fit above the 800px floor
+    setMinimumWidth(Ui::px(Ui::kRightPanelMinW));
+    setMaximumWidth(Ui::px(Ui::kSidePanelMaxW));
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -2220,12 +2219,14 @@ ModePanel::ModePanel(QWidget* parent)
               "Canonical CMYK print screen: four dot grids,\none per ink, each at its own angle." },
         });
         m_modePick->setValue(int(RenderMode::DotGrid));
-        m_modePick->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_modePick->setFixedWidth(Ui::px(Ui::kModePickerW));
+        m_modePick->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         m_modePick->setAccent(true);   // orange/white CTA — must stay unmistakable
         m_modePick->onSelected = [this](QVariant v) {
             if (!m_updating) emit modeSelected(RenderMode(v.toInt()));
         };
-        tl->addWidget(m_modePick, 1);
+        tl->addWidget(m_modePick);
+        tl->addStretch(1);
 
         // "X" in the +/- gutter: clears the mode → layer goes back to Original
         // (raw image), a second way to deselect besides the row context menu.

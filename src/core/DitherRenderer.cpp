@@ -541,10 +541,9 @@ bool DitherRenderer::gpuRenderable(const DitherSettings& s)
 {
     if (!(isOrdered(s.algorithm) || isThreshold(s.algorithm))) return false;
     if (!s.tonal.enabled) return false;                  // Fill "−": layer paints nothing
-    if (s.tonal.mode == ToneMode::Palette) return false; // OkLab nearest-match: CPU
     if (s.cornerRadius > 0.0f && clampPixelSize(s.pixelSize) > 1)
         return false;                                    // QPainter connected rounding
-    if (s.tonal.mode == ToneMode::FixedTones) {
+    if (s.tonal.mode == ToneMode::FixedTones || s.tonal.mode == ToneMode::Palette) {
         const int nT = int(s.tonal.tones.size());
         if (nT > 8) return false;
         const int L = qBound(2, s.levels, 16);

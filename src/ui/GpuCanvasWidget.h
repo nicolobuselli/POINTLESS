@@ -77,6 +77,7 @@ private:
 
     QRhi* m_rhi = nullptr;
     bool  m_initialized = false;
+    bool m_gpuFailed = false;
 
     // Shared
     std::unique_ptr<QRhiBuffer>  m_vbuf;
@@ -108,6 +109,7 @@ private:
 
     struct LayerTex {
         qint64 key = -1;
+        quint64 stamp = 0;
         std::unique_ptr<QRhiTexture> tex;
     };
     // Keyed by (layer id, raster size) — the fast (≤900px) and full-res
@@ -115,6 +117,7 @@ private:
     // alternation around every drag pause stops destroying/recreating/
     // re-uploading textures (that churn was a visible hitch).
     std::unordered_map<quint64, LayerTex> m_layerTex;   // move-only values: not QHash
+    quint64 m_textureStamp = 0;
     std::vector<QRhiTexture*> m_frameTex;   // per-pkg-layer src textures, this frame
 
     // Dot Grid screen layers (fully uniform-driven): dot.vert reconstructs
@@ -169,9 +172,20 @@ private:
     std::unique_ptr<QRhiGraphicsPipeline> m_ditherPipeline;
     void ensureDitherPipeline();
 
-    // Mosaic screen layers: same shape as DotRes (instanced tiles, source
-    // sampled in the vertex stage), own UBO layout + pipeline.
-    std::unordered_map<int, DotRes> m_mosRes;
+    // Mosaic screen layers: instanced tiles + an optional cached per-tone text
+    // atlas sampled by the fragment stage.
+    struct MosRes {
+        QRhiTexture* srcBound = nullptr;
+        std::unique_ptr<QRhiTexture> atlasTex;
+        qint64 atlasKey = -1;
+        std::unique_ptr<QRhiBuffer> ubo;
+        std::unique_ptr<QRhiShaderResourceBindings> srb;
+        std::unique_ptr<QRhiTexture> tex;
+        std::unique_ptr<QRhiTextureRenderTarget> rt;
+        QSize size;
+        int count = 0;
+    };
+    std::unordered_map<int, MosRes> m_mosRes;
     std::unique_ptr<QRhiGraphicsPipeline> m_mosPipeline;
     void ensureMosPipeline();
 

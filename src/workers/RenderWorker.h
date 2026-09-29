@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <atomic>
 #include <QImage>
 #include <QPainter>
 #include <QTimer>
@@ -31,6 +32,8 @@ class RenderWorker : public QObject
 public:
     explicit RenderWorker(QObject* parent = nullptr);
     ~RenderWorker() override;
+    void invalidatePending();
+    static bool canRenderOnGpu(const SessionParams& params, const QHash<int, QImage>& sources = {}, QSize fallback = {});
 
     // fullPass=false renders only the fast preview (used during playback so
     // the full-resolution pass never floods the thread). layerSrc maps a
@@ -108,7 +111,7 @@ public:
     // result still matches. Returns false if the frame size can't be resolved.
     static bool renderDocumentToSvg(const QString& path, const QImage& source,
                                     const SessionParams& params,
-                                    const QHash<int, QImage>& layerSrc = {});
+                                    const QHash<int, QImage>& layerSrc = {}, std::atomic_bool* cancel = nullptr);
     // Rough upper bound on the vector elements an SVG export would contain, for
     // the "heavy render" warning (dots + glyphs + un-merged dither cells).
     static int estimateSvgElements(const QImage& source, const SessionParams& params,
@@ -140,8 +143,9 @@ private:
     struct LayerCacheEntry {
         Layer       key;               // origLayer with xPct/yPct/rotation/flip zeroed
         QSize       srcSize;
-        const void* srcBits = nullptr; // identity check only, never dereferenced
+        qint64 srcBits = 0; // QImage cacheKey, stable even when allocator addresses are reused
         QImage      rendered;
+        bool gpuPackage = false;
         quint64     stamp = 0;         // LRU order (see pruneLayerCache)
     };
     static QImage renderDocumentImpl(const QImage& source, const SessionParams& params,
@@ -174,13 +178,13 @@ private:
     // QImage::scaled() allocated a fresh buffer every single interactive frame
     // and the cache never hit during a drag.
     QImage      m_cachedSmallSrc;
-    const void* m_cachedSmallSrcOrigBits = nullptr;
+    qint64 m_cachedSmallSrcOrigBits = 0;
     float       m_cachedSmallSrcK        = -1.0f;
 
     // Same fix for per-layer media (scaledLayerSrc): without it every
     // interactive frame re-scales every layer's media into a fresh buffer,
     // whose new address busts the layer-render cache on every tick.
-    struct ScaledSrcEntry { const void* bits = nullptr; float k = -1.0f; QImage img; };
+    struct ScaledSrcEntry { qint64 bits = 0; float k = -1.0f; QImage img; };
     QHash<int, ScaledSrcEntry> m_scaledLayerSrcCache;
     QHash<int, QImage> scaledLayerSrcCached(const QHash<int, QImage>& src, float scale);
 
@@ -193,6 +197,9 @@ private:
     bool m_fastPending = false;
     bool m_fullPending = false;
     bool m_gpuPackages = false;
+    quint64 m_revision = 0;
+    quint64 m_fastRevision = 0;
+    quint64 m_fullRevision = 0;
 
     bool fastBusy() const { return m_fastWatcher.isRunning() || m_fastPkgWatcher.isRunning(); }
     bool fullBusy() const { return m_fullWatcher.isRunning() || m_fullPkgWatcher.isRunning(); }

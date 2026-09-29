@@ -262,6 +262,7 @@ public:
     bool wasCanceled() const { return m_canceled; }
 
 protected:
+    void reject() override { m_canceled = true; }
     void paintEvent(QPaintEvent*) override;
 
 private:

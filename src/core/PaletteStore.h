@@ -24,6 +24,10 @@ std::vector<PalettePreset> all();
 // Add a palette, or overwrite the existing one with the same name.
 void save(const QString& name, const std::vector<QColor>& colors);
 
+// Replace one palette in place (including its name). Returns false when the
+// index/name/colors are invalid. Palette names stay unique, like save().
+bool update(int index, const QString& name, const std::vector<QColor>& colors);
+
 // Remove the palette at the given index (no-op if out of range).
 void remove(int index);
 

@@ -1,0 +1,25 @@
+Internal ctest changing into directory: C:/Users/busel/OneDrive/Desktop/ULTRA_Ditherer/build/Desktop_Qt_6_11_1_MinGW_64_bit-Profile
+Test project C:/Users/busel/OneDrive/Desktop/ULTRA_Ditherer/build/Desktop_Qt_6_11_1_MinGW_64_bit-Profile
+    Start 1: document_state_check
+1/5 Test #1: document_state_check .............   Passed    0.17 sec
+    Start 2: export_frame_check
+2/5 Test #2: export_frame_check ...............   Passed    0.09 sec
+    Start 3: audit_regression_check
+3/5 Test #3: audit_regression_check ...........   Passed    0.46 sec
+    Start 4: nearest_glyph_check
+4/5 Test #4: nearest_glyph_check ..............   Passed    0.02 sec
+    Start 5: gpu_render_check
+5/5 Test #5: gpu_render_check .................   Passed    0.55 sec
+
+100% tests passed, 0 tests failed out of 5
+
+Total Test time (real) =   1.31 sec
+
+Golden before/after: 14 PNG files, 0 SHA-256 mismatches.
+GPU native D3D11 Multiply: CPU=64,32,96 GPU=64,32,96 max RGB error=0.
+Package: startup/resources/CPU render pass with Qt/compiler removed from PATH.
+Manifest: 26 files verified, 0 mismatches. FileVersion=ProductVersion=2.0.0.
+FFmpeg 8.1.1 verified: 228D7A8556258DE907FDB55F36850078EBC7680B84EC30D84EA02E99BEC1D1EB
+UI probe: 1920x1080, 1366x768, 1280x720, 960x540 accepted; source scale=0.960751.
+Transform: rotation 12.4, scale 33.33, aspect 100, x .12345 unchanged by roundtrip.
+git diff --check: pass.

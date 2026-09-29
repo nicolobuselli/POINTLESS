@@ -19,7 +19,7 @@ layout(std140, binding = 0) uniform buf {
     mat4 mvp;
     vec4 dims;           // contentW, contentH, cellsW, cellsH
     vec4 pA;             // lod, strength 0..1, threshold 0..1, opacity
-    vec4 pB;             // algoClass (0 mask, 1 lineHatch, 2 threshold), imageColors, nTones, L
+    vec4 pB;             // algoClass, colorMode (1 image, 0 fixed, -1 palette), nTones, L
     vec4 pC;             // lineAngle deg, lineSpacing, maskW, maskH
     vec4 pD;             // spotlight mask count, 0, 0, 0
     vec4 toneColor[64];  // sRGB rgb + per-tone alpha (sorted + expanded)
@@ -36,6 +36,38 @@ float lin2s(float v)
 {
     v = clamp(v, 0.0, 1.0);
     return v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
+float srgbLinear(float v)
+{
+    return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+}
+
+vec3 paletteLab(vec3 srgb)
+{
+    vec3 c = vec3(srgbLinear(srgb.r), srgbLinear(srgb.g), srgbLinear(srgb.b));
+    vec3 lms = pow(max(vec3(
+        dot(c, vec3(0.4122214708, 0.5363325363, 0.0514459929)),
+        dot(c, vec3(0.2119034982, 0.6806995451, 0.1073969566)),
+        dot(c, vec3(0.0883024619, 0.2817188376, 0.6299787005))), vec3(0.0)), vec3(1.0 / 3.0));
+    return vec3(dot(lms, vec3(0.2104542553, 0.7936177850, -0.0040720468)),
+                dot(lms, vec3(1.9779984951, -2.4285922050, 0.4505937099)),
+                dot(lms, vec3(0.0259040371, 0.7827717662, -0.8086757660)));
+}
+
+vec4 palettePen(vec3 linearColor, int count)
+{
+    vec3 srgb = round(vec3(lin2s(linearColor.r), lin2s(linearColor.g),
+                           lin2s(linearColor.b)) * 255.0) / 255.0;
+    vec3 target = paletteLab(srgb);
+    int best = 0;
+    float bestDistance = 1e30;
+    for (int i = 0; i < count; ++i) {
+        vec3 delta = target - paletteLab(toneColor[i].rgb);
+        float d = dot(delta, delta);
+        if (d < bestDistance) { bestDistance = d; best = i; }
+    }
+    return toneColor[best];
 }
 
 // LocField::t — smoothstep falloff band of one circle.
@@ -74,6 +106,7 @@ void main()
 
     int  algoClass   = int(pB.x + 0.5);
     bool imageColors = pB.y > 0.5;
+    bool paletteMode = pB.y < -0.5;
     vec4 col = vec4(0.0);
 
     if (algoClass == 2) {
@@ -110,6 +143,9 @@ void main()
             vec3 q    = clamp(base + vec3(greaterThan(val - base, vec3(t))),
                               vec3(0.0), vec3(L - 1.0)) / (L - 1.0);
             col = vec4(lin2s(q.r), lin2s(q.g), lin2s(q.b), 1.0);
+        } else if (paletteMode) {
+            float bias = (t0 - 0.5) * str * 0.5;
+            col = palettePen(clamp(lin + vec3(bias), 0.0, 1.0), int(pB.z + 0.5));
         } else {
             // FixedTones: gamma-encoded channels (traditional dither tools).
             vec3  gam = vec3(lin2s(lin.r), lin2s(lin.g), lin2s(lin.b));

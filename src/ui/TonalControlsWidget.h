@@ -25,8 +25,8 @@ class SavePalettePopup;
  * Color strategy for a layer. A custom Palette selector sits on top: its
  * header shows the current palette name and a preview of the colors in
  * use; clicking it opens a floating dropdown (over the controls below)
- * listing the saved palette library, each row with a color preview and a
- * trash button — deleting asks for confirmation inline.
+ * listing the saved palette library. Each row ends with a kebab menu for
+ * editing its name/colors or deleting it.
  *
  * Below it, one row holds the color-count dropdown and a "Generate random"
  * button (the count is chosen once and drives both the tones and the

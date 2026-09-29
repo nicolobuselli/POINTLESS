@@ -314,12 +314,15 @@ FilmstripWidget::FilmstripWidget(QWidget* parent)
     // resizeEvent below.
     m_emptyState = new QWidget(this);
     auto* evl = new QVBoxLayout(m_emptyState);
-    evl->setContentsMargins(Ui::px(20), Ui::px(24), Ui::px(20), 0);
+    evl->setContentsMargins(Ui::px(20), Ui::px(20), Ui::px(20), 0);
+    evl->setSpacing(0);
     auto* label = new QLabel("let's ruin a perfectly good image");
     label->setObjectName("filmstripEmptyHint");
     label->setAlignment(Qt::AlignCenter);
-    evl->addWidget(label, 0, Qt::AlignHCenter);
-    evl->addSpacing(Ui::px(16));
+    label->setWordWrap(true);
+    label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    evl->addWidget(label);
+    evl->addSpacing(Ui::px(24));
     auto* cta = new ImportCTAButton;
     connect(cta, &QAbstractButton::clicked, this, &FilmstripWidget::addRequested);
     evl->addWidget(cta, 0, Qt::AlignHCenter);
@@ -392,30 +395,16 @@ void FilmstripWidget::setActive(int mediaId)
         t->setActive(t->mediaId() == mediaId);
 }
 
-// Both this and applyCellSizesOnly() size off FilmstripWidget's own width,
-// not m_thumbRow's (the grid viewport): the add button and the grid are
-// siblings sharing one row, so resizing the add button changes the grid's
-// available width — reading that back would feed into the next cell-size
-// computation and could settle on a stale, mismatched size (add button and
-// thumbnails computed from two different widths a frame apart). This
-// widget's own width only changes from an actual outer resize, so deriving
-// everything from it keeps the add button and every thumbnail cell exactly
-// equal, in one pass, every time.
+// Width changes only the number of columns, never the tile dimensions.
 int FilmstripWidget::hMargins() const {
-    return Ui::px(16) + Ui::px(10) + Ui::px(kAddGapExtraFigmaPx);   // hl's own left+right content margins + the import tile's extra gap
+    return Ui::px(16) + Ui::px(10) + Ui::px(kAddGapExtraFigmaPx);
 }
 
-// Columns grow past kMinColumns once the viewport is wide enough that
-// kMinColumns squares would each exceed kMaxCellFigmaPx — so a big monitor
-// gets more, same-sized thumbnails instead of a few giant ones.
 int FilmstripWidget::computeColumns() const
 {
     const int spacing = Ui::px(10);
-    const int maxCell = Ui::px(kMaxCellFigmaPx);
-    const int avail   = width() - hMargins();
-    const int denom   = qMax(1, maxCell + spacing);
-    const int nSlots  = (avail + spacing + denom - 1) / denom;   // ceil division
-    return qMax(kMinColumns, nSlots - 1);   // -1: one slot is the add button, not a thumbnail column
+    const int cell = Ui::px(kCellFigmaPx);
+    return qMax(1, (width() - hMargins() + spacing) / (cell + spacing) - 1);
 }
 
 // Re-seats every thumb at its row/col (order = insertion order) at the
@@ -425,7 +414,6 @@ int FilmstripWidget::computeColumns() const
 void FilmstripWidget::relayoutGrid()
 {
     m_columns = computeColumns();
-    for (int c = 0; c < 24; ++c) m_thumbLayout->setColumnStretch(c, c < m_columns ? 1 : 0);
     for (int i = 0; i < m_thumbs.size(); ++i) {
         m_thumbLayout->removeWidget(m_thumbs[i]);
         m_thumbLayout->addWidget(m_thumbs[i], i / m_columns, i % m_columns);
@@ -443,10 +431,7 @@ void FilmstripWidget::applyCellSizes()
 
 void FilmstripWidget::applyCellSizesOnly()
 {
-    const int spacing = Ui::px(10);
-    const int avail   = width() - hMargins();
-    const int nSlots  = m_columns + 1;   // add button + one per thumbnail column
-    const int cell    = qMax(1, (avail - (nSlots - 1) * spacing) / nSlots);
+    const int cell = Ui::px(kCellFigmaPx);
     for (FilmstripThumb* t : m_thumbs) t->setSquareSize(cell);
     if (m_addBtn) m_addBtn->setSquareSize(cell);
 }

@@ -96,6 +96,29 @@ void PaletteStore::save(const QString& name, const std::vector<QColor>& colors)
     writeAll(st, list);
 }
 
+bool PaletteStore::update(int index, const QString& name, const std::vector<QColor>& colors)
+{
+    const QString cleanName = name.trimmed();
+    std::vector<PalettePreset> list = all();
+    if (index < 0 || index >= int(list.size()) || cleanName.isEmpty() || colors.empty())
+        return false;
+
+    list[index] = { cleanName, colors };
+
+    // Keep the same uniqueness contract as save(): when a rename adopts an
+    // existing name, the edited row wins and the older duplicate disappears.
+    for (int i = int(list.size()) - 1; i >= 0; --i) {
+        if (i != index && list[i].name == cleanName) {
+            list.erase(list.begin() + i);
+            if (i < index) --index;
+        }
+    }
+
+    QSettings st(kOrg, kApp);
+    writeAll(st, list);
+    return true;
+}
+
 void PaletteStore::remove(int index)
 {
     std::vector<PalettePreset> list = all();

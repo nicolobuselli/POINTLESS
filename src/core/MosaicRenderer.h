@@ -3,6 +3,13 @@
 #include "Params.h"
 #include <QImage>
 #include <QPainter>
+#include <QRect>
+#include <array>
+
+struct MosaicGpuTextAtlas {
+    QImage image;
+    std::array<QRect, 8> rects{};
+};
 
 /**
  * MosaicRenderer
@@ -18,16 +25,14 @@ class MosaicRenderer
 public:
     static void render(const QImage& input, QPainter& output, const MosaicSettings& params);
 
-    // GPU pass support (mosaic.vert/.frag): instanced tile fill. Tiles with
-    // text labels, Palette fill (OkLab) and tonal disabled fall back to the
-    // CPU (per-tone text atlas is a known TODO).
+    // GPU pass support (mosaic.vert/.frag): instanced tile fill + cached text
+    // atlas. Palette fill uses OkLab on both paths, up to the UBO's 8-tone
+    // capacity. A removed Fill still paints nothing.
     static bool gpuRenderable(const MosaicSettings& s)
     {
         if (!s.tonal.enabled) return false;
-        if (s.tonal.mode == ToneMode::Palette) return false;
-        if (s.tonal.mode == ToneMode::FixedTones && s.tonal.tones.size() > 8) return false;
-        for (size_t i = 0; i < s.texts.size() && i < s.tonal.tones.size(); ++i)
-            if (!s.texts[i].isEmpty()) return false;   // drawable label → CPU
+        if (s.tonal.mode != ToneMode::ImageColors && s.tonal.tones.size() > 8) return false;
         return true;
     }
+    static MosaicGpuTextAtlas gpuTextAtlas(const MosaicSettings& s);
 };

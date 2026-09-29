@@ -38,12 +38,12 @@ public:
     // lattices use the instanced glyph-billboard pass (ascii_grid.vert/.frag,
     // no edges/hatching/contour — same limitation as the CPU non-square
     // branch, which has no regular neighbour grid for the Sobel/isoline
-    // passes). Braille (per-cell computed codepoints) and Palette fill
-    // (OkLab) fall back to the CPU either way.
+    // passes). Palette fill uses OkLab on both GPU paths (up to 8 colors).
+    // Braille and larger tone lists fall back to CPU.
     static bool gpuRenderable(const AsciiSettings& s);
     // True when gpuRenderable(s) should use the instanced non-square path
     // instead of the fullscreen one.
     static bool gpuInstanced(const AsciiSettings& s) { return s.gridShape != GridType::Square; }
     // Cached per (font, weight, charset, cell size); cheap on repeat calls.
-    static const AsciiGpuAtlas& gpuAtlas(const AsciiSettings& s);
+    static AsciiGpuAtlas gpuAtlas(const AsciiSettings& s);
 };

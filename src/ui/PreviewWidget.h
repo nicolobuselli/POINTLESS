@@ -35,7 +35,7 @@ public:
     // ── GPU canvas (Phase 1) ──────────────────────────────────
     // initGpu() mounts a GpuCanvasWidget child under a transparent overlay
     // child: the canvas draws the image (flattened blit or GPU-composited
-    // package), the overlay draws the handles/status QPainter chrome, and
+    // package), the overlay draws the QPainter interaction chrome, and
     // this widget keeps ALL the event handling. setGpuActive(false) tears
     // the pair down visually and falls back to today's CPU painting.
     void initGpu();
@@ -132,7 +132,7 @@ private:
     QSize viewSizePx() const;      // on-screen image size (CPU: m_scaled; GPU: analytic)
     void  rerouteGpu();            // pick what the canvas shows (package or image)
     void  pushViewRect();          // keep the canvas blit rect in overlay lockstep
-    void  paintOverlays(QPainter& p);   // selection/handles/loc/box/status chrome
+    void  paintOverlays(QPainter& p);   // selection/handles/loc/box chrome
 
     // Cached scaled image to avoid re-scaling on every paint
     QImage  m_scaled;

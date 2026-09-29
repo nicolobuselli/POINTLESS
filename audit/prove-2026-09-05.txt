@@ -1,0 +1,28 @@
+probe_start
+qt_started
+load_empty_json=1
+load_future_invalid_dimensions=1 width=-99 height=2147483647
+svg_blend cpu=#402060 svg=#8040c0 equal=0
+svg_unwritable_returns_success=1
+fps_15_distinct_samples_per_24_frames=12
+animated_x_requested_2_actual=1 animated_scale_requested_2000_actual=1000
+empty_dirty=0
+library_only_dirty=0
+title_plus_library_dirty=0
+before_open_dirty=1
+after_open_layers=0 media=0 dirty=0
+undo_source_delete_restored_layers=1 restored_media=0
+new_video_300_frames_30fps_timeline_end=120 fps=24
+worker_completed_after_blue_request=#ff0000
+worker_completed_after_blue_request=#0000ff
+
+UI / transform probe:
+requested=1920x1080 actual=1920x1080 minhint=851x453 scale=0.960751
+requested=1280x720 actual=1280x720 minhint=851x453 scale=0.960751
+transform_roundtrip rotation 12.4 -> 12 scale 33.33 -> 33.2226 aspect 100 -> 99.8291 x 0.12345 -> 0.123148
+
+Existing checks:
+Profile incremental build: exit 0, Built target POINTLESS.
+nearest_glyph_check: checked=159951 mismatches=0; exit 0.
+export_frame_check: exit 0.
+render_golden: exit 0; 14 PNG images generated; no approved baseline comparison.

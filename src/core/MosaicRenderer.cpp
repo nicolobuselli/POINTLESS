@@ -5,6 +5,9 @@
 
 #include <QFont>
 #include <QFontMetricsF>
+#include <QCache>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QStaticText>
 #include <cmath>
 #include <vector>
@@ -36,6 +39,83 @@ QFont fitFont(const MosaicSettings& s, const QString& text, float tileW, float t
 }
 
 } // namespace
+
+MosaicGpuTextAtlas MosaicRenderer::gpuTextAtlas(const MosaicSettings& s)
+{
+    static QMutex mutex;
+    static QCache<QString, MosaicGpuTextAtlas> cache(64 * 1024);
+    QMutexLocker lock(&mutex);
+
+    QString key = s.fontFamily + QLatin1Char('|') + QString::number(s.fontWeight);
+    bool hasText = false;
+    for (size_t i = 0; i < s.tonal.tones.size() && i < 8; ++i) {
+        const QString text = i < s.texts.size() ? s.texts[i] : QString{};
+        key += QChar(0x1f) + text;
+        hasText = hasText || !text.isEmpty();
+    }
+    if (!hasText) return {};
+    if (auto* cached = cache.object(key)) return *cached;
+
+    QFont font(s.fontFamily.isEmpty() ? QStringLiteral("Funnel Display") : s.fontFamily);
+    font.setWeight(QFont::Weight(qBound(100, s.fontWeight, 900)));
+    font.setPixelSize(128);
+
+    struct Tile { QString text; QSize size; };
+    std::array<Tile, 8> tiles;
+    int atlasW = 0;
+    int atlasH = 0;
+    int rowW = 0;
+    int rowH = 0;
+    std::array<QPoint, 8> origins{};
+    for (int i = 0; i < int(qMin<size_t>(s.tonal.tones.size(), 8)); ++i) {
+        QString text = i < int(s.texts.size()) ? s.texts[size_t(i)] : QString{};
+        if (text.isEmpty()) continue;
+        QFont tileFont = font;
+        QFontMetricsF fm(tileFont);
+        qreal width = fm.horizontalAdvance(text);
+        if (width > 2040.0) {
+            tileFont.setPixelSize(qMax(1, int(std::floor(128.0 * 2040.0 / width))));
+            fm = QFontMetricsF(tileFont);
+            width = fm.horizontalAdvance(text);
+        }
+        tiles[size_t(i)] = { text, QSize(qMax(2, qCeil(width) + 8),
+                                           qMax(2, qCeil(fm.height()) + 8)) };
+        const QSize ts = tiles[size_t(i)].size;
+        if (rowW > 0 && rowW + ts.width() > 4096) {
+            atlasW = qMax(atlasW, rowW); atlasH += rowH; rowW = rowH = 0;
+        }
+        origins[size_t(i)] = QPoint(rowW, atlasH);
+        rowW += ts.width(); rowH = qMax(rowH, ts.height());
+    }
+    atlasW = qMax(1, qMax(atlasW, rowW));
+    atlasH = qMax(1, atlasH + rowH);
+    if (atlasW > 4096 || atlasH > 4096) return {};
+
+    MosaicGpuTextAtlas atlas;
+    atlas.image = QImage(atlasW, atlasH, QImage::Format_ARGB32);
+    atlas.image.fill(Qt::transparent);
+    {
+        QPainter painter(&atlas.image);
+        painter.setPen(Qt::white);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        for (int i = 0; i < 8; ++i) {
+            const Tile& tile = tiles[size_t(i)];
+            if (tile.text.isEmpty()) continue;
+            QRect rect(origins[size_t(i)], tile.size);
+            QFont tileFont = font;
+            QFontMetricsF fm(tileFont);
+            const qreal width = fm.horizontalAdvance(tile.text);
+            if (width > rect.width() - 8)
+                tileFont.setPixelSize(qMax(1, int(std::floor(128.0 * (rect.width() - 8) / width))));
+            painter.setFont(tileFont);
+            painter.drawText(rect, Qt::AlignCenter, tile.text);
+            atlas.rects[size_t(i)] = rect;
+        }
+    }
+    atlas.image = atlas.image.convertToFormat(QImage::Format_RGBA8888);
+    cache.insert(key, new MosaicGpuTextAtlas(atlas), int(atlas.image.sizeInBytes() / 1024 + 1));
+    return atlas;
+}
 
 void MosaicRenderer::render(const QImage& input, QPainter& output, const MosaicSettings& params)
 {

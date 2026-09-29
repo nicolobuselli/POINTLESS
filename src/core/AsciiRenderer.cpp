@@ -1,4 +1,5 @@
 #include "AsciiRenderer.h"
+#include <QCache>
 #include "CellSample.h"
 #include "ColorMath.h"
 #include "GridGenerator.h"
@@ -82,18 +83,17 @@ QFont settingsFont(const AsciiSettings& params, int cellH)
 // so the luminosity→glyph mapping reflects each character's real visual
 // weight instead of assuming the ramp is perceptually linear. Cached and
 // normalised so the densest glyph maps to 1.0.
-const std::vector<float>& glyphCoverage(const QFont& font, const QString& charset,
+std::vector<float> glyphCoverage(const QFont& font, const QString& charset,
                                         int cellW, int cellH)
 {
     static QMutex mutex;
-    static QHash<QString, std::vector<float>> cache;
+    static QCache<QString, std::vector<float>> cache(256);
     QMutexLocker lock(&mutex);
 
     const QString key = font.family() + QLatin1Char('|')
                       + QString::number(font.weight()) + QLatin1Char('|') + charset
                       + QString("|%1x%2").arg(cellW).arg(cellH);
-    auto it = cache.constFind(key);
-    if (it != cache.constEnd()) return it.value();
+    if (auto* cached = cache.object(key)) return *cached;
 
     std::vector<float> cov(size_t(charset.size()), 0.0f);
     QImage glyph(cellW, cellH, QImage::Format_ARGB32);
@@ -121,7 +121,8 @@ const std::vector<float>& glyphCoverage(const QFont& font, const QString& charse
     for (float c : cov) maxc = qMax(maxc, c);
     if (maxc > 1e-4f) for (float& c : cov) c /= maxc;
 
-    return cache.insert(key, std::move(cov)).value();
+    cache.insert(key, new std::vector<float>(cov));
+    return cov;
 }
 
 void drawCell(QPainter& output, const QRectF& rect, const QChar& c,
@@ -248,20 +249,26 @@ void renderBraille(const QImage& rgb, QPainter& output, const AsciiSettings& par
 // GPU path: the fullscreen ascii.frag ports the whole square-grid loop —
 // coverage ramp, stipple, gamma, plus edges/hatching/contour (each fragment
 // re-samples neighbour cells for the Sobel/isoline passes). Braille
-// (per-cell codepoints), Palette (OkLab) and non-square lattices stay CPU.
+// (per-cell codepoints) and palettes larger than the uniform capacity stay CPU.
 bool AsciiRenderer::gpuRenderable(const AsciiSettings& s)
 {
     if (s.isBraille()) return false;
-    if (s.tonal.mode == ToneMode::Palette) return false;
-    if (s.tonal.mode == ToneMode::FixedTones && s.tonal.tones.size() > 8) return false;
+    if (s.tonal.mode != ToneMode::ImageColors && s.tonal.tones.size() > 8) return false;
     if (s.effectiveCharset().size() > 128) return false;   // UBO coverage cap
-    return true;
+    const int h = qBound(3, s.cellSize, 4096);
+    const int w = qMax(2, qRound(QFontMetricsF(settingsFont(s, h)).horizontalAdvance(QLatin1Char('M'))));
+    const int n = s.effectiveCharset().size() + 5;
+    const int cols = qMax(1, int(std::ceil(std::sqrt(double(n)))));
+    const int rows = (n + cols - 1) / cols;
+    return w * 2 * cols <= 4096 && h * 2 * rows <= 4096
+        && qint64(w) * h * cols * rows * 16 <= 32LL * 1024 * 1024;
 }
 
-const AsciiGpuAtlas& AsciiRenderer::gpuAtlas(const AsciiSettings& s)
+AsciiGpuAtlas AsciiRenderer::gpuAtlas(const AsciiSettings& s)
 {
     static QMutex mutex;
-    static QHash<QString, AsciiGpuAtlas> cache;
+    static QCache<QString, AsciiGpuAtlas> cache(64 * 1024);
+    if (!gpuRenderable(s)) return {};
     QMutexLocker lock(&mutex);
 
     // 512 not the slider's 4..100: compensateSymbolScale (RenderWorker) divides
@@ -280,8 +287,7 @@ const AsciiGpuAtlas& AsciiRenderer::gpuAtlas(const AsciiSettings& s)
     const QString key = font.family() + QLatin1Char('|')
                       + QString::number(font.weight()) + QLatin1Char('|') + charset
                       + QString("|%1x%2").arg(cellW).arg(cellH);
-    auto it = cache.constFind(key);
-    if (it != cache.constEnd()) return it.value();
+    if (auto* cached = cache.object(key)) return *cached;
 
     AsciiGpuAtlas a;
     a.cellW  = cellW;
@@ -330,7 +336,8 @@ const AsciiGpuAtlas& AsciiRenderer::gpuAtlas(const AsciiSettings& s)
     std::sort(a.sortedIdx.begin(), a.sortedIdx.end(),
               [&](int x, int y) { return cov[size_t(x)] < cov[size_t(y)]; });
 
-    return cache.insert(key, std::move(a)).value();
+    cache.insert(key, new AsciiGpuAtlas(a), int(a.image.sizeInBytes() / 1024 + 1));
+    return a;
 }
 
 void AsciiRenderer::render(const QImage& input, QPainter& output,

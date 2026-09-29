@@ -53,16 +53,18 @@ inline bool operator==(const Animation& a, const Animation& b) {
 inline bool operator!=(const Animation& a, const Animation& b) { return !(a == b); }
 
 // Frame-hold quantization for the timeline's fps dropdown: below `fps`
-// (native), every `round(fps/stepFps)` consecutive native frames reuse the
-// first one's content — source pixels *and* animated params — giving a
+// (native), rational sample intervals reuse their first native frame's
+// content — source pixels *and* animated params — giving a
 // stepped/stop-motion look while the native frame count/timing (duration)
 // stays exactly the same. Apply at render time (never to playhead/keyframe
 // storage, which always stay in native frame space).
 inline int steppedFrame(const Animation& a, int frame)
 {
     if (a.stepFps <= 0 || a.stepFps >= a.fps) return frame;   // stepFps<=0: old-save guard
-    const int hold = std::max(1, (a.fps + a.stepFps / 2) / a.stepFps);
-    return a.frameStart + (frame - a.frameStart) / hold * hold;
+    const qint64 relative = qMax(0, frame - a.frameStart);
+    const qint64 sample = relative * a.stepFps / a.fps;
+    // Ceil maps a sample back to the first native frame assigned to it.
+    return a.frameStart + int((sample * a.fps + a.stepFps - 1) / a.stepFps);
 }
 
 // Raw interpolated value of a track at a frame.

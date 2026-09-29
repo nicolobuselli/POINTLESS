@@ -70,7 +70,7 @@ signals:
     void transformChanged(const LayerTransform& t);
 
 private:
-    void  emitTransform();
+    void  emitTransform(int field = -1);
     void  setDimensions(float scalePct, float aspectPct);   // silent — fills the X/Y px boxes
 
     LayersPanel*      m_layers      = nullptr;
@@ -93,5 +93,6 @@ private:
     float             m_curScalePct  = 100.0f;   // last known, for the unknown-source case
     float             m_curAspectPct = 100.0f;
 
+    LayerTransform m_transform;
     bool m_updating = false;
 };

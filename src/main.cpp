@@ -1,3 +1,7 @@
+#include "workers/RenderWorker.h"
+#include "core/VideoIO.h"
+#include <QTimer>
+#include "Version.h"
 #include <QApplication>
 #include <QDir>
 #include <QFile>
@@ -148,11 +152,14 @@ int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
     app.setApplicationName("POINTLESS");
-    app.setApplicationVersion("2.0.0");
+    app.setApplicationVersion(POINTLESS_VERSION);
     app.setOrganizationName("POINTLESS");
 
 #ifdef Q_OS_WIN
-    registerFileAssociation();
+    if (app.arguments().contains("--register-file-association")) {
+        registerFileAssociation();
+        return 0;
+    }
 #endif
 
     // Global UI scale: design is drawn at Ui::kDesignWidth; match it to the
@@ -193,6 +200,21 @@ int main(int argc, char* argv[])
     // looking at an empty board.
     QThreadPool::globalInstance()->start([] { DitherRenderer::warmMasks(); });
 
+    if (app.arguments().contains("--smoke-test")) {
+        QImage source(32,32,QImage::Format_ARGB32); source.fill(Qt::white);
+        SessionParams params; params.frameW = params.frameH = 32;
+        const QImage rendered = RenderWorker::renderDocument(source, params);
+        if (rendered.size() != QSize(32,32) || !VideoIO::available()) return 2;
+        MainWindow smokeWindow; smokeWindow.show();
+        QTimer::singleShot(500, &app, [&] {
+            const QPixmap shot = smokeWindow.grab();
+            QFile output(QCoreApplication::applicationDirPath() + "/smoke-result.txt");
+            if (shot.isNull() || !output.open(QIODevice::WriteOnly)) { app.exit(3); return; }
+            output.write("POINTLESS " POINTLESS_VERSION " startup, resources and CPU render OK");
+            output.close(); app.quit();
+        });
+        return app.exec();
+    }
     MainWindow w;
     w.showMaximized();
 

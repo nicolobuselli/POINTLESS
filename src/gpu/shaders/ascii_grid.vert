@@ -50,6 +50,33 @@ float lin2s(float v)
     return v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
 }
 
+
+float srgbLinear(float v) {
+    return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+}
+vec3 paletteLab(vec3 srgb) {
+    vec3 c = vec3(srgbLinear(srgb.r), srgbLinear(srgb.g), srgbLinear(srgb.b));
+    vec3 lms = pow(max(vec3(
+        dot(c, vec3(0.4122214708, 0.5363325363, 0.0514459929)),
+        dot(c, vec3(0.2119034982, 0.6806995451, 0.1073969566)),
+        dot(c, vec3(0.0883024619, 0.2817188376, 0.6299787005))), vec3(0.0)), vec3(1.0/3.0));
+    return vec3(dot(lms, vec3(0.2104542553, 0.7936177850, -0.0040720468)),
+                dot(lms, vec3(1.9779984951, -2.4285922050, 0.4505937099)),
+                dot(lms, vec3(0.0259040371, 0.7827717662, -0.8086757660)));
+}
+vec4 palettePen(vec3 linearColor, int count) {
+    // Match the CPU's 8-bit sRGB mean before the OkLab nearest-color search.
+    vec3 srgb = round(vec3(lin2s(linearColor.r), lin2s(linearColor.g), lin2s(linearColor.b))*255.0)/255.0;
+    vec3 target = paletteLab(srgb);
+    int best = 0; float distanceBest = 1e30;
+    for (int i = 0; i < count; ++i) {
+        vec3 delta = target - paletteLab(toneColor[i].rgb);
+        float d = dot(delta, delta);
+        if (d < distanceBest) { distanceBest = d; best = i; }
+    }
+    return toneColor[best];
+}
+
 float locT(vec4 f, vec2 p)
 {
     float d = distance(p, f.xy);
@@ -189,6 +216,8 @@ void main()
     int nTones = int(p1.w + 0.5);
     if (p1.z > 0.5 || nTones < 1) {
         pen = vec4(lin2s(lin.r), lin2s(lin.g), lin2s(lin.b), 1.0);
+    } else if (p1.z < -0.5) {
+        pen = palettePen(lin, nTones);
     } else {
         int lum = int(round(lumPerc * 255.0));
         int best = 0;

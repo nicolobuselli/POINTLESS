@@ -27,12 +27,12 @@ const std::array<ParamDesc, int(ParamId::LocFirst)> kDescs = {{
     { "Posterize",          2,   256,  true,  ParamScope::AllLayers },
     { "Threshold",          0,   255,  true,  ParamScope::AllLayers },
 
-    { "Position X",         -1,     1,  false, ParamScope::AllLayers },
-    { "Position Y",         -1,     1,  false, ParamScope::AllLayers },
-    { "Scale",              10,  1000,  false, ParamScope::AllLayers },
+    { "Position X",    -1000000, 1000000,  false, ParamScope::AllLayers },
+    { "Position Y",    -1000000, 1000000,  false, ParamScope::AllLayers },
+    { "Scale",           0.001, 1000000,  false, ParamScope::AllLayers },
     { "Rotation",         -180,   180,  false, ParamScope::AllLayers },
 
-    { "Spacing",            2,   500,  false, ParamScope::DotGrid },
+    { "Spacing",            2,   200,  false, ParamScope::DotGrid },
     { "Point spacing",      2,   200,  false, ParamScope::DotGrid },
     { "Rotation",           0,   360,  false, ParamScope::DotGrid },
     { "Diameter",         0.1,   3.0,  false, ParamScope::DotGrid },
@@ -40,7 +40,7 @@ const std::array<ParamDesc, int(ParamId::LocFirst)> kDescs = {{
     { "Stretch angle",      0,   360,  false, ParamScope::DotGrid },
     { "Input DPI",         18,   300,  true,  ParamScope::DotGrid },
     { "Shape threshold",    0,   255,  true,  ParamScope::DotGrid },
-    { "Gamma",            0.1,   5.0,  false, ParamScope::DotGrid },
+    { "Gamma",              0,   5.0,  false, ParamScope::DotGrid },
     { "Weight",             0,     1,  false, ParamScope::DotGrid },
     { "Jitter",             0,     1,  false, ParamScope::DotGrid },
     { "Opacity",            0,     1,  false, ParamScope::DotGrid },
@@ -85,7 +85,7 @@ const std::array<ParamDesc, int(ParamId::LocFirst)> kDescs = {{
     { "Angle M",            0,   360,  false, ParamScope::Halftone },
     { "Angle Y",            0,   360,  false, ParamScope::Halftone },
     { "Angle K",            0,   360,  false, ParamScope::Halftone },
-    { "Gamma",            0.1,   5.0,  false, ParamScope::Halftone },
+    { "Gamma",              0,   5.0,  false, ParamScope::Halftone },
     { "Opacity",            0,     1,  false, ParamScope::Halftone },
 }};
 

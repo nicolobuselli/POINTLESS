@@ -3,11 +3,13 @@
 #include <QImage>
 #include <QString>
 #include <QVector>
+#include <atomic>
+#include <functional>
 
 // ============================================================
 //  VideoIO — mp4 import/export by driving a bundled ffmpeg.exe
 //  as a subprocess (Qt Multimedia cannot encode a frame sequence).
-//  Decode: video → frames (QImage). Encode: numbered PNGs → mp4.
+//  Decode: video → frames (QImage). Encode: bounded raw-frame pipe → mp4.
 // ============================================================
 
 namespace VideoIO {
@@ -19,13 +21,15 @@ inline bool available() { return !ffmpegPath().isEmpty(); }
 
 // Decode a video into frames at native resolution. fps is read from the
 // stream (falls back to 24). Frames are capped to maxFrames. Returns false
-// and fills err on failure.
+// and fills err on failure. Pixels live in a temporary disk mapping retained by
+// the QImages; maxBytes limits a single frame, not the duration of the clip.
 bool decode(const QString& videoPath, QVector<QImage>& outFrames,
-            double& outFps, QString& err, int maxFrames = 1200);
+            double& outFps, QString& err, int maxFrames = 0,
+            std::atomic_bool* cancel = nullptr, qint64 maxBytes = 512LL * 1024 * 1024);
 
-// Encode numbered PNG frames (e.g. pattern "f_%06d.png") from dir into an
-// H.264 mp4 (video only). Returns false and fills err on failure.
-bool encodePngDir(const QString& dir, const QString& pattern, double fps,
-                  const QString& outPath, QString& err);
+// Bounded raw-frame pipe; output replaces the destination only after success.
+bool encodeFrames(QSize size, double fps, int count,
+                  const std::function<QImage(int)>& frameAt, const QString& path,
+                  QString& error, std::atomic_bool& cancel, std::atomic_int& progress);
 
 } // namespace VideoIO

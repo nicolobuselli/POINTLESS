@@ -99,9 +99,19 @@ private:
         QImage          image;     // still, or first frame of a clip
         QVector<QImage> frames;    // non-empty → video clip
         double          fps = 0.0;
+        bool operator==(const MediaClip& other) const {
+            return name == other.name && image.cacheKey() == other.image.cacheKey()
+                && frames == other.frames && fps == other.fps;
+        }
     };
 
-    struct UndoState { SessionParams params; Animation anim; };
+    struct UndoState {
+        SessionParams params;
+        Animation anim;
+        QHash<int, MediaClip> media;
+        QString title;
+        int nextMediaId = 1;
+    };
     struct SessionImage {
         QString             name;          // file/identifier (filmstrip)
         QString             title;         // user-editable title shown top-left
@@ -115,6 +125,8 @@ private:
         int                 undoIndex = -1;
     };
 
+    struct FrameSnapshot { QImage source; SessionParams params; QHash<int,QImage> layers; };
+    static FrameSnapshot frameSnapshot(const SessionImage& img, int rawFrame);
     SessionParams collectParams() const;
     void applyParams(const SessionParams& p);
     Layer* activeLayer();
@@ -139,13 +151,17 @@ private:
     void syncLayersPanel();
     void pasteLayerBelowActive();   // Ctrl+V on a focused layer row: paste right under it
     void scheduleRender(bool previewOnly = false, bool qualityOnly = false);
-    QHash<int, QImage> layerSourcesAt(const SessionImage& img, int frame) const;
+    static QHash<int, QImage> layerSourcesAt(const SessionImage& img, int frame);
     void pushUndoSnapshot();
+    void restoreUndoState(const UndoState& state);
+    void markSaved();
+    bool confirmDiscardChanges();
     QVector<int> addImages(const QStringList& paths);   // load files into the library only; returns new media ids
     int  addImageToLibrary(const QImage& img, const QString& name);   // in-memory image (e.g. clipboard paste) → library
     void addLayerFromMedia(int mediaId);        // place a library source as a layer
     int  ensureBoard();                         // make sure the single composition exists
     void importSequence(const QStringList& paths);
+    qint64 availableSourceBytes() const;
     void switchToImage(int index);
     bool saveProject(bool forceDialog);   // Ctrl+S; forceDialog=true always shows Save As. false = cancelled/failed
     void openProject();                   // Ctrl+O; replaces the current composition
@@ -174,11 +190,14 @@ private:
     void exportSequence(const QString& baseName);
     void exportVideoMp4(const QString& baseName);
     void exportSvg(const QString& baseName);
+    void constrainSidePanels();
+    bool m_panelBoundsPending = false;
     void updateDisplayedPreview();
     void updatePreviewInteractionState();
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     void closeEvent(QCloseEvent* event) override;   // prompts to save unsaved changes
@@ -230,8 +249,12 @@ private:
     QString       m_projectPath;    // last save/open .less path; empty → Ctrl+S prompts Save As
     SessionParams m_savedParams;    // state as of the last save/load/empty-board — isDirty() diffs against this
     Animation     m_savedAnim;
+    QHash<int, MediaClip> m_savedMedia;
+    QString m_savedTitle;
 
     QTimer          m_playTimer;
+    QElapsedTimer m_playClock;
+    int m_playStartFrame = 0;
     bool            m_autoKey = false;
     bool            m_playing = false;
     bool            m_playLive = false;      // true: render each tick live, no pre-bake

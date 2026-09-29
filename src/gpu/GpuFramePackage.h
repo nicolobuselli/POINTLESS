@@ -64,7 +64,8 @@ struct GpuLayer {
     // Mosaic screen layer (instanced tile fill, uniform-driven): mosaic.vert
     // rebuilds the lattice like dot.vert and colours each tile from a mip
     // average of the adjust chain's source. `mosaicSettings.spacing` follows
-    // the bake-res compensation rule. Text labels force the CPU path.
+    // the bake-res compensation rule. OkLab palettes run here; text labels
+    // still force the CPU path.
     bool           mosaicScreen = false;
     MosaicSettings mosaicSettings;
     // ASCII screen layer, Square grid (coverage-ramp fullscreen pass,
@@ -77,8 +78,8 @@ struct GpuLayer {
     // with asciiScreen (AsciiRenderer::gpuInstanced picks one).
     bool          asciiInstanced = false;
     // `cellSize` follows the bake-res compensation rule either way.
-    // Effects (non-square only)/Braille/Palette → CPU (AsciiRenderer::
-    // gpuRenderable).
+    // Braille and oversized atlases/tone lists → CPU (AsciiRenderer::
+    // gpuRenderable); palettes up to 8 colours run on the GPU.
     AsciiSettings asciiSettings;
 
     QSize          contentSize;   // raster size for both paths (== image.size() when raster)

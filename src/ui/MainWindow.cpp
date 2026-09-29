@@ -1,4 +1,8 @@
+#include <QImageReader>
+#include <QSettings>
 #include "MainWindow.h"
+#include "BackgroundJob.h"
+#include <QSaveFile>
 #include "PreviewWidget.h"
 #include "ControlsPanel.h"
 #include "UiScale.h"
@@ -13,6 +17,7 @@
 #include "../core/ImageAdjuster.h"
 #include "../core/ProjectIO.h"
 #include "../core/VideoIO.h"
+#include "../core/FrameStore.h"
 #include "../core/DotGridRenderer.h"
 #include "../core/HalftoneRenderer.h"
 #include "../core/DitherRenderer.h"
@@ -212,7 +217,7 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_worker(new RenderWorker(this))
 {
-    setWindowTitle("POINTLESS");
+    setWindowTitle("POINTLESS[*]");
     setWindowIcon(QIcon(":/logo.png"));
     setMinimumHeight(680);
     // App-wide default cursor: children inherit it unless they set their own
@@ -236,6 +241,12 @@ MainWindow::MainWindow(QWidget* parent)
     m_left = new ControlsPanel;
 
     m_preview   = new PreviewWidget;
+    connect(m_preview->gpuCanvas(), &QRhiWidget::renderFailed, this, [this] {
+        m_preview->setGpuActive(false);
+        m_worker->setGpuPackages(false);
+        scheduleRender();
+        m_preview->setStatus("GPU unavailable for this document — using CPU rendering");
+    }, Qt::QueuedConnection);
     m_filmstrip = new FilmstripWidget;
     m_timeline  = new TimelineWidget;
     m_preview->setMinimumHeight(160);   // keep panes from collapsing to nothing
@@ -287,6 +298,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Center column: preview over the bottom panel, vertically resizable.
     auto* centerSplit = new QSplitter(Qt::Vertical);
+    centerSplit->setObjectName("centerSplit");
     centerSplit->setChildrenCollapsible(false);
     centerSplit->setHandleWidth(1);
     centerSplit->addWidget(m_preview);
@@ -361,6 +373,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Main columns: left | center | right, horizontally resizable.
     auto* mainSplit = new QSplitter(Qt::Horizontal);
+    mainSplit->setObjectName("mainSplit");
     mainSplit->setChildrenCollapsible(false);
     mainSplit->setHandleWidth(1);
     mainSplit->addWidget(m_left);
@@ -370,7 +383,11 @@ MainWindow::MainWindow(QWidget* parent)
     mainSplit->setStretchFactor(1, 1);
     mainSplit->setStretchFactor(2, 0);
     // Start with the side columns at their minimum width (the user can widen).
-    mainSplit->setSizes({ Ui::px(410), Ui::px(1738), Ui::px(410) });
+    mainSplit->setSizes({ Ui::px(Ui::kLeftPanelMinW), Ui::px(1738), Ui::px(Ui::kRightPanelMinW) });
+    m_left->installEventFilter(this);
+    m_right->installEventFilter(this);
+    mainSplit->installEventFilter(this);
+    connect(mainSplit, &QSplitter::splitterMoved, this, [this] { constrainSidePanels(); });
 
     // Panel-resize glyph on every drag handle (Qt's own split cursors otherwise).
     applySplitterCursors(mainSplit);
@@ -414,6 +431,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_left, &ControlsPanel::fileRenamed, this, [this](const QString& name) {
         if (m_current < 0) return;
         m_images[m_current].title = name;
+        m_undoTimer.start();
     });
     connect(m_left, &ControlsPanel::frameSizeChanged, this, [this](int w, int h) {
         if (m_current < 0) return;
@@ -538,12 +556,12 @@ MainWindow::MainWindow(QWidget* parent)
                     scheduleRender();
                     return;
                 }
-                m_playTimer.start(1000 / qMax(1, m_images[m_current].anim.fps));
+                m_playStartFrame = m_images[m_current].anim.playhead; m_playClock.restart();
+            m_playTimer.start(1000 / qMax(1, m_images[m_current].anim.fps));
                 return;
             }
             Animation& a = m_images[m_current].anim;
-            int next = a.playhead + 1;
-            if (next > a.frameEnd) next = a.frameStart;   // loop
+            const int next = a.frameStart + int((qMax(0, m_playStartFrame - a.frameStart) + m_playClock.elapsed() * qMax(1, a.fps) / 1000) % qMax(1, a.frameEnd - a.frameStart + 1));
             a.playhead = next;
             m_timeline->setPlayheadSilent(next);
             scheduleRender(/*previewOnly=*/true);
@@ -566,12 +584,12 @@ MainWindow::MainWindow(QWidget* parent)
                 scheduleRender();
                 return;
             }
+            m_playStartFrame = m_images[m_current].anim.playhead; m_playClock.restart();
             m_playTimer.start(1000 / qMax(1, img.anim.fps));
         }
         if (m_playCache.isEmpty()) return;
         Animation& a = m_images[m_current].anim;
-        int next = a.playhead + 1;
-        if (next > a.frameEnd) next = a.frameStart;   // loop
+        const int next = a.frameStart + int((qMax(0, m_playStartFrame - a.frameStart) + m_playClock.elapsed() * qMax(1, a.fps) / 1000) % qMax(1, a.frameEnd - a.frameStart + 1));
         a.playhead = next;
         m_timeline->setPlayheadSilent(next);
         const int idx = qBound(0, next - a.frameStart, int(m_playCache.size()) - 1);
@@ -688,6 +706,10 @@ MainWindow::MainWindow(QWidget* parent)
     // image is imported — same board scheduleRender() already draws as a
     // plain background fill when a board has zero layers.
     ensureBoard();
+    // Start compact; manual resizing remains available for the session.
+    QTimer::singleShot(0, this, [this, centerSplit] {
+        centerSplit->setSizes({qMax(1, centerSplit->height() - m_bottomExpandedH), m_bottomExpandedH});
+    });
 }
 
 MainWindow::~MainWindow() = default;
@@ -811,8 +833,37 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
 }
 #endif // Q_OS_WIN
 
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    // Each side stays near 30% at most, subject to its non-breaking minimum.
+    constrainSidePanels();
+}
+
+void MainWindow::constrainSidePanels()
+{
+    auto* split = findChild<QSplitter*>("mainSplit");
+    if (!split || !m_left || !m_right) return;
+    const int cap = qMin(Ui::px(Ui::kSidePanelMaxW), width() * 3 / 10);
+    m_left->setMaximumWidth(qMax(m_left->minimumWidth(), cap));
+    m_right->setMaximumWidth(qMax(m_right->minimumWidth(), cap));
+    auto sizes = split->sizes();
+    if (sizes.size() != 3) return;
+    const int left = qBound(m_left->minimumWidth(), sizes[0], m_left->maximumWidth());
+    const int right = qBound(m_right->minimumWidth(), sizes[2], m_right->maximumWidth());
+    if (left == sizes[0] && right == sizes[2]) return;
+    const int total = sizes[0] + sizes[1] + sizes[2];
+    split->setSizes({left, total - left - right, right});
+}
+
 bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 {
+    if ((obj == m_left || obj == m_right || obj->objectName() == "mainSplit")
+        && (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest)
+        && !m_panelBoundsPending) {
+        m_panelBoundsPending = true;
+        QTimer::singleShot(0, this, [this] { m_panelBoundsPending = false; constrainSidePanels(); });
+    }
 
     if (obj == this && event->type() == QEvent::WindowStateChange && m_titleBar) {
         m_titleBar->updateMaxIcon();
@@ -1057,6 +1108,7 @@ void MainWindow::syncBoardSource(SessionImage& board) const
     if (board.state.parents.empty()) { board.source = QImage(); board.frames.clear(); return; }
     const auto it = board.media.find(board.state.parents.front().mediaId);
     if (it != board.media.end()) { board.source = it->image; board.frames = it->frames; }
+    else { board.source = {}; board.frames.clear(); }
 }
 
 bool MainWindow::groupVisibleFor(const SessionParams& st, int mediaId) const
@@ -1327,6 +1379,7 @@ void MainWindow::setPlayhead(int frame)
     SessionImage& img = m_images[m_current];
     frame = qBound(img.anim.frameStart, frame, img.anim.frameEnd);
     img.anim.playhead = frame;
+    if (m_playing) { m_playStartFrame = frame; m_playClock.restart(); }
 
     // Reflect the frame's interpolated parameters in the panels (silent).
     if (img.anim.hasAnimation()) {
@@ -1336,7 +1389,7 @@ void MainWindow::setPlayhead(int frame)
     m_timeline->setPlayheadSilent(frame);
     // No keyframes and no video frames: the rendered image is identical at
     // every frame, so scrubbing the playhead has nothing to re-render.
-    if (!img.anim.hasAnimation() && img.frames.isEmpty()) return;
+    if (!img.anim.hasAnimation() && std::none_of(img.media.cbegin(), img.media.cend(), [](const MediaClip& clip) { return !clip.frames.isEmpty(); })) return;
     scheduleRender();
 }
 
@@ -1438,6 +1491,7 @@ void MainWindow::onTimelineEdited()
     if (m_current < 0) return;
     m_playCacheValid = false;
     m_images[m_current].anim = m_timeline->animation();
+    if (m_playing) { m_playStartFrame = m_images[m_current].anim.playhead; m_playClock.restart(); }
     refreshAnimationIndicators();
     scheduleRender();
     m_undoTimer.start();
@@ -1446,29 +1500,14 @@ void MainWindow::onTimelineEdited()
 // Visible layers whose mode still forces the CPU renderer (error-diffusion
 // dither, Braille, Mosaic/Palette text fallbacks, …) block live playback —
 // Original layers are always GPU (point-op or the full adjust chain).
-static bool layerBlocksLivePlayback(const Layer& l)
-{
-    if (!l.visible) return false;
-    switch (l.kind) {
-        case LayerKind::DotGrid:  return !DotGridRenderer::gpuRenderable(l.dotGrid);
-        case LayerKind::Halftone: return !HalftoneRenderer::gpuRenderable(l.halftone);
-        case LayerKind::Dither:   return !DitherRenderer::gpuRenderable(l.dither);
-        case LayerKind::Mosaic:   return !MosaicRenderer::gpuRenderable(l.mosaic);
-        case LayerKind::Ascii:    return !AsciiRenderer::gpuRenderable(l.ascii);
-        case LayerKind::Original: return false;
-    }
-    return false;
-}
-
 // Checked against the base (un-animated) layer settings: the enums that
 // route CPU vs GPU (algorithm, tonal mode, grid shape, per-tone text, …)
 // aren't animatable, so they can't drift across the played range.
 bool MainWindow::animCanPlayLive() const
 {
     if (m_current < 0 || !m_preview->gpuActive()) return false;
-    for (const Layer& l : m_images[m_current].state.layers)
-        if (layerBlocksLivePlayback(l)) return false;
-    return true;
+    const auto snap = frameSnapshot(m_images[m_current], m_images[m_current].anim.playhead);
+    return RenderWorker::canRenderOnGpu(snap.params, snap.layers, snap.source.size());
 }
 
 void MainWindow::onPlayToggled(bool playing)
@@ -1480,6 +1519,7 @@ void MainWindow::onPlayToggled(bool playing)
         if (m_playLive) {
             m_playing = true;
             scheduleRender(/*previewOnly=*/true);   // show current frame immediately
+            m_playStartFrame = m_images[m_current].anim.playhead; m_playClock.restart();
             m_playTimer.start(1000 / qMax(1, m_images[m_current].anim.fps));
             return;
         }
@@ -1492,7 +1532,8 @@ void MainWindow::onPlayToggled(bool playing)
         Animation& a = m_images[m_current].anim;
         const int idx = qBound(0, a.playhead - a.frameStart, int(m_playCache.size()) - 1);
         m_preview->setImage(m_playCache[idx]);   // show current frame immediately
-        m_playTimer.start(1000 / qMax(1, a.fps));
+        m_playStartFrame = m_images[m_current].anim.playhead; m_playClock.restart();
+            m_playTimer.start(1000 / qMax(1, a.fps));
     } else {
         m_playing = false;
         m_playLive = false;
@@ -1523,30 +1564,32 @@ bool MainWindow::buildPlayCache(int dialogDelayMs)
     const int f0 = img.anim.frameStart;
     const int f1 = qMax(f0, img.anim.frameEnd);
     const int count = f1 - f0 + 1;
-    if (!img.anim.hasAnimation() && img.frames.isEmpty())
+    if (!img.anim.hasAnimation() && std::none_of(img.media.cbegin(), img.media.cend(), [](const MediaClip& clip) { return !clip.frames.isEmpty(); }))
         return false;   // no keyframes, no video frames: every frame is identical
 
-    m_playCache.clear();
-    m_playCache.reserve(count);
-
-    AnimProgressDialog progress("Preparing playback…", count, this);
-    progress.setMinimumDuration(dialogDelayMs);
-
-    for (int i = 0; i < count; ++i) {
-        progress.setValue(i);
-        if (progress.wasCanceled()) { m_playCache.clear(); return false; }
-
-        const int frame = steppedFrame(img.anim, f0 + i);
-        QImage src = img.source;
-        if (!img.frames.isEmpty())
-            src = img.frames[qBound(0, frame - f0, img.frames.size() - 1)];
-        const SessionParams p = bakeGroupVisibility(img.anim.hasAnimation()
-            ? paramsAtFrame(img.state, img.anim, frame)
-            : img.state, frame);
-        m_playCache.append(m_worker->renderPreviewCached(src, p, RenderWorker::FAST_MAX_PX,
-                                                         layerSourcesAt(img, frame)));
-    }
-    progress.setValue(count);
+    const SessionImage snapshot = img;
+    m_playCache = runBackgroundJob(this, "Preparing playback…", count,
+        [snapshot, f0, count](std::atomic_bool& cancel, std::atomic_int& progress) {
+            QVector<QImage> cache; cache.reserve(count);
+            RenderWorker renderer;
+            qint64 bytes = 0; int previousFrame = -1;
+            for (int i = 0; i < count; ++i) {
+                if (cancel.load()) return QVector<QImage>{};
+                const int frame = steppedFrame(snapshot.anim, f0 + i);
+                if (frame == previousFrame && !cache.isEmpty()) cache.append(cache.last());
+                else {
+                    const auto snap = frameSnapshot(snapshot, f0 + i);
+                    QImage image = renderer.renderPreviewCached(snap.source, snap.params, RenderWorker::FAST_MAX_PX, snap.layers);
+                    if (image.isNull()) return QVector<QImage>{};
+                    bytes += image.sizeInBytes();
+                    if (bytes > 256LL * 1024 * 1024) return QVector<QImage>{};
+                    cache.append(image);
+                }
+                previousFrame = frame; progress.store(i + 1);
+            }
+            return cancel.load() ? QVector<QImage>{} : cache;
+        }, dialogDelayMs);
+    if (m_playCache.isEmpty()) { m_preview->setStatus("Playback canceled or exceeds the 256 MiB preview budget"); return false; }
     m_playCacheValid  = true;
     m_playCacheParams = img.state;
     m_playCacheAnim   = img.anim;
@@ -2344,6 +2387,7 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
     // on a null source, so without this the last frame and its now-empty
     // selection box would linger.
     if (m_images[m_current].state.layers.empty()) {
+        m_worker->invalidatePending();
         const auto& st = m_images[m_current].state;
         const QSize frame(st.frameW > 0 ? st.frameW : 1080,
                           st.frameH > 0 ? st.frameH : 1080);
@@ -2370,24 +2414,9 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
     if (!qualityOnly) { m_lastRender = {}; m_lastPkgRender = {}; }
 
     const SessionImage& img = m_images[m_current];
-    // The fps dropdown's frame-hold: content (source pixels + baked params)
-    // samples this quantized frame, while img.anim.playhead itself always
-    // stays the raw native frame (scrubbing/keyframes never see the hold).
-    const int frame = steppedFrame(img.anim, img.anim.playhead);
-
-    // Source: a clip uses the playhead's frame; a still uses its image.
-    QImage source = img.source;
-    if (!img.frames.isEmpty()) {
-        const int fi = qBound(0, frame - img.anim.frameStart,
-                              img.frames.size() - 1);
-        source = img.frames[fi];
-    }
-
-    // Parameters: bake the animation at the current playhead, then fold each
-    // parent group's master visibility into its children.
-    const SessionParams params = bakeGroupVisibility(img.anim.hasAnimation()
-        ? paramsAtFrame(img.state, img.anim, frame)
-        : img.state, frame);
+    const auto snap = frameSnapshot(img, img.anim.playhead);
+    const auto& source = snap.source;
+    const auto& params = snap.params;
 
     // Render the live preview at the size it's actually shown on screen, so the
     // fast pass already matches the (downscaled) final — no jarring quality jump.
@@ -2406,7 +2435,7 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
     }
     m_worker->setInteractivePreviewPx(previewPx);
 
-    const QHash<int, QImage> ls = layerSourcesAt(img, frame);
+    const auto& ls = snap.layers;
     if (qualityOnly)
         // Full pass only — no fast preview pass to flash/jitter during zoom.
         m_worker->requestFullRender(source, params, ls);
@@ -2417,7 +2446,7 @@ void MainWindow::scheduleRender(bool previewOnly, bool qualityOnly)
 // Resolve, for each media layer, the image it draws at `frame` (a clip indexes
 // its frames by the playhead; a still uses its image). Layers without media
 // (mediaId < 0) are absent → they fall back to the document base source.
-QHash<int, QImage> MainWindow::layerSourcesAt(const SessionImage& img, int frame) const
+QHash<int, QImage> MainWindow::layerSourcesAt(const SessionImage& img, int frame)
 {
     QHash<int, QImage> out;
     for (const Layer& l : img.state.layers) {
@@ -2436,6 +2465,26 @@ QHash<int, QImage> MainWindow::layerSourcesAt(const SessionImage& img, int frame
             out.insert(l.id, m.image);
     }
     return out;
+}
+
+MainWindow::FrameSnapshot MainWindow::frameSnapshot(const SessionImage& img, int rawFrame)
+{
+    const int frame = steppedFrame(img.anim, rawFrame);
+    FrameSnapshot result;
+    result.source = img.source;
+    if (!img.frames.isEmpty())
+        result.source = img.frames[qBound(0, frame - img.anim.frameStart, int(img.frames.size()) - 1)];
+    result.params = paramsAtFrame(img.state, img.anim, frame);
+    for (auto& layer : result.params.layers) {
+        const int pi = findParentByMedia(result.params.parents, layer.mediaId);
+        if (pi < 0) continue;
+        const auto& group = result.params.parents[pi];
+        const int relative = frame - img.anim.frameStart - group.timeOffset;
+        layer.visible = layer.visible && group.groupVisible
+            && (group.trimOut < 0 || (relative >= group.trimIn && relative <= group.trimOut));
+    }
+    result.layers = layerSourcesAt(img, frame);
+    return result;
 }
 
 void MainWindow::onRenderComplete(QImage result, bool isPreview)
@@ -2490,17 +2539,64 @@ void MainWindow::pushUndoSnapshot()
 
     if (img.undoIndex >= 0 && img.undoIndex < img.undoStack.size()
         && img.undoStack[img.undoIndex].params == img.state
-        && img.undoStack[img.undoIndex].anim == img.anim)
+        && img.undoStack[img.undoIndex].anim == img.anim
+        && img.undoStack[img.undoIndex].media == img.media
+        && img.undoStack[img.undoIndex].title == img.title)
         return;   // nothing actually changed
 
     // Drop redo branch
     while (img.undoStack.size() > img.undoIndex + 1)
         img.undoStack.removeLast();
 
-    img.undoStack.append({ img.state, img.anim });
-    if (img.undoStack.size() > kMaxUndoSteps)
+    img.undoStack.append({ img.state, img.anim, img.media, img.title, img.nextMediaId });
+    // Account for unique shared images, not references in every snapshot.
+    auto historyBytes = [&] {
+        QSet<qint64> seen; qint64 bytes = 0;
+        auto countImage = [&](const QImage& image) { if (!image.isNull() && !seen.contains(image.cacheKey())) { seen.insert(image.cacheKey()); bytes += image.sizeInBytes(); } };
+        for (const auto& state : img.undoStack) for (const auto& media : state.media) {
+            countImage(media.image); for (const auto& frame : media.frames) countImage(frame);
+        }
+        return bytes;
+    };
+    while (img.undoStack.size() > 1 && (img.undoStack.size() > kMaxUndoSteps || historyBytes() > 768LL * 1024 * 1024))
         img.undoStack.removeFirst();
     img.undoIndex = img.undoStack.size() - 1;
+    setWindowModified(isDirty());
+}
+
+void MainWindow::restoreUndoState(const UndoState& state)
+{
+    auto& img = m_images[m_current];
+    img.state = state.params;
+    img.anim = state.anim;
+    img.media = state.media;
+    img.title = state.title;
+    img.nextMediaId = state.nextMediaId;
+    m_mediaThumbCache.clear();
+    m_filmstrip->clear();
+    for (auto it = img.media.cbegin(); it != img.media.cend(); ++it)
+        m_filmstrip->addThumb(it.key(), it->image, it->name);
+    m_left->setFileName(img.title);
+    setWindowModified(isDirty());
+}
+
+void MainWindow::markSaved()
+{
+    const auto& img = m_images[m_current];
+    m_savedParams = img.state;
+    m_savedAnim = img.anim;
+    m_savedMedia = img.media;
+    m_savedTitle = img.title;
+    setWindowModified(false);
+}
+
+bool MainWindow::confirmDiscardChanges()
+{
+    if (!isDirty()) return true;
+    UnsavedChangesDialog dialog(m_images[m_current].title, this);
+    dialog.exec();
+    if (dialog.choice() == UnsavedChangesDialog::Cancel) return false;
+    return dialog.choice() != UnsavedChangesDialog::Save || saveProject(false);
 }
 
 void MainWindow::undo()
@@ -2516,8 +2612,7 @@ void MainWindow::undo()
     SessionImage& img = m_images[m_current];
     if (img.undoIndex <= 0) return;
     --img.undoIndex;
-    img.state = img.undoStack[img.undoIndex].params;
-    img.anim  = img.undoStack[img.undoIndex].anim;
+    restoreUndoState(img.undoStack[img.undoIndex]);
     syncBoardSource(img);
     m_playCacheValid = false;
     applyParams(img.state);
@@ -2542,8 +2637,7 @@ void MainWindow::redo()
     SessionImage& img = m_images[m_current];
     if (img.undoIndex >= img.undoStack.size() - 1) return;
     ++img.undoIndex;
-    img.state = img.undoStack[img.undoIndex].params;
-    img.anim  = img.undoStack[img.undoIndex].anim;
+    restoreUndoState(img.undoStack[img.undoIndex]);
     syncBoardSource(img);
     m_playCacheValid = false;
     applyParams(img.state);
@@ -2572,25 +2666,32 @@ void MainWindow::copyToClipboard()
         if (id >= 0) onCopyLayerRequested(id);
         return;
     }
-    if (!m_lastRender.isNull()) {
-        QApplication::clipboard()->setImage(m_lastRender);
+    if (m_current < 0) return;
+    const auto snap = frameSnapshot(m_images[m_current], m_images[m_current].anim.playhead);
+    const QImage flat = runBackgroundJob(this, "Copying image…", 0,
+        [snap](std::atomic_bool& cancel, std::atomic_int&) {
+            QImage image = RenderWorker::renderDocument(snap.source, snap.params, snap.layers);
+            return cancel.load() ? QImage{} : image;
+        });
+    if (!flat.isNull()) {
+        QApplication::clipboard()->setImage(flat);
         m_preview->setStatus("Copied to clipboard");
-    } else if (m_gpuMode && m_lastPkgRender.valid && m_current >= 0) {
-        // GPU mode keeps no flattened frame around — compose one on demand
-        // through the untouched CPU path (rare operation, exact output).
-        const SessionImage& img = m_images[m_current];
-        const QImage flat = RenderWorker::renderDocument(
-            img.source, img.state, layerSourcesAt(img, steppedFrame(img.anim, img.anim.playhead)));
-        if (!flat.isNull()) {
-            QApplication::clipboard()->setImage(flat);
-            m_preview->setStatus("Copied to clipboard");
-        }
     }
 }
 
 // ---------------------------------------------------------------------------
 // Session images
 // ---------------------------------------------------------------------------
+
+qint64 MainWindow::availableSourceBytes() const
+{
+    qint64 available = 512LL * 1024 * 1024;
+    if (m_current >= 0) for (const auto& media : m_images[m_current].media) {
+        if (media.frames.isEmpty()) available -= media.image.sizeInBytes();
+        else for (const auto& image : media.frames) available -= FrameStore::ownedBytes(image);
+    }
+    return qMax(qint64(0), available);
+}
 
 QVector<int> MainWindow::addImages(const QStringList& paths)
 {
@@ -2612,17 +2713,27 @@ QVector<int> MainWindow::addImages(const QStringList& paths)
                     "to import and export videos.");
                 return false;
             }
-            QApplication::setOverrideCursor(Qt::WaitCursor);
-            QVector<QImage> frames; double fps = 24.0; QString err;
-            const bool ok = VideoIO::decode(path, frames, fps, err);
-            QApplication::restoreOverrideCursor();
-            if (!ok) { showMessage(this, err); return false; }
-            clip.frames = frames; clip.image = frames.first(); clip.fps = fps;
+            struct Decoded { QVector<QImage> frames; double fps = 24; QString error; bool ok = false; };
+            auto decoded = runBackgroundJob(this, "Importing video…", 0,
+                [path](std::atomic_bool& cancel, std::atomic_int&) {
+                    Decoded result;
+                    result.ok = VideoIO::decode(path, result.frames, result.fps, result.error, 0, &cancel);
+                    return result;
+                });
+            if (!decoded.ok) { showMessage(this, decoded.error); return false; }
+            clip.frames = decoded.frames; clip.image = decoded.frames.first(); clip.fps = decoded.fps;
             return true;
         }
-        QImage im(path);
+        const qint64 budget = availableSourceBytes();
+        QImage im = runBackgroundJob(this, "Importing image…", 0,
+            [path, budget](std::atomic_bool& cancel, std::atomic_int&) {
+                QImageReader reader(path); const auto size = reader.size();
+                if (size.isEmpty() || qint64(size.width()) * size.height() * 4 > budget) return QImage{};
+                QImage image = reader.read();
+                return cancel.load() || image.sizeInBytes() > budget ? QImage{} : image;
+            });
         if (im.isNull()) {
-            showMessage(this, "Could not load image:\n" + path);
+            showMessage(this, "Image import canceled, invalid image or 512 MiB source budget exceeded:\n" + path);
             return false;
         }
         clip.image = im;
@@ -2637,6 +2748,7 @@ QVector<int> MainWindow::addImages(const QStringList& paths)
 
     QVector<int> added;
     for (const QString& path : paths) {
+        if (board.media.size() >= 256) { showMessage(this, "A project can contain at most 256 sources."); break; }
         MediaClip clip;
         if (!loadClip(path, clip)) continue;
         const int mid = board.nextMediaId++;
@@ -2644,7 +2756,7 @@ QVector<int> MainWindow::addImages(const QStringList& paths)
         m_filmstrip->addThumb(mid, clip.image, clip.name);
         added.append(mid);
     }
-    if (!added.isEmpty()) m_filmstrip->setActive(added.last());
+    if (!added.isEmpty()) { m_filmstrip->setActive(added.last()); pushUndoSnapshot(); }
     return added;
 }
 
@@ -2654,6 +2766,7 @@ int MainWindow::addImageToLibrary(const QImage& img, const QString& name)
 {
     const int bi = ensureBoard();
     SessionImage& board = m_images[bi];
+    if (img.sizeInBytes() > availableSourceBytes() || board.media.size() >= 256) { showMessage(this, "Source memory/count limit exceeded."); return -1; }
     MediaClip clip;
     clip.name  = name;
     clip.image = img;
@@ -2661,6 +2774,7 @@ int MainWindow::addImageToLibrary(const QImage& img, const QString& name)
     board.media.insert(mid, clip);
     m_filmstrip->addThumb(mid, clip.image, clip.name);
     m_filmstrip->setActive(mid);
+    pushUndoSnapshot();
     return mid;
 }
 
@@ -2675,20 +2789,16 @@ int MainWindow::ensureBoard()
     si.state = SessionParams{};
     si.state.layers.clear();
     si.state.parents.clear();
-    si.undoStack.append({ si.state, si.anim });
+    si.undoStack.append({ si.state, si.anim, si.media, si.title, si.nextMediaId });
     si.undoIndex = 0;
     m_images.append(si);
     m_current = m_images.size() - 1;
-    m_savedParams = si.state;   // empty board is the "clean" baseline
-    m_savedAnim   = si.anim;
+    markSaved();
     switchToImage(m_current);   // init panels/preview/timeline for the empty board
     return m_current;
 }
 
-// Ctrl+S. Video sources aren't supported by the .less file yet: any layer,
-// parent group, and animation track that draws from a video media entry is
-// silently dropped from what's written (the library still holds the video —
-// only the saved file is missing it).
+// Ctrl+S writes a complete, portable snapshot including video frames.
 bool MainWindow::saveProject(bool forceDialog)
 {
     if (m_current < 0) return true;   // nothing to save
@@ -2704,54 +2814,23 @@ bool MainWindow::saveProject(bool forceDialog)
         if (!path.endsWith(".less", Qt::CaseInsensitive)) path += ".less";
     }
 
-    QSet<int> stillMediaIds;
-    for (auto it = img.media.cbegin(); it != img.media.cend(); ++it)
-        if (it.value().frames.isEmpty()) stillMediaIds.insert(it.key());
-
     ProjectIO::ProjectData data;
-    data.title  = img.title;
+    data.title = img.title;
     data.params = img.state;
-    data.anim   = img.anim;
-
-    int skippedVideos = 0;
-    for (auto it = img.media.cbegin(); it != img.media.cend(); ++it) {
-        if (stillMediaIds.contains(it.key()))
-            data.media.insert(it.key(), { it.value().name, it.value().image });
-        else
-            ++skippedVideos;
-    }
-
-    std::vector<Layer> keptLayers;
-    QSet<int> keptLayerIds;
-    for (const Layer& l : data.params.layers) {
-        if (l.mediaId != -1 && !stillMediaIds.contains(l.mediaId)) continue;
-        keptLayerIds.insert(l.id);
-        keptLayers.push_back(l);
-    }
-    data.params.layers = keptLayers;
-
-    std::vector<ParentGroup> keptParents;
-    for (const ParentGroup& g : data.params.parents)
-        if (stillMediaIds.contains(g.mediaId)) keptParents.push_back(g);
-    data.params.parents = keptParents;
-
-    std::vector<Track> keptTracks;
-    for (const Track& t : data.anim.tracks)
-        if (t.layerId == -1 || keptLayerIds.contains(t.layerId)) keptTracks.push_back(t);
-    data.anim.tracks = keptTracks;
+    data.anim = img.anim;
+    for (auto it = img.media.cbegin(); it != img.media.cend(); ++it)
+        data.media.insert(it.key(), {it.value().name, it.value().image, it.value().frames, it.value().fps});
 
     QString err;
-    if (!ProjectIO::save(path, data, &err)) {
+    const bool saved = runBackgroundJob(this, "Saving project…", 0,
+        [&](std::atomic_bool& cancel, std::atomic_int&) { return ProjectIO::save(path, data, &err, &cancel); });
+    if (!saved) {
         showMessage(this, "Could not save:\n" + err);
         return false;
     }
     m_projectPath = path;
-    m_savedParams = img.state;   // full in-memory state, not the video-stripped `data`:
-    m_savedAnim   = img.anim;    // nothing changed session-side just because the file omits video
-    m_preview->setStatus(skippedVideos > 0
-        ? QString("Saved (skipped %1 video layer%2 — not supported yet)")
-              .arg(skippedVideos).arg(skippedVideos == 1 ? "" : "s")
-        : "Saved");
+    markSaved();
+    m_preview->setStatus("Saved");
     return true;
 }
 
@@ -2771,11 +2850,18 @@ void MainWindow::openProjectFromPath(const QString& path)
 {
     ProjectIO::ProjectData data;
     QString err;
-    if (!ProjectIO::load(path, &data, &err)) {
+    const bool loaded = runBackgroundJob(this, "Opening project…", 0,
+        [&](std::atomic_bool& cancel, std::atomic_int&) { return ProjectIO::load(path, &data, &err, &cancel); });
+    if (!loaded) {
         showMessage(this, "Could not open:\n" + err);
         return;
     }
 
+    if (!confirmDiscardChanges()) return;
+    m_worker->invalidatePending();
+    m_undoTimer.stop();
+    m_previewTimer.stop();
+    m_mediaThumbCache.clear();
     m_filmstrip->clear();
     m_images.clear();
     m_current = -1;
@@ -2791,20 +2877,21 @@ void MainWindow::openProjectFromPath(const QString& path)
         MediaClip clip;
         clip.name  = it.value().name;
         clip.image = it.value().image;
+        clip.frames = it.value().frames;
+        clip.fps = it.value().fps;
         si.media.insert(it.key(), clip);
         maxMediaId = qMax(maxMediaId, it.key());
         m_filmstrip->addThumb(it.key(), clip.image, clip.name);
     }
     si.nextMediaId = maxMediaId + 1;
     syncBoardSource(si);
-    si.undoStack.append({ si.state, si.anim });
+    si.undoStack.append({ si.state, si.anim, si.media, si.title, si.nextMediaId });
     si.undoIndex = 0;
 
     m_images.append(si);
     m_current = 0;
     m_projectPath = path;
-    m_savedParams = si.state;
-    m_savedAnim   = si.anim;
+    markSaved();
     switchToImage(m_current);
 }
 
@@ -2812,7 +2899,8 @@ bool MainWindow::isDirty() const
 {
     if (m_current < 0) return false;
     const SessionImage& img = m_images[m_current];
-    return img.state != m_savedParams || img.anim != m_savedAnim;
+    return img.state != m_savedParams || img.anim != m_savedAnim
+        || img.media != m_savedMedia || img.title != m_savedTitle;
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
@@ -2843,7 +2931,8 @@ void MainWindow::addLayerFromMedia(int mediaId)
     const MediaClip clip = it.value();
     auto& st = board.state;
 
-    if (findParentByMedia(st.parents, mediaId) < 0) {
+    const bool newParent = findParentByMedia(st.parents, mediaId) < 0;
+    if (newParent) {
         ParentGroup g;
         g.mediaId = mediaId;
         g.name    = clip.name;
@@ -2859,10 +2948,14 @@ void MainWindow::addLayerFromMedia(int mediaId)
     st.activeLayerId = child.id;
 
     // A video source defines the timeline range when first placed.
-    if (!clip.frames.isEmpty() && board.anim.frameEnd <= 1) {
+    const bool firstVideo = std::none_of(st.parents.begin(), st.parents.end(), [&](const ParentGroup& g) {
+        return g.mediaId != mediaId && !board.media.value(g.mediaId).frames.isEmpty();
+    });
+    if (!clip.frames.isEmpty() && newParent && firstVideo && !board.anim.hasAnimation()) {
         board.anim.frameStart = 0;
         board.anim.frameEnd   = clip.frames.size() - 1;
         board.anim.fps        = qBound(1, qRound(clip.fps), 240);
+        board.anim.stepFps = board.anim.fps;
         syncTimeline();
     }
 
@@ -2875,16 +2968,26 @@ void MainWindow::addLayerFromMedia(int mediaId)
 
 void MainWindow::importSequence(const QStringList& paths)
 {
+    if (m_current >= 0 && m_images[m_current].media.size() >= 256) { showMessage(this, "Source count limit exceeded."); return; }
     QStringList sorted = paths;
     sorted.sort();   // order frames by filename
 
-    QVector<QImage> frames;
-    for (const QString& p : sorted) {
-        QImage im(p);
-        if (!im.isNull()) frames.append(im);
-    }
+    const qint64 budget = availableSourceBytes();
+    QVector<QImage> frames = runBackgroundJob(this, "Importing image sequence…", sorted.size(),
+        [sorted, budget](std::atomic_bool& cancel, std::atomic_int& progress) {
+            QVector<QImage> result; qint64 bytes = 0; QSize expected;
+            for (const auto& path : sorted) {
+                if (cancel.load()) return QVector<QImage>{};
+                QImageReader reader(path); const QSize size = reader.size();
+                if (size.isEmpty() || (!expected.isEmpty() && expected != size) || qint64(size.width()) * size.height() * 4 > budget - bytes) return QVector<QImage>{};
+                QImage image = reader.read(); bytes += image.sizeInBytes();
+                if (image.isNull() || bytes > budget) return QVector<QImage>{};
+                expected = size; result.append(image); progress.store(result.size());
+            }
+            return result;
+        });
     if (frames.isEmpty()) {
-        showMessage(this, "No valid images in the selection.");
+        showMessage(this, "Sequence import canceled, inconsistent images or source memory limit exceeded. Nothing was imported.");
         return;
     }
 
@@ -3067,22 +3170,13 @@ void MainWindow::onExport()
         this, "Export", name + "." + format, filter);
     if (savePath.isEmpty()) return;
 
-    // A still-image export is a snapshot of the playhead, just like SVG:
-    // resolve both animated parameters and every video-backed layer at the
-    // exact frame currently displayed instead of rendering the clips' first
-    // source images from the document's base state.
-    const int frame = steppedFrame(img.anim, img.anim.playhead);
-    QImage source = img.source;
-    if (!img.frames.isEmpty()) {
-        const int fi = qBound(0, frame - img.anim.frameStart,
-                              int(img.frames.size()) - 1);
-        source = img.frames[fi];
-    }
-    const SessionParams params = bakeGroupVisibility(img.anim.hasAnimation()
-        ? paramsAtFrame(img.state, img.anim, frame)
-        : img.state, frame);
-    QImage canvas = m_worker->renderDocumentInteractive(
-        source, params, layerSourcesAt(img, frame));
+    const auto snap = frameSnapshot(img, img.anim.playhead);
+    QImage canvas = runBackgroundJob(this, "Rendering image…", 0,
+        [snap](std::atomic_bool& cancel, std::atomic_int&) {
+            QImage image = RenderWorker::renderDocument(snap.source, snap.params, snap.layers);
+            return cancel.load() ? QImage{} : image;
+        });
+    if (canvas.isNull()) { m_preview->setStatus("Export canceled or render failed"); return; }
 
     if (format == "jpg") {
         // JPEG has no alpha — flatten on white
@@ -3094,11 +3188,13 @@ void MainWindow::onExport()
         canvas = flat;
     }
 
-    int quality = (format == "jpg") ? 95 : -1;
-    if (!canvas.save(savePath, format.toUpper().toUtf8().constData(), quality)) {
-        showMessage(this, "Could not save file:\n" + savePath);
-        return;
-    }
+    const int quality = (format == "jpg") ? 95 : -1;
+    if (!runBackgroundJob(this, "Writing image…", 0,
+        [canvas, savePath, format, quality](std::atomic_bool& cancel, std::atomic_int&) {
+            QSaveFile file(savePath);
+            if (!file.open(QIODevice::WriteOnly) || !canvas.save(&file, format.toUpper().toUtf8().constData(), quality)) return false;
+            return !cancel.load() && file.commit();
+        })) { showMessage(this, "Export canceled or could not write: " + savePath); return; }
 
     m_preview->setStatus("Exported: " + savePath);
 }
@@ -3109,16 +3205,10 @@ void MainWindow::exportSvg(const QString& baseName)
     if (m_current < 0) return;
     const SessionImage& img = m_images[m_current];
 
-    const int frame = steppedFrame(img.anim, img.anim.playhead);
-    QImage source = img.source;
-    if (!img.frames.isEmpty()) {
-        const int fi = qBound(0, frame - img.anim.frameStart, img.frames.size() - 1);
-        source = img.frames[fi];
-    }
-    const SessionParams params = bakeGroupVisibility(img.anim.hasAnimation()
-        ? paramsAtFrame(img.state, img.anim, frame)
-        : img.state, frame);
-    const QHash<int, QImage> ls = layerSourcesAt(img, frame);
+    const auto snap = frameSnapshot(img, img.anim.playhead);
+    const auto& source = snap.source;
+    const auto& params = snap.params;
+    const auto& ls = snap.layers;
 
     // Heavy-render guard: a fine grid / small dither cell can produce hundreds of
     // thousands of shapes — a huge file that may lag or crash while writing.
@@ -3135,7 +3225,11 @@ void MainWindow::exportSvg(const QString& baseName)
         this, "Export SVG", baseName + ".svg", "SVG Image (*.svg)");
     if (savePath.isEmpty()) return;
 
-    if (!RenderWorker::renderDocumentToSvg(savePath, source, params, ls)) {
+    if (!runBackgroundJob(this, "Writing SVG…", 0,
+        [snap, savePath](std::atomic_bool& cancel, std::atomic_int&) {
+            if (cancel.load()) return false;
+            return RenderWorker::renderDocumentToSvg(savePath, snap.source, snap.params, snap.layers, &cancel);
+        })) {
         showMessage(this, "Could not write SVG:\n" + savePath);
         return;
     }
@@ -3147,104 +3241,68 @@ void MainWindow::exportSvg(const QString& baseName)
 void MainWindow::exportSequence(const QString& baseName)
 {
     if (m_current < 0) return;
-    SessionImage& img = m_images[m_current];
-    const int f0 = img.anim.frameStart;
-    const int f1 = qMax(f0, img.anim.frameEnd);
-    const int count = f1 - f0 + 1;
-
+    const SessionImage doc = m_images[m_current];
     const QString dir = QFileDialog::getExistingDirectory(this, "Export PNG sequence");
     if (dir.isEmpty()) return;
-
-    const int digits = qMax(4, QString::number(f1).size());
-    AnimProgressDialog progress("Rendering frames…", count, this);
-
-    int written = 0;
-    for (int i = 0; i < count; ++i) {
-        progress.setValue(i);
-        if (progress.wasCanceled()) break;
-
-        const int rawFrame = f0 + i;
-        const int frame    = steppedFrame(img.anim, rawFrame);
-        QImage src = img.source;
-        if (!img.frames.isEmpty()) {
-            const int fi = qBound(0, frame - f0, img.frames.size() - 1);
-            src = img.frames[fi];
-        }
-        const SessionParams p = bakeGroupVisibility(img.anim.hasAnimation()
-            ? paramsAtFrame(img.state, img.anim, frame)
-            : img.state, frame);
-
-        const QImage canvas = m_worker->renderDocumentInteractive(src, p, layerSourcesAt(img, frame));
-        const QString fn = QString("%1/%2_%3.png")
-            .arg(dir, baseName, QString::number(rawFrame).rightJustified(digits, '0'));
-        if (canvas.save(fn, "PNG")) ++written;
+    const int count = doc.anim.frameEnd - doc.anim.frameStart + 1;
+    const int digits = qMax(4, QString::number(doc.anim.frameEnd).size());
+    const QString safeName = QFileInfo(baseName).fileName();
+    auto filename = [=](int i) { return QString("%1/%2_%3.png").arg(dir, safeName,
+        QString::number(doc.anim.frameStart + i).rightJustified(digits, '0')); };
+    for (int i = 0; i < count; ++i) if (QFileInfo::exists(filename(i))) {
+        if (!askYesNo(this, "Some output frames already exist. Replace matching files?", false)) return;
+        break;
     }
-    progress.setValue(count);
-
-    m_preview->setStatus(QString("Exported %1 frames to %2").arg(written).arg(dir));
+    struct Result { int written = 0; QString error; bool canceled = false; };
+    auto result = runBackgroundJob(this, "Writing PNG sequence…", count,
+        [doc, count, filename](std::atomic_bool& cancel, std::atomic_int& progress) {
+            Result result; RenderWorker renderer;
+            for (int i = 0; i < count; ++i) {
+                if (cancel.load()) { result.canceled = true; break; }
+                const auto snap = frameSnapshot(doc, doc.anim.frameStart + i);
+                const QImage canvas = renderer.renderDocumentInteractive(snap.source, snap.params, snap.layers);
+                if (cancel.load()) { result.canceled = true; break; }
+                QSaveFile file(filename(i));
+                if (canvas.isNull() || !file.open(QIODevice::WriteOnly) || !canvas.save(&file, "PNG") || !file.commit()) {
+                    result.error = "Could not write frame: " + filename(i); break;
+                }
+                ++result.written; progress.store(result.written);
+            }
+            return result;
+        });
+    if (!result.error.isEmpty()) showMessage(this, result.error);
+    m_preview->setStatus(QString("%1: %2 of %3 frames written").arg(result.canceled ? "Canceled" :
+        result.error.isEmpty() ? "Completed" : "Stopped after an error").arg(result.written).arg(count));
 }
 
-// Render every frame to a temp PNG sequence, then encode it to an H.264 mp4
+// Stream each rendered frame directly to H.264 without intermediate PNGs
 // (video only) with the bundled ffmpeg.
 void MainWindow::exportVideoMp4(const QString& baseName)
 {
     if (m_current < 0) return;
-    if (!VideoIO::available()) {
-        showMessage(this, "ffmpeg.exe was not found.\n\nPlace ffmpeg.exe next to the application to export videos.");
-        return;
-    }
-
-    SessionImage& img = m_images[m_current];
-    const int f0 = img.anim.frameStart;
-    const int f1 = qMax(f0, img.anim.frameEnd);
-    const int count = f1 - f0 + 1;
-
-    const QString savePath = QFileDialog::getSaveFileName(
-        this, "Export MP4", baseName + ".mp4", "MP4 Video (*.mp4)");
+    if (!VideoIO::available()) { showMessage(this, "ffmpeg is missing. Reinstall the complete POINTLESS package."); return; }
+    const SessionImage doc = m_images[m_current];
+    QString savePath = QFileDialog::getSaveFileName(this, "Export MP4", baseName + ".mp4", "MP4 Video (*.mp4)");
     if (savePath.isEmpty()) return;
-
-    QTemporaryDir tmp;
-    if (!tmp.isValid()) {
-        showMessage(this, "Could not create a temporary folder.");
-        return;
-    }
-
-    AnimProgressDialog progress("Pointless video is rendering", count, this);
-    for (int i = 0; i < count; ++i) {
-        progress.setValue(i);
-        if (progress.wasCanceled()) return;
-
-        const int frame = steppedFrame(img.anim, f0 + i);
-        QImage src = img.source;
-        if (!img.frames.isEmpty())
-            src = img.frames[qBound(0, frame - f0, img.frames.size() - 1)];
-        const SessionParams p = bakeGroupVisibility(img.anim.hasAnimation()
-            ? paramsAtFrame(img.state, img.anim, frame)
-            : img.state, frame);
-
-        QImage canvas = m_worker->renderDocumentInteractive(src, p, layerSourcesAt(img, frame));
-        // mp4 (yuv420p) has no alpha — flatten on an opaque background.
-        QImage flat(canvas.size(), QImage::Format_RGB32);
-        QColor bg = p.background; bg.setAlpha(255);
-        flat.fill(bg);
-        QPainter fp(&flat);
-        fp.drawImage(0, 0, canvas);
-        fp.end();
-        flat.save(QString("%1/f_%2.png").arg(tmp.path(),
-                  QString::number(i).rightJustified(6, '0')), "PNG");
-    }
-    progress.setValue(count);
-
-    progress.setLabelText("Encoding video…");
-    progress.setRange(0, 0);   // busy indicator
-    QApplication::processEvents();
-
-    QString err;
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    const bool ok = VideoIO::encodePngDir(tmp.path(), "f_%06d.png", img.anim.fps, savePath, err);
-    QApplication::restoreOverrideCursor();
-    progress.close();
-
-    if (!ok) { showMessage(this, err); return; }
+    if (!savePath.endsWith(".mp4", Qt::CaseInsensitive)) savePath += ".mp4";
+    const int count = doc.anim.frameEnd - doc.anim.frameStart + 1;
+    struct Result { bool ok = false; QString error; };
+    auto result = runBackgroundJob(this, "Rendering and encoding video…", count,
+        [doc, count, savePath](std::atomic_bool& cancel, std::atomic_int& progress) {
+            Result result; RenderWorker renderer;
+            auto frameAt = [&](int i) {
+                const auto snap = frameSnapshot(doc, doc.anim.frameStart + i);
+                const auto canvas = renderer.renderDocumentInteractive(snap.source, snap.params, snap.layers);
+                if (canvas.isNull()) return QImage{};
+                QImage flat(canvas.size(), QImage::Format_RGB32);
+                QColor background = snap.params.background; background.setAlpha(255); flat.fill(background);
+                QPainter painter(&flat); painter.drawImage(0, 0, canvas); painter.end();
+                return flat;
+            };
+            result.ok = VideoIO::encodeFrames(QSize(doc.state.frameW, doc.state.frameH), doc.anim.fps,
+                count, frameAt, savePath, result.error, cancel, progress);
+            return result;
+        });
+    if (!result.ok) { showMessage(this, result.error); return; }
     m_preview->setStatus("Exported video: " + savePath);
 }

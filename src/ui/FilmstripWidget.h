@@ -19,8 +19,7 @@ class AddImageButton;
  * source (identified by a media id): images cover-fill their cell regardless
  * of source aspect ratio, wrap to a new row once the column count is full,
  * and scroll vertically once rows overflow the visible height. The column
- * count grows on wide windows instead of letting cells balloon past
- * kMaxCellFigmaPx. Single click selects, double click adds it as a layer,
+ * count changes on resize while cells keep a fixed size. Single click selects, double click adds it as a layer,
  * dragging a thumbnail onto the Layers panel / canvas adds it as a layer,
  * hover ✕ removes it from the library. Accepts image file drops.
  */
@@ -51,8 +50,7 @@ protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
 
 private:
-    static constexpr int kMinColumns      = 6;     // floor, even on a narrow window
-    static constexpr int kMaxCellFigmaPx  = 150;    // cap on a cell's side; wide windows add columns instead
+    static constexpr int kCellFigmaPx = 145;       // fixed tiles, independent of panel resizing
     static constexpr int kAddGapExtraFigmaPx = 80;  // extra gap after the import tile, on top of the regular cell spacing
 
     int  hMargins() const;         // hl's own left+right content margins
@@ -67,5 +65,5 @@ private:
     AddImageButton*        m_addBtn      = nullptr;
     QWidget*               m_emptyState  = nullptr;
     QList<FilmstripThumb*> m_thumbs;
-    int                    m_columns     = kMinColumns;
+    int                    m_columns     = 1;
 };

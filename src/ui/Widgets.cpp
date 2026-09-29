@@ -1519,7 +1519,7 @@ void AnimProgressDialog::setValue(int v)
         show();
         raise();
     }
-    QCoreApplication::processEvents();
+
 }
 
 void AnimProgressDialog::setLabelText(const QString& text)
@@ -1566,7 +1566,7 @@ UnsavedChangesDialog::UnsavedChangesDialog(const QString& documentName, QWidget*
     // row, so its right edge lines up with the "No" button below it.
     topRow->setContentsMargins(0, 0, 0, 0);
     topRow->setSpacing(Ui::px(14));
-    auto* msg = new QLabel("Save changes before closing?");
+    auto* msg = new QLabel(QString("Save changes to “%1”? ").arg(documentName.toHtmlEscaped()));
     msg->setObjectName("dialogMessage");
     msg->setWordWrap(true);
     topRow->addWidget(msg, 1);
@@ -1590,16 +1590,16 @@ UnsavedChangesDialog::UnsavedChangesDialog(const QString& documentName, QWidget*
     btnRow->setContentsMargins(0, 0, 0, 0);
     btnRow->setSpacing(Ui::px(14));
     btnRow->addStretch(1);
-    auto* yesBtn = new QPushButton("Yes");
+    auto* yesBtn = new QPushButton("Save");
     yesBtn->setObjectName("dialogYesBtn");
     yesBtn->setCursor(appCursor());
     yesBtn->setFixedSize(Ui::px(94), Ui::px(48));
     yesBtn->setDefault(true);
     connect(yesBtn, &QPushButton::clicked, this, [this] { m_choice = Save; accept(); });
-    auto* noBtn = new QPushButton("No");
+    auto* noBtn = new QPushButton("Discard");
     noBtn->setObjectName("dialogNoBtn");
     noBtn->setCursor(appCursor());
-    noBtn->setFixedSize(Ui::px(94), Ui::px(48));
+    noBtn->setFixedSize(Ui::px(120), Ui::px(48));
     connect(noBtn, &QPushButton::clicked, this, [this] { m_choice = Discard; accept(); });
     btnRow->addWidget(yesBtn);
     btnRow->addWidget(noBtn);

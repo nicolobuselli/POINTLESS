@@ -6,7 +6,7 @@
 // is the same GridGenerator port as dot.vert (KEEP IN SYNC with both).
 // Tile colour = mip average of the linear source under the cell window
 // (clamped to the frame like the CPU's sampleRect); tiles rotate with the
-// lattice about their own centre. Text labels are CPU-only (gpuRenderable).
+// lattice about their own centre. Palette fill uses OkLab; text is CPU-only.
 
 layout(location = 0) in vec2 quadPos;    // fullscreen-quad vertex, -1..1
 layout(location = 1) in vec2 quadUv;     // unused
@@ -14,12 +14,15 @@ layout(location = 1) in vec2 quadUv;     // unused
 layout(location = 0)      out vec2 v_local;   // px offset from tile centre (unrotated)
 layout(location = 1) flat out vec4 v_color;   // premultiplied fill
 layout(location = 2) flat out vec3 v_whr;     // tw, th, corner radius px
+layout(location = 3) flat out vec4 v_textUv;  // atlas UV origin + size
+layout(location = 4) flat out vec2 v_textSize;// fitted text size in tile px
+layout(location = 5) flat out vec4 v_textColor; // straight text colour
 
 layout(std140, binding = 0) uniform buf {
     mat4 mvp;          // content px -> clip
     vec4 dims;         // contentW, contentH, spacing, lod
     vec4 p0;           // cellPxW, cellPxH, gridRotation rad, opacity
-    vec4 p1;           // cornerRadius 0..1, imageColors, nTones, paperCut
+    vec4 p1;           // cornerRadius, colorMode (1 image, 0 fixed, -1 palette), nTones, paperCut
     vec4 p2;           // maskCount, 0, 0, 0
     vec4 toneLevel[2]; // up to 8 tone levels, 0..255
     vec4 toneColor[8]; // sRGB rgb + per-tone opacity
@@ -31,6 +34,11 @@ layout(std140, binding = 0) uniform buf {
     vec4 grid1;        // ringN, margin, 0, 0
     vec4 gridT;        // m11, m12, m21, m22
     vec4 gridD;        // dx, dy, cx, cy
+    vec4 textRect[8];  // normalized atlas UV rect per tone
+    vec4 textColor[8]; // explicit RGBA; alpha < 0 = auto contrast
+    vec4 textMeta;     // atlasW, atlasH, base padding fraction, nonempty count
+    vec4 locPad;       // text-padding localization circle
+    vec4 locPadSO;     // scale, on, 0, 0
 };
 
 layout(binding = 1) uniform sampler2D srcTex;   // linear light, mipmapped
@@ -41,6 +49,38 @@ float lin2s(float v)
 {
     v = clamp(v, 0.0, 1.0);
     return v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
+float srgbLinear(float v)
+{
+    return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+}
+
+vec3 paletteLab(vec3 srgb)
+{
+    vec3 c = vec3(srgbLinear(srgb.r), srgbLinear(srgb.g), srgbLinear(srgb.b));
+    vec3 lms = pow(max(vec3(
+        dot(c, vec3(0.4122214708, 0.5363325363, 0.0514459929)),
+        dot(c, vec3(0.2119034982, 0.6806995451, 0.1073969566)),
+        dot(c, vec3(0.0883024619, 0.2817188376, 0.6299787005))), vec3(0.0)), vec3(1.0 / 3.0));
+    return vec3(dot(lms, vec3(0.2104542553, 0.7936177850, -0.0040720468)),
+                dot(lms, vec3(1.9779984951, -2.4285922050, 0.4505937099)),
+                dot(lms, vec3(0.0259040371, 0.7827717662, -0.8086757660)));
+}
+
+int paletteIndex(vec3 linearColor, int count)
+{
+    vec3 srgb = round(vec3(lin2s(linearColor.r), lin2s(linearColor.g),
+                           lin2s(linearColor.b)) * 255.0) / 255.0;
+    vec3 target = paletteLab(srgb);
+    int best = 0;
+    float bestDistance = 1e30;
+    for (int i = 0; i < count; ++i) {
+        vec3 delta = target - paletteLab(toneColor[i].rgb);
+        float d = dot(delta, delta);
+        if (d < bestDistance) { bestDistance = d; best = i; }
+    }
+    return best;
 }
 
 // LocField::t / mul / LocMask::mask — same ports as dot.vert.
@@ -69,6 +109,7 @@ void cull()
 {
     gl_Position = vec4(-3.0, -3.0, 0.0, 1.0);
     v_local = vec2(0.0); v_color = vec4(0.0); v_whr = vec3(0.0);
+    v_textUv = vec4(0.0); v_textSize = vec2(0.0); v_textColor = vec4(0.0);
 }
 
 void main()
@@ -137,9 +178,21 @@ void main()
 
     // ── fill colour (pickToneIndex mirror) ─────────────────────────────────
     vec4 col;
+    int toneIdx = -1;
     int nTones = int(p1.z + 0.5);
     if (p1.y > 0.5 || nTones < 1) {
         col = vec4(lin2s(lin.r), lin2s(lin.g), lin2s(lin.b), 1.0);
+        if (nTones > 0) {
+            int lum = int(round(lumPerc * 255.0));
+            float bestDist = 512.0;
+            for (int i = 0; i < nTones; ++i) {
+                float d = abs(float(lum) - toneLevel[i >> 2][i & 3]);
+                if (d < bestDist) { bestDist = d; toneIdx = i; }
+            }
+        }
+    } else if (p1.y < -0.5) {
+        toneIdx = paletteIndex(lin, nTones);
+        col = toneColor[toneIdx];
     } else {
         int lum = int(round(lumPerc * 255.0));
         int best = 0;
@@ -148,6 +201,7 @@ void main()
             float d = abs(float(lum) - toneLevel[i >> 2][i & 3]);
             if (d < bestDist) { bestDist = d; best = i; }
         }
+        toneIdx = best;
         col = toneColor[best];
     }
     col.a *= p0.w * mv;
@@ -167,5 +221,23 @@ void main()
     v_local = local;
     v_color = vec4(col.rgb * col.a, col.a);       // premultiplied
     v_whr   = vec3(tw, th, rad);
+    v_textUv = toneIdx >= 0 ? textRect[toneIdx] : vec4(0.0);
+    v_textSize = vec2(0.0);
+    v_textColor = vec4(0.0);
+    if (toneIdx >= 0 && v_textUv.z > 0.0 && v_textUv.w > 0.0) {
+        float padMul = locPadSO.y > 0.5
+            ? 1.0 + (locPadSO.x - 1.0) * locT(locPad, pos) : 1.0;
+        float pad = textMeta.z * padMul * min(tw, th);
+        vec2 available = max(vec2(1.0), vec2(tw, th) - vec2(2.0 * pad));
+        vec2 glyphPx = v_textUv.zw * textMeta.xy;
+        float fit = min(available.x / glyphPx.x, available.y / glyphPx.y);
+        v_textSize = glyphPx * fit;
+        vec4 tc = textColor[toneIdx];
+        if (tc.a < 0.0)
+            tc = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722)) > 0.5
+               ? vec4(0.0, 0.0, 0.0, 1.0) : vec4(1.0);
+        tc.a *= p0.w * mv;
+        v_textColor = tc;
+    }
     gl_Position = mvp * vec4(world, 0.0, 1.0);
 }

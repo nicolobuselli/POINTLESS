@@ -15,6 +15,12 @@
 namespace Ui {
 
 // ── Column frame ────────────────────────────────────────────
+// Panel bounds calibrated to the user reference (2026-09-07).
+inline constexpr int kLeftPanelMinW = 380;
+inline constexpr int kRightPanelMinW = 410;
+inline constexpr int kSidePanelMaxW = 560;
+inline constexpr int kModePickerW = 330;
+
 inline constexpr int kColLeft         = 20;  // left edge of titles and controls
 inline constexpr int kColRight        = 60;  // right icon gutter (eyes, +, loc dots)
 

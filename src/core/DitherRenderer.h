@@ -46,9 +46,9 @@ public:
     static QImage render(const QImage& input, const DitherSettings& s);
 
     // GPU pass support (dither.frag): ordered + threshold algorithms only —
-    // error diffusion stays CPU forever (serial). Palette mode (OkLab
-    // matching), cornerRadius rounding (QPainter path) and per-pixel levels
-    // localization with multi-tone expansion also fall back to the CPU.
+    // error diffusion stays CPU forever (serial). OkLab palettes run here up
+    // to the UBO capacity; cornerRadius rounding (QPainter path) and
+    // per-pixel levels localization with multi-tone expansion fall back.
     static bool gpuRenderable(const DitherSettings& s);
     // Threshold matrix for mask-based ordered algorithms; empty for
     // LineHatch (analytic in-shader) and Threshold.
